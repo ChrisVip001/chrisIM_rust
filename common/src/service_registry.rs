@@ -24,7 +24,7 @@ struct ConsulService {
 struct ConsulServicesResponse(Vec<ConsulService>);
 
 /// 服务注册管理器
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServiceRegistry {
     http_client: Client,
     consul_url: String,
