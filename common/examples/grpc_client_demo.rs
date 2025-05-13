@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 使用客户端调用服务
     match user_service_1.get_channel().await {
-        Ok(channel) => {
+        Ok(_channel) => {
             info!("成功获取用户服务gRPC通道");
 
             // 使用UserServiceGrpcClient包装通道

@@ -111,7 +111,7 @@ impl<E> From<SdkError<E>> for Error
 where
     E: StdError + 'static,
 {
-    fn from(err: SdkError<E>) -> Self {
+    fn from(_err: SdkError<E>) -> Self {
         Error::OSSError
     }
 }

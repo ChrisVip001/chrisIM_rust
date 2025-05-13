@@ -128,7 +128,7 @@ impl GrpcServiceClient {
             let channels = self.channels.lock().await;
             if !channels.is_empty() {
                 // 简单轮询负载均衡
-                let index = rand::thread_rng().gen_range(0..channels.len());
+                let index = rand::rng().random_range(0..channels.len());
                 return Ok(channels[index].clone());
             }
         }
@@ -141,7 +141,7 @@ impl GrpcServiceClient {
             return Err(anyhow::anyhow!("没有可用的 {} 服务实例", self.service_name));
         }
 
-        let index = rand::thread_rng().gen_range(0..channels.len());
+        let index = rand::rng().random_range(0..channels.len());
         Ok(channels[index].clone())
     }
 
