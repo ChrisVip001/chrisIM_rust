@@ -1,0 +1,181 @@
+syntax = "proto3";
+
+package group;
+
+import "google/protobuf/timestamp.proto";
+
+// 群组服务
+service GroupService {
+  // 创建群组
+  rpc CreateGroup (CreateGroupRequest) returns (GroupResponse);
+  
+  // 获取群组信息
+  rpc GetGroup (GetGroupRequest) returns (GroupResponse);
+  
+  // 更新群组信息
+  rpc UpdateGroup (UpdateGroupRequest) returns (GroupResponse);
+  
+  // 删除群组
+  rpc DeleteGroup (DeleteGroupRequest) returns (DeleteGroupResponse);
+  
+  // 添加群组成员
+  rpc AddMember (AddMemberRequest) returns (MemberResponse);
+  
+  // 移除群组成员
+  rpc RemoveMember (RemoveMemberRequest) returns (RemoveMemberResponse);
+  
+  // 更新成员角色
+  rpc UpdateMemberRole (UpdateMemberRoleRequest) returns (MemberResponse);
+  
+  // 获取群组成员列表
+  rpc GetMembers (GetMembersRequest) returns (GetMembersResponse);
+  
+  // 获取用户加入的群组列表
+  rpc GetUserGroups (GetUserGroupsRequest) returns (GetUserGroupsResponse);
+  
+  // 检查用户是否在群组中
+  rpc CheckMembership (CheckMembershipRequest) returns (CheckMembershipResponse);
+}
+
+// 创建群组请求
+message CreateGroupRequest {
+  string name = 1;
+  string description = 2;
+  string owner_id = 3;
+  string avatar_url = 4;
+}
+
+// 获取群组请求
+message GetGroupRequest {
+  string group_id = 1;
+}
+
+// 更新群组请求
+message UpdateGroupRequest {
+  string group_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional string avatar_url = 4;
+}
+
+// 删除群组请求
+message DeleteGroupRequest {
+  string group_id = 1;
+  string user_id = 2;  // 必须是群主
+}
+
+// 删除群组响应
+message DeleteGroupResponse {
+  bool success = 1;
+}
+
+// 添加成员请求
+message AddMemberRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string added_by_id = 3;
+  MemberRole role = 4;
+}
+
+// 移除成员请求
+message RemoveMemberRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string removed_by_id = 3;
+}
+
+// 移除成员响应
+message RemoveMemberResponse {
+  bool success = 1;
+}
+
+// 更新成员角色请求
+message UpdateMemberRoleRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string updated_by_id = 3;
+  MemberRole role = 4;
+}
+
+// 获取成员列表请求
+message GetMembersRequest {
+  string group_id = 1;
+}
+
+// 获取成员列表响应
+message GetMembersResponse {
+  repeated Member members = 1;
+}
+
+// 获取用户群组列表请求
+message GetUserGroupsRequest {
+  string user_id = 1;
+}
+
+// 获取用户群组列表响应
+message GetUserGroupsResponse {
+  repeated UserGroup groups = 1;
+}
+
+// 检查成员资格请求
+message CheckMembershipRequest {
+  string group_id = 1;
+  string user_id = 2;
+}
+
+// 检查成员资格响应
+message CheckMembershipResponse {
+  bool is_member = 1;
+  optional MemberRole role = 2;
+}
+
+// 群组响应
+message GroupResponse {
+  Group group = 1;
+}
+
+// 成员响应
+message MemberResponse {
+  Member member = 1;
+}
+
+// 群组
+message Group {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string avatar_url = 4;
+  string owner_id = 5;
+  int32 member_count = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// 成员
+message Member {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  string username = 4;
+  optional string nickname = 5;
+  optional string avatar_url = 6;
+  MemberRole role = 7;
+  google.protobuf.Timestamp joined_at = 8;
+}
+
+// 用户的群组
+message UserGroup {
+  string id = 1;
+  string name = 2;
+  string avatar_url = 3;
+  int32 member_count = 4;
+  MemberRole role = 5;
+  google.protobuf.Timestamp joined_at = 6;
+}
+
+// 成员角色
+enum MemberRole {
+  MEMBER = 0;
+  ADMIN = 1;
+  OWNER = 2;
+} 

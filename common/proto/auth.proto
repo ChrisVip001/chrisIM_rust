@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package auth;
+
+// 认证服务
+service AuthService {
+  // 验证令牌
+  rpc ValidateToken (ValidateTokenRequest) returns (ValidateTokenResponse);
+  
+  // 创建令牌（登录）
+  rpc CreateToken (CreateTokenRequest) returns (CreateTokenResponse);
+  
+  // 刷新令牌
+  rpc RefreshToken (RefreshTokenRequest) returns (RefreshTokenResponse);
+  
+  // 注销（使令牌失效）
+  rpc InvalidateToken (InvalidateTokenRequest) returns (InvalidateTokenResponse);
+}
+
+// 验证令牌请求
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+// 验证令牌响应
+message ValidateTokenResponse {
+  bool valid = 1;
+  UserClaims user_claims = 2;
+}
+
+// 创建令牌请求
+message CreateTokenRequest {
+  string user_id = 1;
+  string username = 2;
+}
+
+// 创建令牌响应
+message CreateTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;
+}
+
+// 刷新令牌请求
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+// 刷新令牌响应
+message RefreshTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;
+}
+
+// 使令牌失效请求
+message InvalidateTokenRequest {
+  string token = 1;
+}
+
+// 使令牌失效响应
+message InvalidateTokenResponse {
+  bool success = 1;
+}
+
+// 用户声明信息
+message UserClaims {
+  string user_id = 1;
+  string username = 2;
+} 

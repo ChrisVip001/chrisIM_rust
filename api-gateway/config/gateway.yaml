@@ -1,0 +1,164 @@
+# API网关配置文件
+
+# 路由配置
+routes:
+  routes:
+    # 认证服务路由
+    - id: "auth-service"
+      name: "认证服务"
+      path_prefix: "/api/auth"
+      service_type: "Auth"
+      require_auth: false
+      methods: []
+      rewrite_headers: {}
+      path_rewrite:
+        replace_prefix: "/"
+    
+    # 用户服务路由
+    - id: "user-service"
+      name: "用户服务"
+      path_prefix: "/api/users"
+      service_type: "User"
+      require_auth: true
+      methods: []
+      rewrite_headers: {}
+    
+    # 好友服务路由
+    - id: "friend-service"
+      name: "好友服务"
+      path_prefix: "/api/friends"
+      service_type: "Friend"
+      require_auth: true
+      methods: []
+      rewrite_headers: {}
+    
+    # 群组服务路由
+    - id: "group-service"
+      name: "群组服务"
+      path_prefix: "/api/groups"
+      service_type: "Group"
+      require_auth: true
+      methods: []
+      rewrite_headers: {}
+      
+    # 聊天服务路由
+    - id: "chat-service"
+      name: "聊天服务"
+      path_prefix: "/api/chat"
+      service_type: "Chat"
+      require_auth: true
+      methods: []
+      rewrite_headers: {}
+
+# 限流配置
+rate_limit:
+  # 全局限流
+  global:
+    requests_per_second: 1000
+    burst_size: 50
+    enabled: true
+  
+  # 按路径限流
+  path_rules:
+    # 登录接口限流
+    - path_prefix: "/api/auth/login"
+      rule:
+        requests_per_second: 5
+        burst_size: 3
+        enabled: true
+    
+    # 注册接口限流
+    - path_prefix: "/api/auth/register"
+      rule:
+        requests_per_second: 2
+        burst_size: 5
+        enabled: true
+    
+    # 用户接口限流
+    - path_prefix: "/api/users"
+      rule:
+        requests_per_second: 10
+        burst_size: 20
+        enabled: true
+        
+    # 聊天接口限流
+    - path_prefix: "/api/chat"
+      rule:
+        requests_per_second: 20
+        burst_size: 30
+        enabled: true
+  
+  # API Key限流
+  api_key_rules: {}
+  
+  # IP限流
+  ip_rules: {}
+
+# 认证配置
+auth:
+  # JWT配置
+  jwt:
+    enabled: true
+    secret: "change_this_to_a_secure_random_string"
+    issuer: "api-gateway"
+    expiry_seconds: 86400  # 24小时
+    refresh_expiry_seconds: 604800  # 7天
+    verify_issuer: false
+    allowed_issuers: []
+    header_name: "Authorization"
+    header_prefix: "Bearer "
+  
+  # API Key配置
+  api_key:
+    enabled: false
+    header_name: "X-API-Key"
+    api_keys: {}
+  
+  # OAuth2配置
+  oauth2:
+    enabled: false
+    client_id: ""
+    client_secret: ""
+    auth_url: ""
+    token_url: ""
+    redirect_url: ""
+    scope: ""
+  
+  # IP白名单
+  ip_whitelist:
+    - "127.0.0.1"
+    - "::1"
+  
+  # 路径白名单
+  path_whitelist:
+    - "/api/health"
+    - "/api/auth/login"
+    - "/api/auth/register"
+    - "/metrics"
+    - "/api/chat/ws"  # WebSocket聊天端点不需要认证
+
+# 服务发现配置
+consul_url: "http://localhost:8500"
+
+# 服务刷新间隔（秒）
+service_refresh_interval: 30
+
+# Metrics暴露端点
+metrics_endpoint: "/metrics"
+
+# 链路追踪配置
+tracing:
+  enable_opentelemetry: true
+  jaeger_endpoint: "http://localhost:14268/api/traces"
+  sampling_ratio: 0.1
+
+# 重试配置
+retry:
+  max_retries: 3
+  retry_interval_ms: 200
+
+# 熔断配置
+circuit_breaker:
+  enabled: true
+  failure_threshold: 5
+  half_open_timeout_secs: 30 

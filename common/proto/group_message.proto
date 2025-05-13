@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package group_message;
+
+import "google/protobuf/timestamp.proto";
+
+// 群聊消息服务
+service GroupMessageService {
+  // 发送群聊消息
+  rpc SendMessage (SendMessageRequest) returns (MessageResponse);
+  
+  // 获取群聊消息历史
+  rpc GetMessageHistory (GetMessageHistoryRequest) returns (GetMessageHistoryResponse);
+  
+  // 删除消息（如果是发送者或群管理员）
+  rpc DeleteMessage (DeleteMessageRequest) returns (DeleteMessageResponse);
+}
+
+// 发送消息请求
+message SendMessageRequest {
+  string sender_id = 1;
+  string group_id = 2;
+  string content = 3;
+  MessageContentType content_type = 4;
+}
+
+// 获取消息历史请求
+message GetMessageHistoryRequest {
+  string group_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+// 获取消息历史响应
+message GetMessageHistoryResponse {
+  repeated Message messages = 1;
+  int32 total = 2;
+}
+
+// 删除消息请求
+message DeleteMessageRequest {
+  string user_id = 1;
+  string message_id = 2;
+}
+
+// 删除消息响应
+message DeleteMessageResponse {
+  bool success = 1;
+}
+
+// 消息响应
+message MessageResponse {
+  Message message = 1;
+}
+
+// 消息
+message Message {
+  string id = 1;
+  string group_id = 2;
+  string sender_id = 3;
+  string sender_name = 4;
+  string content = 5;
+  MessageContentType content_type = 6;
+  google.protobuf.Timestamp sent_at = 7;
+}
+
+// 消息内容类型
+enum MessageContentType {
+  TEXT = 0;
+  IMAGE = 1;
+  AUDIO = 2;
+  VIDEO = 3;
+  FILE = 4;
+} 

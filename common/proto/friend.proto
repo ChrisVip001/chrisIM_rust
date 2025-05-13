@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package friend;
+
+import "google/protobuf/timestamp.proto";
+
+// 好友服务
+service FriendService {
+  // 发送好友请求
+  rpc SendFriendRequest (SendFriendRequestRequest) returns (FriendshipResponse);
+  
+  // 接受好友请求
+  rpc AcceptFriendRequest (AcceptFriendRequestRequest) returns (FriendshipResponse);
+  
+  // 拒绝好友请求
+  rpc RejectFriendRequest (RejectFriendRequestRequest) returns (FriendshipResponse);
+  
+  // 获取好友列表
+  rpc GetFriendList (GetFriendListRequest) returns (GetFriendListResponse);
+  
+  // 获取好友请求列表
+  rpc GetFriendRequests (GetFriendRequestsRequest) returns (GetFriendRequestsResponse);
+  
+  // 删除好友
+  rpc DeleteFriend (DeleteFriendRequest) returns (DeleteFriendResponse);
+  
+  // 检查好友关系
+  rpc CheckFriendship (CheckFriendshipRequest) returns (CheckFriendshipResponse);
+}
+
+// 发送好友请求
+message SendFriendRequestRequest {
+  string user_id = 1;
+  string friend_id = 2;
+}
+
+// 接受好友请求
+message AcceptFriendRequestRequest {
+  string user_id = 1;
+  string friend_id = 2;
+}
+
+// 拒绝好友请求
+message RejectFriendRequestRequest {
+  string user_id = 1;
+  string friend_id = 2;
+}
+
+// 获取好友列表请求
+message GetFriendListRequest {
+  string user_id = 1;
+}
+
+// 获取好友列表响应
+message GetFriendListResponse {
+  repeated Friend friends = 1;
+}
+
+// 获取好友请求列表请求
+message GetFriendRequestsRequest {
+  string user_id = 1;
+}
+
+// 获取好友请求列表响应
+message GetFriendRequestsResponse {
+  repeated Friendship requests = 1;
+}
+
+// 删除好友请求
+message DeleteFriendRequest {
+  string user_id = 1;
+  string friend_id = 2;
+}
+
+// 删除好友响应
+message DeleteFriendResponse {
+  bool success = 1;
+}
+
+// 检查好友关系请求
+message CheckFriendshipRequest {
+  string user_id = 1;
+  string friend_id = 2;
+}
+
+// 检查好友关系响应
+message CheckFriendshipResponse {
+  FriendshipStatus status = 1;
+}
+
+// 好友关系响应
+message FriendshipResponse {
+  Friendship friendship = 1;
+}
+
+// 好友关系
+message Friendship {
+  string id = 1;
+  string user_id = 2;
+  string friend_id = 3;
+  FriendshipStatus status = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// 好友
+message Friend {
+  string id = 1;
+  string username = 2;
+  optional string nickname = 3;
+  optional string avatar_url = 4;
+  google.protobuf.Timestamp friendship_created_at = 5;
+}
+
+// 好友关系状态
+enum FriendshipStatus {
+  PENDING = 0;
+  ACCEPTED = 1;
+  REJECTED = 2;
+  BLOCKED = 3;
+} 

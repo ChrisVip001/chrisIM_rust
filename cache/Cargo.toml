@@ -1,0 +1,19 @@
+[package]
+name = "cache"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+# as a basic library we can't rely on the other crates besise abi,
+# because abi is the foundation of the whole project
+[dependencies]
+common = { path = "../common" }
+
+async-trait = "0.1.79"
+redis = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"]  }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

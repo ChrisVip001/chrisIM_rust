@@ -1,0 +1,29 @@
+[package]
+name = "oss"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+common = { path = "../common" }
+aws-config = { version = "1.0.1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = {workspace = true }
+aws-smithy-runtime = { version = "1.0.1" }
+aws-smithy-runtime-api = { version = "1.0.1", features = ["client"] }
+aws-smithy-types = { version = "1.0.1", features = ["http-body-0-4-x"] }
+bytes = "1.6.0"
+http = "1.1.0"
+http-body = "1.0.0"
+md-5 = "0.10.1"
+pin-project = "1.0.12"
+rand = { workspace = true }
+tokio-stream = "0.1.8"
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }

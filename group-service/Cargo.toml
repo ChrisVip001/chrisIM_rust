@@ -1,0 +1,21 @@
+[package]
+name = "group-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+tokio = { workspace = true }
+tonic = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenv = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+axum-server = {workspace = true}
+prost-types = { workspace = true }

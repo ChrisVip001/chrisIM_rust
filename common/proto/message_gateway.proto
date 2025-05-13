@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package message_gateway;
+
+import "google/protobuf/timestamp.proto";
+
+// 消息网关服务
+service MessageGatewayService {
+  // 推送私聊消息到客户端
+  rpc PushPrivateMessage (PushPrivateMessageRequest) returns (PushResponse);
+  
+  // 推送群聊消息到客户端
+  rpc PushGroupMessage (PushGroupMessageRequest) returns (PushResponse);
+  
+  // 推送通知消息（好友请求、系统通知等）
+  rpc PushNotification (PushNotificationRequest) returns (PushResponse);
+  
+  // 获取在线用户
+  rpc GetOnlineUsers (GetOnlineUsersRequest) returns (GetOnlineUsersResponse);
+  
+  // 检查用户是否在线
+  rpc CheckUserOnline (CheckUserOnlineRequest) returns (CheckUserOnlineResponse);
+}
+
+// 推送私聊消息请求
+message PushPrivateMessageRequest {
+  string receiver_id = 1;
+  PrivateMessageEvent message_event = 2;
+}
+
+// 推送群聊消息请求
+message PushGroupMessageRequest {
+  string group_id = 1;
+  GroupMessageEvent message_event = 2;
+  repeated string exclude_user_ids = 3;  // 可选，不推送给这些用户
+}
+
+// 推送通知请求
+message PushNotificationRequest {
+  string user_id = 1;
+  NotificationEvent notification = 2;
+}
+
+// 获取在线用户请求
+message GetOnlineUsersRequest {
+  repeated string user_ids = 1;  // 为空时获取所有在线用户
+}
+
+// 获取在线用户响应
+message GetOnlineUsersResponse {
+  repeated string online_user_ids = 1;
+  int32 total_online = 2;
+}
+
+// 检查用户在线状态请求
+message CheckUserOnlineRequest {
+  string user_id = 1;
+}
+
+// 检查用户在线状态响应
+message CheckUserOnlineResponse {
+  bool online = 1;
+  optional string device_info = 2;
+  optional google.protobuf.Timestamp last_active = 3;
+}
+
+// 推送响应
+message PushResponse {
+  bool success = 1;
+  int32 delivered_count = 2;
+}
+
+// 私聊消息事件
+message PrivateMessageEvent {
+  string message_id = 1;
+  string sender_id = 2;
+  string sender_name = 3;
+  string content = 4;
+  MessageContentType content_type = 5;
+  google.protobuf.Timestamp sent_at = 6;
+}
+
+// 群聊消息事件
+message GroupMessageEvent {
+  string message_id = 1;
+  string group_id = 2;
+  string group_name = 3;
+  string sender_id = 4;
+  string sender_name = 5;
+  string content = 6;
+  MessageContentType content_type = 7;
+  google.protobuf.Timestamp sent_at = 8;
+}
+
+// 通知事件
+message NotificationEvent {
+  string id = 1;
+  NotificationType type = 2;
+  string title = 3;
+  string content = 4;
+  map<string, string> payload = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// 消息内容类型
+enum MessageContentType {
+  TEXT = 0;
+  IMAGE = 1;
+  AUDIO = 2;
+  VIDEO = 3;
+  FILE = 4;
+}
+
+// 通知类型
+enum NotificationType {
+  SYSTEM = 0;
+  FRIEND_REQUEST = 1;
+  GROUP_INVITATION = 2;
+  GROUP_JOIN_REQUEST = 3;
+  FRIEND_ACCEPTED = 4;
+} 

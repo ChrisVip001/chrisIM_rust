@@ -1,0 +1,177 @@
+component: all # all, api, ws, rpc, db, pusher
+
+# 日志配置
+log:
+  level: debug
+  output: console
+
+# 数据库配置
+database:
+  postgres:
+    host: 127.0.0.1
+    port: 5432
+    user: kelisi
+    password: 123456
+    database: rustim
+  mongodb:
+    host: 127.0.0.1
+    port: 27017
+    user:
+    password:
+    database: im
+    clean:
+      period: 3600 # days
+      except_types:
+        - "MsgTypeGroupInvitation"
+        - "MsgTypeGroupInviteNew"
+        - "MsgTypeGroupMemberExit"
+        - "MsgTypeGroupRemoveMember"
+        - "MsgTypeGroupDismiss"
+        - "MsgTypeGroupUpdate"
+        - "MsgTypeFriendApplyReq"
+        - "MsgTypeFriendApplyResp"
+        - "MsgTypeFriendBlack"
+        - "MsgTypeFriendDelete"
+
+  xdb: ./api/fixtures/xdb/ip2region.xdb
+
+
+# 服务配置
+server:
+  host: 127.0.0.1
+  port: 50001
+  ws_lb_strategy: RoundRobin # Random, RoundRobin
+  oauth2:
+    google:
+      client_id: 1001171385100-dgsbppvvuc43pho1e5dp4i53ki7p4ugn.apps.googleusercontent.com
+      client_secret: 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
+      auth_url: https://accounts.google.com/o/oauth2/v2/auth
+      token_url: https://oauth2.googleapis.com/token
+      redirect_url: http://localhost:8080/third_login_callback/google
+      user_info_url: https://api.github.com/user
+      email_url: https://api.github.com/user/emails
+    github:
+      client_id: Ov23liLVEltedOYkqDfJ
+      client_secret: f77f680d9380ac04c4eeda646bd4c3fd14882c68
+      auth_url: https://github.com/login/oauth/authorize
+      token_url: https://github.com/login/oauth/access_token
+      # redirect_url: http://localhost:50001/user/auth/github/callback
+      redirect_url: http://localhost:8080/third_login_callback/github
+      user_info_url: https://api.github.com/user
+      email_url: https://api.github.com/user/emails
+
+# 服务中心配置
+service_center:
+  host: 127.0.0.1   # "0.0.0.0" 在Docker中使用0.0.0.0绑定所有接口
+  port: 8500
+  timeout: 5000
+  protocol: http
+
+# WebSocket配置
+websocket:
+  protocol: ws
+  host: 127.0.0.1
+  port: 50000
+  name: websocket
+  tags:
+    - websocket
+    - grpc
+
+# RPC服务配置
+rpc:
+  health_check: false # 是否启用健康检查, dev环境默认为false，测试和生产环境默认为true
+  ws:
+    protocol: http
+    host: 127.0.0.1
+    port: 50002
+    name: ws
+    tags:
+      - ws
+      - grpc
+    grpc_health_check:
+      grpc_use_tls: false
+      interval: 30 # second
+  chat:
+    protocol: http
+    host: 127.0.0.1
+    port: 50003
+    name: chat
+    tags:
+      - chat
+      - grpc
+    grpc_health_check:
+      grpc_use_tls: false
+      interval: 30000 # second
+  db:
+    protocol: http
+    host: 127.0.0.1
+    port: 50004
+    name: db
+    tags:
+      - db
+      - grpc
+    grpc_health_check:
+      grpc_use_tls: false
+      interval: 30000 # second
+  pusher:
+    protocol: http
+    host: 127.0.0.1
+    port: 50005
+    name: pusher
+    tags:
+      - pusher
+      - grpc
+    grpc_health_check:
+      grpc_use_tls: false
+      interval: 30000 # second
+
+# Redis配置
+redis:
+  host: 127.0.0.1
+  port: 6379
+  seq_step: 10000
+
+# Kafka配置
+kafka:
+  hosts:
+    - 127.0.0.1:9092
+  topic: rustIM-chat
+  group: chat
+  connect_timeout: 5000 # milliseconds
+  producer:
+    timeout: 3000
+    acks: all # 0: 不等待服务器响应，1: 等待服务器响应，all: 等待服务器响应并确认
+    max_retry: 3
+    retry_interval: 1000 # retry interval in milliseconds
+  consumer:
+    auto_offset_reset: earliest # earliest, latest
+    session_timeout: 20000
+
+
+# JWT配置
+jwt:
+  secret: "development_jwt_secret_do_not_use_in_production"
+  expiration: 86400  # 24小时
+
+# Consul配置
+consul:
+  url: "http://consul:8500"
+  service_refresh_interval: 30
+
+# OSS配置
+oss:
+  endpoint: http://127.0.0.1:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  bucket: rustIM
+  avatar_bucket: rustIM-avatar
+  region: us-east-1
+
+mail:
+  server: smtp.qq.com
+  # server: 127.0.0.1
+  # account: rustIM@gmail.com
+  account: 17788889999@qq.com
+  password: iejtiohyreybgdf
+  temp_path: ./api/fixtures/templates/*
+  temp_file: email_temp.html

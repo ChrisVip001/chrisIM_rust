@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package user;
+
+import "google/protobuf/timestamp.proto";
+
+// 用户服务
+service UserService {
+  // 创建用户
+  rpc CreateUser (CreateUserRequest) returns (UserResponse);
+  
+  // 通过ID获取用户
+  rpc GetUserById (GetUserByIdRequest) returns (UserResponse);
+  
+  // 通过用户名获取用户
+  rpc GetUserByUsername (GetUserByUsernameRequest) returns (UserResponse);
+  
+  // 更新用户
+  rpc UpdateUser (UpdateUserRequest) returns (UserResponse);
+  
+  // 验证用户密码（用于登录）
+  rpc VerifyPassword (VerifyPasswordRequest) returns (VerifyPasswordResponse);
+  
+  // 搜索用户
+  rpc SearchUsers (SearchUsersRequest) returns (SearchUsersResponse);
+}
+
+// 创建用户请求
+message CreateUserRequest {
+  string username = 1;
+  string email = 2;
+  string password = 3;
+  string nickname = 4;
+  string avatar_url = 5;
+}
+
+// 按ID获取用户请求
+message GetUserByIdRequest {
+  string user_id = 1;
+}
+
+// 按用户名获取用户请求
+message GetUserByUsernameRequest {
+  string username = 1;
+}
+
+// 更新用户请求
+message UpdateUserRequest {
+  string user_id = 1;
+  optional string nickname = 2;
+  optional string email = 3;
+  optional string avatar_url = 4;
+  optional string password = 5;
+}
+
+// 验证密码请求
+message VerifyPasswordRequest {
+  string username = 1;
+  string password = 2;
+}
+
+// 验证密码响应
+message VerifyPasswordResponse {
+  bool valid = 1;
+  optional User user = 2;
+}
+
+// 搜索用户请求
+message SearchUsersRequest {
+  string query = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+// 搜索用户响应
+message SearchUsersResponse {
+  repeated User users = 1;
+  int32 total = 2;
+}
+
+// 用户响应
+message UserResponse {
+  User user = 1;
+}
+
+// 用户消息定义
+message User {
+  string id = 1;
+  string username = 2;
+  string email = 3;
+  optional string nickname = 4;
+  optional string avatar_url = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+} 
