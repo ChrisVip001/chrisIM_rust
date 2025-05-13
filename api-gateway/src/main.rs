@@ -27,7 +27,7 @@ pub mod proxy;
 mod router;
 
 use config::CONFIG;
-pub use proxy::grpc_clients::user_client::UserServiceGrpcClient;
+pub use common::grpc_client::user_client::UserServiceGrpcClient;
 
 #[derive(Parser, Debug)]
 #[clap(name = "api-gateway", about = "API网关服务")]

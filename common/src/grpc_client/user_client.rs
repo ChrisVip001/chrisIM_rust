@@ -1,12 +1,12 @@
 use anyhow::Result;
 use tonic::Request;
 
-use common::proto::user::user_service_client::UserServiceClient;
-use common::proto::user::{
+use crate::proto::user::user_service_client::UserServiceClient;
+use crate::proto::user::{
     CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse,
 };
 
-use common::grpc_client::GrpcServiceClient;
+use crate::grpc_client::GrpcServiceClient;
 
 /// 用户服务gRPC客户端
 #[derive(Clone)]
