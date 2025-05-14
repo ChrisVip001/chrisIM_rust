@@ -246,13 +246,38 @@ impl ServiceProxy {
         // 读取请求体
         let body_bytes = axum::body::to_bytes(body, 1024 * 1024 * 10).await.unwrap_or_default();
         
+        // 获取Content-Type和Content-Encoding头
+        let content_type = parts.headers.get("content-type")
+            .and_then(|v| v.to_str().ok());
+        let content_encoding = parts.headers.get("content-encoding")
+            .and_then(|v| v.to_str().ok());
+            
+        // 处理请求体，如果是GZIP压缩的JSON则自动解压
+        let processed_body = match crate::proxy::utils::process_request_body(
+            &body_bytes, 
+            content_type, 
+            content_encoding
+        ) {
+            Ok(data) => data,
+            Err(e) => {
+                error!("处理请求体失败: {}", e);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "error": "invalid_request_body",
+                        "message": format!("处理请求体失败: {}", e)
+                    }))
+                ).into_response();
+            }
+        };
+        
         // 创建reqwest请求
         let mut client_req = match parts.method.as_str() {
             "GET" => self.http_client.get(&target_url),
-            "POST" => self.http_client.post(&target_url).body(body_bytes),
-            "PUT" => self.http_client.put(&target_url).body(body_bytes),
+            "POST" => self.http_client.post(&target_url).body(processed_body),
+            "PUT" => self.http_client.put(&target_url).body(processed_body),
             "DELETE" => self.http_client.delete(&target_url),
-            "PATCH" => self.http_client.patch(&target_url).body(body_bytes),
+            "PATCH" => self.http_client.patch(&target_url).body(processed_body),
             "HEAD" => self.http_client.head(&target_url),
             "OPTIONS" => self.http_client.request(reqwest::Method::OPTIONS, &target_url),
             _ => {
@@ -267,10 +292,20 @@ impl ServiceProxy {
         };
         
         // 转发请求头
+        let mut skip_content_encoding = false;
+        if let Some(encoding) = content_encoding {
+            skip_content_encoding = encoding.to_lowercase().contains("gzip");
+        }
+        
         for (name, value) in parts.headers {
             if let Some(name) = name {
                 // 忽略一些特定的头
                 if name.as_str() == "host" || name.as_str() == "content-length" {
+                    continue;
+                }
+                
+                // 如果已经解压过GZIP数据，不要转发content-encoding头
+                if skip_content_encoding && name.as_str() == "content-encoding" {
                     continue;
                 }
                 
