@@ -1,8 +1,8 @@
-use reqwest::{Client, Response, Error};
-use std::time::Duration;
 use hyper::http::HeaderMap;
-use tracing::debug;
+use reqwest::{Client, Error, Response};
 use std::error::Error as StdError;
+use std::time::Duration;
+use tracing::debug;
 
 /// HTTP客户端配置
 #[derive(Debug, Clone)]
@@ -51,90 +51,109 @@ impl HttpClient {
             .pool_max_idle_per_host(100)
             .build()
             .unwrap_or_default();
-        
+
         Self { client, config }
     }
-    
+
     /// 使用默认配置创建客户端
     pub fn default() -> Self {
         Self::new(HttpClientConfig::default())
     }
-    
+
     /// 发送GET请求
     pub async fn get(&self, url: &str, headers: Option<HeaderMap>) -> Result<Response, Error> {
         let mut req = self.client.get(url);
-        
+
         // 添加请求头
         if let Some(headers) = headers {
             req = req.headers(headers);
         }
-        
+
         self.send_with_retry(req, self.config.max_retries).await
     }
-    
+
     /// 发送POST请求
-    pub async fn post(&self, url: &str, headers: Option<HeaderMap>, body: Option<Vec<u8>>) -> Result<Response, Error> {
+    pub async fn post(
+        &self,
+        url: &str,
+        headers: Option<HeaderMap>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Response, Error> {
         let mut req = self.client.post(url);
-        
+
         // 添加请求头
         if let Some(headers) = headers {
             req = req.headers(headers);
         }
-        
+
         // 添加请求体
         if let Some(body) = body {
             req = req.body(body);
         }
-        
+
         self.send_with_retry(req, self.config.max_retries).await
     }
-    
+
     /// 发送POST JSON请求
-    pub async fn post_json<T: serde::Serialize>(&self, url: &str, headers: Option<HeaderMap>, json: &T) -> Result<Response, Error> {
+    pub async fn post_json<T: serde::Serialize>(
+        &self,
+        url: &str,
+        headers: Option<HeaderMap>,
+        json: &T,
+    ) -> Result<Response, Error> {
         let mut req = self.client.post(url);
-        
+
         // 添加请求头
         if let Some(headers) = headers {
             req = req.headers(headers);
         }
-        
+
         // 添加JSON请求体
         req = req.json(json);
-        
+
         self.send_with_retry(req, self.config.max_retries).await
     }
-    
+
     /// 发送PUT请求
-    pub async fn put(&self, url: &str, headers: Option<HeaderMap>, body: Option<Vec<u8>>) -> Result<Response, Error> {
+    pub async fn put(
+        &self,
+        url: &str,
+        headers: Option<HeaderMap>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Response, Error> {
         let mut req = self.client.put(url);
-        
+
         // 添加请求头
         if let Some(headers) = headers {
             req = req.headers(headers);
         }
-        
+
         // 添加请求体
         if let Some(body) = body {
             req = req.body(body);
         }
-        
+
         self.send_with_retry(req, self.config.max_retries).await
     }
-    
+
     /// 发送DELETE请求
     pub async fn delete(&self, url: &str, headers: Option<HeaderMap>) -> Result<Response, Error> {
         let mut req = self.client.delete(url);
-        
+
         // 添加请求头
         if let Some(headers) = headers {
             req = req.headers(headers);
         }
-        
+
         self.send_with_retry(req, self.config.max_retries).await
     }
-    
+
     /// 带重试的请求发送
-    async fn send_with_retry(&self, req: reqwest::RequestBuilder, retries: u32) -> Result<Response, Error> {
+    async fn send_with_retry(
+        &self,
+        req: reqwest::RequestBuilder,
+        retries: u32,
+    ) -> Result<Response, Error> {
         let mut attempts = 0;
 
         // 对于第一次请求，直接发送
@@ -150,7 +169,7 @@ impl HttpClient {
                     return Ok(response);
                 }
                 Ok(response)
-            },
+            }
             Err(err) => {
                 if is_retryable_error(&err) && attempts < retries {
                     attempts += 1;
@@ -189,4 +208,4 @@ fn is_reset_error(err: &Error) -> bool {
         }
     }
     false
-} 
+}

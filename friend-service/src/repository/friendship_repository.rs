@@ -1,10 +1,10 @@
 use anyhow::Result;
-use chrono::{Utc, TimeZone};
+use chrono::{TimeZone, Utc};
+use common::proto::friend::FriendshipStatus;
 use sqlx::PgPool;
 use uuid::Uuid;
-use common::proto::friend::FriendshipStatus;
 
-use crate::model::friendship::{Friendship, Friend};
+use crate::model::friendship::{Friend, Friendship};
 
 pub struct FriendshipRepository {
     pool: PgPool,
@@ -14,15 +14,19 @@ impl FriendshipRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-    
+
     // 创建好友请求
-    pub async fn create_friend_request(&self, user_id: Uuid, friend_id: Uuid) -> Result<Friendship> {
+    pub async fn create_friend_request(
+        &self,
+        user_id: Uuid,
+        friend_id: Uuid,
+    ) -> Result<Friendship> {
         let friendship = Friendship::new(user_id, friend_id);
-        
+
         // 将DateTime<Utc>转换为NaiveDateTime
         let created_at_naive = friendship.created_at.naive_utc();
         let updated_at_naive = friendship.updated_at.naive_utc();
-        
+
         let result = sqlx::query!(
             r#"
             INSERT INTO friendships (id, user_id, friend_id, status, created_at, updated_at)
@@ -38,7 +42,7 @@ impl FriendshipRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Friendship {
             id: Uuid::parse_str(&result.id).unwrap(),
             user_id: Uuid::parse_str(&result.user_id).unwrap(),
@@ -48,12 +52,16 @@ impl FriendshipRepository {
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
-    
+
     // 接受好友请求
-    pub async fn accept_friend_request(&self, user_id: Uuid, friend_id: Uuid) -> Result<Friendship> {
+    pub async fn accept_friend_request(
+        &self,
+        user_id: Uuid,
+        friend_id: Uuid,
+    ) -> Result<Friendship> {
         let now = Utc::now();
         let now_naive = now.naive_utc();
-        
+
         let result = sqlx::query!(
             r#"
             UPDATE friendships
@@ -68,7 +76,7 @@ impl FriendshipRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Friendship {
             id: Uuid::parse_str(&result.id).unwrap(),
             user_id: Uuid::parse_str(&result.user_id).unwrap(),
@@ -78,12 +86,16 @@ impl FriendshipRepository {
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
-    
+
     // 拒绝好友请求
-    pub async fn reject_friend_request(&self, user_id: Uuid, friend_id: Uuid) -> Result<Friendship> {
+    pub async fn reject_friend_request(
+        &self,
+        user_id: Uuid,
+        friend_id: Uuid,
+    ) -> Result<Friendship> {
         let now = Utc::now();
         let now_naive = now.naive_utc();
-        
+
         let result = sqlx::query!(
             r#"
             UPDATE friendships
@@ -98,7 +110,7 @@ impl FriendshipRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Friendship {
             id: Uuid::parse_str(&result.id).unwrap(),
             user_id: Uuid::parse_str(&result.user_id).unwrap(),
@@ -108,7 +120,7 @@ impl FriendshipRepository {
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
-    
+
     // 获取好友列表
     pub async fn get_friend_list(&self, user_id: Uuid) -> Result<Vec<Friend>> {
         let friends = sqlx::query!(
@@ -130,7 +142,7 @@ impl FriendshipRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        
+
         let result = friends
             .into_iter()
             .map(|f| Friend {
@@ -141,10 +153,10 @@ impl FriendshipRepository {
                 friendship_created_at: Utc.from_utc_datetime(&f.friendship_created_at),
             })
             .collect();
-        
+
         Ok(result)
     }
-    
+
     // 获取好友请求列表
     pub async fn get_friend_requests(&self, user_id: Uuid) -> Result<Vec<Friendship>> {
         let requests = sqlx::query!(
@@ -158,7 +170,7 @@ impl FriendshipRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        
+
         let result = requests
             .into_iter()
             .map(|r| Friendship {
@@ -170,10 +182,10 @@ impl FriendshipRepository {
                 updated_at: Utc.from_utc_datetime(&r.updated_at),
             })
             .collect();
-        
+
         Ok(result)
     }
-    
+
     // 删除好友
     pub async fn delete_friend(&self, user_id: Uuid, friend_id: Uuid) -> Result<bool> {
         let rows_affected = sqlx::query!(
@@ -187,12 +199,16 @@ impl FriendshipRepository {
         .execute(&self.pool)
         .await?
         .rows_affected();
-        
+
         Ok(rows_affected > 0)
     }
-    
+
     // 检查好友关系
-    pub async fn check_friendship(&self, user_id: Uuid, friend_id: Uuid) -> Result<Option<FriendshipStatus>> {
+    pub async fn check_friendship(
+        &self,
+        user_id: Uuid,
+        friend_id: Uuid,
+    ) -> Result<Option<FriendshipStatus>> {
         let result = sqlx::query!(
             r#"
             SELECT status
@@ -204,7 +220,7 @@ impl FriendshipRepository {
         )
         .fetch_optional(&self.pool)
         .await?;
-        
+
         Ok(result.map(|r| {
             let status_code = r.status.parse::<i32>().unwrap_or(0);
             match status_code {

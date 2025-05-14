@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 // 用户相关模型
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,14 +96,14 @@ pub enum MessageContentType {
 // 身份认证相关模型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,     // 用户ID
+    pub sub: String, // 用户ID
     pub username: String,
-    pub exp: usize,      // 过期时间
-    pub iat: usize,      // 签发时间
+    pub exp: usize, // 过期时间
+    pub iat: usize, // 签发时间
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenPair {
     pub access_token: String,
     pub refresh_token: String,
-} 
+}

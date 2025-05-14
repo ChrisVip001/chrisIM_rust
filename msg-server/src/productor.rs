@@ -10,7 +10,7 @@ use rdkafka::ClientConfig;
 use tonic::transport::Server;
 use tracing::{error, info};
 
-use common::config::{Component, AppConfig};
+use common::config::{AppConfig, Component};
 use common::message::chat_service_server::{ChatService, ChatServiceServer};
 use common::message::{MsgResponse, MsgType, SendMsgRequest};
 

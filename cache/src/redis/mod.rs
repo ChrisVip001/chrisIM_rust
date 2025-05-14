@@ -1,8 +1,8 @@
 use crate::Cache;
+use async_trait::async_trait;
 use common::config::AppConfig;
 use common::error::Error;
 use common::message::GroupMemSeq;
-use async_trait::async_trait;
 use redis::AsyncCommands;
 
 /// group members id prefix

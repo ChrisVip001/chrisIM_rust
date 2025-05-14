@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use common::proto::friend::FriendshipStatus;
+use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Friendship {
@@ -25,11 +25,11 @@ impl Friendship {
             updated_at: Utc::now(),
         }
     }
-    
+
     pub fn to_proto(&self) -> common::proto::friend::Friendship {
         let created_system_time = SystemTime::from(self.created_at);
         let updated_system_time = SystemTime::from(self.updated_at);
-        
+
         common::proto::friend::Friendship {
             id: self.id.to_string(),
             user_id: self.user_id.to_string(),
@@ -53,7 +53,7 @@ pub struct Friend {
 impl Friend {
     pub fn to_proto(&self) -> common::proto::friend::Friend {
         let created_system_time = SystemTime::from(self.friendship_created_at);
-        
+
         common::proto::friend::Friend {
             id: self.id.to_string(),
             username: self.username.clone(),

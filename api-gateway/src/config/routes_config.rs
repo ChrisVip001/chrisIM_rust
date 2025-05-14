@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// 路由配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,4 +129,4 @@ impl Default for RoutesConfig {
             ],
         }
     }
-} 
+}

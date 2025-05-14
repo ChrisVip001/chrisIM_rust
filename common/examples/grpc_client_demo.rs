@@ -27,14 +27,12 @@ async fn main() -> anyhow::Result<()> {
             info!("成功获取用户服务gRPC通道");
 
             // 使用UserServiceGrpcClient包装通道
-            let wrapped_client = UserServiceGrpcClient::new(
-                factory.create_client_with_config(
-                    "user-service",
-                    Duration::from_secs(5),
-                    Duration::from_secs(10),
-                    50
-                )
-            );
+            let wrapped_client = UserServiceGrpcClient::new(factory.create_client_with_config(
+                "user-service",
+                Duration::from_secs(5),
+                Duration::from_secs(10),
+                50,
+            ));
 
             // 调用用户服务
             match wrapped_client.get_user("user_123").await {

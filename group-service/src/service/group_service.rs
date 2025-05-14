@@ -1,15 +1,15 @@
-use common::proto::group::{
-    CreateGroupRequest, GetGroupRequest, UpdateGroupRequest, DeleteGroupRequest,
-    AddMemberRequest, RemoveMemberRequest, UpdateMemberRoleRequest,
-    GetMembersRequest, GetUserGroupsRequest, CheckMembershipRequest,
-    DeleteGroupResponse, MemberResponse, GetMembersResponse, GetUserGroupsResponse,
-    CheckMembershipResponse, GroupResponse, RemoveMemberResponse, MemberRole,
-};
 use common::proto::group::group_service_server::GroupService;
+use common::proto::group::{
+    AddMemberRequest, CheckMembershipRequest, CheckMembershipResponse, CreateGroupRequest,
+    DeleteGroupRequest, DeleteGroupResponse, GetGroupRequest, GetMembersRequest,
+    GetMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupResponse, MemberResponse,
+    MemberRole, RemoveMemberRequest, RemoveMemberResponse, UpdateGroupRequest,
+    UpdateMemberRoleRequest,
+};
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
+use tracing::{error, info};
 use uuid::Uuid;
-use tracing::{info, error};
 
 use crate::repository::group_repository::GroupRepository;
 use crate::repository::member_repository::MemberRepository;
@@ -36,26 +36,31 @@ impl GroupService for GroupServiceImpl {
         request: Request<CreateGroupRequest>,
     ) -> Result<Response<GroupResponse>, Status> {
         let req = request.into_inner();
-        
-        let owner_id = req.owner_id.parse::<Uuid>()
+
+        let owner_id = req
+            .owner_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
-        
-        match self.group_repository.create_group(
-            req.name, 
-            req.description, 
-            req.avatar_url, 
-            owner_id
-        ).await {
+
+        match self
+            .group_repository
+            .create_group(req.name, req.description, req.avatar_url, owner_id)
+            .await
+        {
             Ok(group) => {
                 // 将创建者添加为群主
-                match self.member_repository.add_member(
-                    group.id,
-                    owner_id,
-                    "PLACEHOLDER".to_string(), // 实际应用中应该从user-service获取
-                    None,
-                    None,
-                    MemberRole::Owner,
-                ).await {
+                match self
+                    .member_repository
+                    .add_member(
+                        group.id,
+                        owner_id,
+                        "PLACEHOLDER".to_string(), // 实际应用中应该从user-service获取
+                        None,
+                        None,
+                        MemberRole::Owner,
+                    )
+                    .await
+                {
                     Ok(_) => {
                         let member_count = 1; // 刚创建时只有群主一人
                         info!("创建群组成功: {:?}", group);
@@ -75,17 +80,19 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 获取群组信息
     async fn get_group(
         &self,
         request: Request<GetGroupRequest>,
     ) -> Result<Response<GroupResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
+
         match self.group_repository.get_group(group_id).await {
             Ok(group) => {
                 // 获取成员数量
@@ -93,7 +100,7 @@ impl GroupService for GroupServiceImpl {
                     Ok(count) => count,
                     Err(_) => 0,
                 };
-                
+
                 Ok(Response::new(GroupResponse {
                     group: Some(group.to_proto(member_count)),
                 }))
@@ -104,30 +111,31 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 更新群组信息
     async fn update_group(
         &self,
         request: Request<UpdateGroupRequest>,
     ) -> Result<Response<GroupResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
-        match self.group_repository.update_group(
-            group_id,
-            req.name,
-            req.description,
-            req.avatar_url,
-        ).await {
+
+        match self
+            .group_repository
+            .update_group(group_id, req.name, req.description, req.avatar_url)
+            .await
+        {
             Ok(group) => {
                 // 获取成员数量
                 let member_count = match self.group_repository.get_member_count(group_id).await {
                     Ok(count) => count,
                     Err(_) => 0,
                 };
-                
+
                 info!("更新群组信息成功: {:?}", group);
                 Ok(Response::new(GroupResponse {
                     group: Some(group.to_proto(member_count)),
@@ -139,20 +147,24 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 删除群组
     async fn delete_group(
         &self,
         request: Request<DeleteGroupRequest>,
     ) -> Result<Response<DeleteGroupResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
-        let user_id = req.user_id.parse::<Uuid>()
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
-        
+
         match self.group_repository.delete_group(group_id, user_id).await {
             Ok(success) => {
                 if success {
@@ -172,25 +184,35 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 添加群组成员
     async fn add_member(
         &self,
         request: Request<AddMemberRequest>,
     ) -> Result<Response<MemberResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
-        let user_id = req.user_id.parse::<Uuid>()
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
-        
-        let added_by_id = req.added_by_id.parse::<Uuid>()
+
+        let added_by_id = req
+            .added_by_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的操作者ID: {}", e)))?;
-        
+
         // 检查添加者权限
-        match self.member_repository.get_member_role(group_id, added_by_id).await {
+        match self
+            .member_repository
+            .get_member_role(group_id, added_by_id)
+            .await
+        {
             Ok(role) => {
                 if role < MemberRole::Admin as i32 {
                     return Err(Status::permission_denied("没有添加成员的权限"));
@@ -200,9 +222,13 @@ impl GroupService for GroupServiceImpl {
                 return Err(Status::permission_denied("操作者不是群组成员"));
             }
         }
-        
+
         // 检查用户是否已经是成员
-        match self.member_repository.check_membership(group_id, user_id).await {
+        match self
+            .member_repository
+            .check_membership(group_id, user_id)
+            .await
+        {
             Ok((is_member, _)) => {
                 if is_member {
                     return Err(Status::already_exists("用户已经是群组成员"));
@@ -213,16 +239,20 @@ impl GroupService for GroupServiceImpl {
                 return Err(Status::internal("检查成员资格失败"));
             }
         }
-        
+
         // 添加成员
-        match self.member_repository.add_member(
-            group_id,
-            user_id,
-            "PLACEHOLDER".to_string(), // 实际应用中应该从user-service获取
-            None,
-            None,
-            req.role(),
-        ).await {
+        match self
+            .member_repository
+            .add_member(
+                group_id,
+                user_id,
+                "PLACEHOLDER".to_string(), // 实际应用中应该从user-service获取
+                None,
+                None,
+                req.role(),
+            )
+            .await
+        {
             Ok(member) => {
                 info!("添加群组成员成功: {:?}", member);
                 Ok(Response::new(MemberResponse {
@@ -235,27 +265,40 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 移除群组成员
     async fn remove_member(
         &self,
         request: Request<RemoveMemberRequest>,
     ) -> Result<Response<RemoveMemberResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
-        let user_id = req.user_id.parse::<Uuid>()
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
-        
-        let removed_by_id = req.removed_by_id.parse::<Uuid>()
+
+        let removed_by_id = req
+            .removed_by_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的操作者ID: {}", e)))?;
-        
-        match self.member_repository.remove_member(group_id, user_id, removed_by_id).await {
+
+        match self
+            .member_repository
+            .remove_member(group_id, user_id, removed_by_id)
+            .await
+        {
             Ok(success) => {
                 if success {
-                    info!("移除群组成员成功: group_id={}, user_id={}", group_id, user_id);
+                    info!(
+                        "移除群组成员成功: group_id={}, user_id={}",
+                        group_id, user_id
+                    );
                     Ok(Response::new(RemoveMemberResponse { success }))
                 } else {
                     Err(Status::not_found("用户不是群组成员"))
@@ -273,24 +316,34 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 更新成员角色
     async fn update_member_role(
         &self,
         request: Request<UpdateMemberRoleRequest>,
     ) -> Result<Response<MemberResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
-        let user_id = req.user_id.parse::<Uuid>()
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
-        
-        let updated_by_id = req.updated_by_id.parse::<Uuid>()
+
+        let updated_by_id = req
+            .updated_by_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的操作者ID: {}", e)))?;
-        
-        match self.member_repository.update_member_role(group_id, user_id, updated_by_id, req.role()).await {
+
+        match self
+            .member_repository
+            .update_member_role(group_id, user_id, updated_by_id, req.role())
+            .await
+        {
             Ok(member) => {
                 info!("更新成员角色成功: {:?}", member);
                 Ok(Response::new(MemberResponse {
@@ -309,23 +362,23 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 获取群组成员列表
     async fn get_members(
         &self,
         request: Request<GetMembersRequest>,
     ) -> Result<Response<GetMembersResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
+
         match self.member_repository.get_members(group_id).await {
             Ok(members) => {
-                let proto_members = members.into_iter()
-                    .map(|m| m.to_proto())
-                    .collect();
-                
+                let proto_members = members.into_iter().map(|m| m.to_proto()).collect();
+
                 Ok(Response::new(GetMembersResponse {
                     members: proto_members,
                 }))
@@ -336,23 +389,23 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 获取用户加入的群组列表
     async fn get_user_groups(
         &self,
         request: Request<GetUserGroupsRequest>,
     ) -> Result<Response<GetUserGroupsResponse>, Status> {
         let req = request.into_inner();
-        
-        let user_id = req.user_id.parse::<Uuid>()
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
-        
+
         match self.group_repository.get_user_groups(user_id).await {
             Ok(groups) => {
-                let proto_groups = groups.into_iter()
-                    .map(|g| g.to_proto())
-                    .collect();
-                
+                let proto_groups = groups.into_iter().map(|g| g.to_proto()).collect();
+
                 Ok(Response::new(GetUserGroupsResponse {
                     groups: proto_groups,
                 }))
@@ -363,31 +416,37 @@ impl GroupService for GroupServiceImpl {
             }
         }
     }
-    
+
     // 检查用户是否在群组中
     async fn check_membership(
         &self,
         request: Request<CheckMembershipRequest>,
     ) -> Result<Response<CheckMembershipResponse>, Status> {
         let req = request.into_inner();
-        
-        let group_id = req.group_id.parse::<Uuid>()
+
+        let group_id = req
+            .group_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的群组ID: {}", e)))?;
-        
-        let user_id = req.user_id.parse::<Uuid>()
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
-        
-        match self.member_repository.check_membership(group_id, user_id).await {
-            Ok((is_member, role)) => {
-                Ok(Response::new(CheckMembershipResponse {
-                    is_member,
-                    role: if is_member {
-                        role.map(|r| r.into())
-                    } else {
-                        None
-                    },
-                }))
-            }
+
+        match self
+            .member_repository
+            .check_membership(group_id, user_id)
+            .await
+        {
+            Ok((is_member, role)) => Ok(Response::new(CheckMembershipResponse {
+                is_member,
+                role: if is_member {
+                    role.map(|r| r.into())
+                } else {
+                    None
+                },
+            })),
             Err(e) => {
                 error!("检查成员资格失败: {}", e);
                 Err(Status::internal("检查成员资格失败"))

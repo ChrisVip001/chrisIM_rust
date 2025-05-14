@@ -4,10 +4,10 @@ use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::{ClientConfig, Message};
 use tracing::{debug, error, info, warn};
 
+use cache::Cache;
 use common::config::AppConfig;
 use common::error::Error;
 use common::message::{GroupMemSeq, Msg, MsgRead, MsgType};
-use cache::Cache;
 
 use crate::pusher::{push_service, Pusher};
 
@@ -298,7 +298,8 @@ impl ConsumerService {
                 .remove_group_member_id(&msg.receiver_id, &msg.send_id)
                 .await?;
         } else if msg.msg_type == MsgType::GroupRemoveMember as i32 {
-            let data: Vec<String> = bincode::deserialize(&msg.content).map_err(|e| Error::Internal(e.to_string()))?;
+            let data: Vec<String> =
+                bincode::deserialize(&msg.content).map_err(|e| Error::Internal(e.to_string()))?;
 
             let member_ids_ref: Vec<&str> = data.iter().map(AsRef::as_ref).collect();
             self.cache
@@ -459,8 +460,8 @@ impl ConsumerService {
         });
 
         // wait all tasks complete
-        let (db_result, msg_rec_box_result) =
-            tokio::try_join!(db_task, msg_rec_box_task).map_err(|e| Error::Internal(e.to_string()))?;
+        let (db_result, msg_rec_box_result) = tokio::try_join!(db_task, msg_rec_box_task)
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
         db_result?;
         msg_rec_box_result?;

@@ -1,7 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="EMPTY_MODULE" version="4">
   <component name="NewModuleRootManager">
-    <content url="file://$MODULE_DIR$" />
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/api-gateway/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/auth-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/cache/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/common/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/common/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/friend-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/group-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/msg-gateway/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/msg-gateway/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/msg-server/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/oss/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/user-service/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>

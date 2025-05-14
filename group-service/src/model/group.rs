@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use std::time::SystemTime;
-use prost_types;
 use common::message::GroupMemSeq;
+use prost_types;
+use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
@@ -28,11 +28,11 @@ impl Group {
             updated_at: Utc::now(),
         }
     }
-    
+
     pub fn to_proto(&self, member_count: i32) -> common::proto::group::Group {
         let created_system_time = SystemTime::from(self.created_at);
         let updated_system_time = SystemTime::from(self.updated_at);
-        
+
         common::proto::group::Group {
             id: self.id.to_string(),
             name: self.name.clone(),
@@ -59,7 +59,7 @@ pub struct UserGroup {
 impl UserGroup {
     pub fn to_proto(&self) -> common::proto::group::UserGroup {
         let joined_system_time = SystemTime::from(self.joined_at);
-        
+
         common::proto::group::UserGroup {
             id: self.id.to_string(),
             name: self.name.clone(),

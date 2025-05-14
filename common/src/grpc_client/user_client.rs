@@ -3,7 +3,8 @@ use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
 use crate::proto::user::{
-    CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse,
+    CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest,
+    UserResponse,
 };
 
 use crate::grpc_client::GrpcServiceClient;
