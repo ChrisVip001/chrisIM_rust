@@ -26,6 +26,7 @@ http-body-util = { version = "0.1" }
 axum-server = { workspace = true, features = ["tls-rustls"] }
 tokio-signal = "0.2.9"
 rand = { workspace = true, features = ["small_rng"] }
+flate2 = "1.1.1"
 
 # 限流相关
 tower_governor = "0.7.0"
