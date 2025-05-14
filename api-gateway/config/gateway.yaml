@@ -107,23 +107,7 @@ auth:
     allowed_issuers: []
     header_name: "Authorization"
     header_prefix: "Bearer "
-  
-  # API Key配置
-  api_key:
-    enabled: false
-    header_name: "X-API-Key"
-    api_keys: {}
-  
-  # OAuth2配置
-  oauth2:
-    enabled: false
-    client_id: ""
-    client_secret: ""
-    auth_url: ""
-    token_url: ""
-    redirect_url: ""
-    scope: ""
-  
+
   # IP白名单
   ip_whitelist:
     - "127.0.0.1"

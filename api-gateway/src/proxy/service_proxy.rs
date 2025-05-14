@@ -320,13 +320,11 @@ impl ServiceProxy {
             client_req = client_req.header("X-User-ID", user_info.user_id.to_string());
             client_req = client_req.header("X-Username", &user_info.username);
             
-            // 添加角色信息
-            if !user_info.roles.is_empty() {
-                client_req = client_req.header(
-                    "X-User-Roles",
-                    user_info.roles.join(",")
-                );
-            }
+            
+            // 添加用户租户信息
+            client_req = client_req.header("X-Tenant-ID", user_info.tenant_id.to_string());
+            client_req = client_req.header("X-Tenant-Name", &user_info.tenant_name);
+
         }
         
         // 添加原始路径和方法到请求头
