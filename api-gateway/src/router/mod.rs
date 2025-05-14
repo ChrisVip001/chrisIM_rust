@@ -57,20 +57,20 @@ impl RouterBuilder {
                 info!("添加需要认证的路由: {}", route_path);
                 self.router = self.router.route(
                     &route_path,
-                    handler.clone().route_layer(middleware::from_fn(auth_middleware))
-                );
+                    handler.clone()
+                ).layer(middleware::from_fn(auth_middleware));
             } else {
                 info!("添加无需认证的路由: {}", route_path);
                 self.router = self.router.route(&route_path, handler.clone());
             }
             
             // 处理通配符路径
-            let wildcard_path = format!("{}/*path", path);
+            let wildcard_path = format!("{}/{{{}}}", path, "*path");
             if require_auth {
                 self.router = self.router.route(
                     &wildcard_path,
-                    handler.clone().route_layer(middleware::from_fn(auth_middleware))
-                );
+                    handler.clone()
+                ).layer(middleware::from_fn(auth_middleware));
             } else {
                 self.router = self.router.route(&wildcard_path, handler.clone());
             }

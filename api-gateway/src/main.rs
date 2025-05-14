@@ -3,9 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use axum::{
     Router,
-    http::StatusCode,
+    http::{self, StatusCode, Method},
     response::IntoResponse,
+    routing::get,
+    extract::Path,
+    body::{self, Body, Bytes},
+    Extension,
 };
+use axum::http::HeaderValue;
 use axum_server::{self, Handle};
 use clap::Parser;
 use tower_http::cors::{CorsLayer, Any};
@@ -37,11 +42,11 @@ struct Args {
     config: String,
     
     /// 配置文件路径
-    #[clap(short = 'c', long, default_value = "config/gateway.yaml")]
+    #[clap(short = 'f', long, default_value = "config/gateway.yaml")]
     config_file: String,
     
     /// 监听地址
-    #[clap(short, long)]
+    #[clap(short = 'H', long)]
     host: Option<String>,
     
     /// 监听端口
@@ -84,6 +89,10 @@ async fn main() -> anyhow::Result<()> {
     
     // 初始化服务代理
     let service_proxy = proxy::ServiceProxy::new().await;
+    
+    // 初始化 gRPC 客户端工厂
+    let grpc_factory = proxy::GrpcClientFactoryImpl::new();
+    info!("初始化 gRPC 客户端工厂完成，支持 HTTP 到 gRPC 的请求转发");
     
     // 创建路由器
     let router_builder = router::RouterBuilder::new(Arc::from(service_proxy.clone()));
@@ -134,10 +143,17 @@ async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) 
     
     // 添加CORS中间件
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any)
-        .allow_credentials(true);
+        .allow_origin(["http://localhost:3000".parse::<HeaderValue>().unwrap()])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS, Method::PATCH])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            http::header::ACCEPT,
+            http::header::ORIGIN,
+            http::header::USER_AGENT,
+        ])
+        .allow_credentials(true)
+        .max_age(Duration::from_secs(3600));
     
     // 添加请求体大小限制和超时
     app.layer(cors)

@@ -172,11 +172,11 @@ impl ServiceProxy {
                 
                 // 根据服务类型选择转发方式
                 match service_type {
-                    ServiceType::HttpService(_) | ServiceType::Auth | ServiceType::User | ServiceType::Friend | ServiceType::Group | ServiceType::Static | ServiceType::Chat => {
+                    ServiceType::HttpService(_) | ServiceType::Static => {
                         // 转发HTTP请求
                         self.forward_http_request(req, &service_url).await
                     },
-                    ServiceType::GrpcService(_) => {
+                    ServiceType::Auth | ServiceType::User | ServiceType::Friend | ServiceType::Group | ServiceType::Chat | ServiceType::GrpcService(_) => {
                         // 转发gRPC请求
                         self.forward_grpc_request(req, &service_url).await
                     },
@@ -373,8 +373,8 @@ impl ServiceProxy {
     
     /// 转发gRPC请求
     async fn forward_grpc_request(&self, req: Request<Body>, service_url: &str) -> Response<Body> {
-        // 使用GenericGrpcClientFactory处理gRPC请求
-        let factory = crate::proxy::grpc_client::GenericGrpcClientFactory::new();
+        // 使用新实现的 GrpcClientFactoryImpl 处理 gRPC 请求
+        let factory = crate::proxy::grpc_client::GrpcClientFactoryImpl::new();
         factory.forward_request(req, service_url.to_string()).await
     }
     
