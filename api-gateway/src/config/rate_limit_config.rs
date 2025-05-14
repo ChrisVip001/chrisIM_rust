@@ -8,8 +8,6 @@ pub struct RateLimitConfig {
     pub global: RateLimitRule,
     /// 按路径限流配置
     pub path_rules: Vec<PathRateLimitRule>,
-    /// 按API密钥限流配置
-    pub api_key_rules: HashMap<String, RateLimitRule>,
     /// 按IP限流配置
     pub ip_rules: HashMap<String, RateLimitRule>,
 }
@@ -71,7 +69,6 @@ impl Default for RateLimitConfig {
                     },
                 },
             ],
-            api_key_rules: HashMap::new(),
             ip_rules: HashMap::new(),
         }
     }

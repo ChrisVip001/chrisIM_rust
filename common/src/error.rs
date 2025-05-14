@@ -32,15 +32,6 @@ pub enum Error {
     #[error("没有足够的权限")]
     InsufficientPermissions,
 
-    #[error("API Key无效")]
-    InvalidApiKey,
-
-    #[error("API Key已过期")]
-    ApiKeyExpired,
-
-    #[error("OAuth2认证失败: {0}")]
-    OAuth2Error(String),
-
     #[error("资源不存在: {0}")]
     NotFound(String),
 
@@ -138,9 +129,6 @@ impl IntoResponse for Error {
             Error::InvalidToken => (StatusCode::UNAUTHORIZED, "Token无效".to_string()),
             Error::InvalidIssuer => (StatusCode::UNAUTHORIZED, "签发者无效".to_string()),
             Error::InsufficientPermissions => (StatusCode::FORBIDDEN, "没有足够的权限".to_string()),
-            Error::InvalidApiKey => (StatusCode::UNAUTHORIZED, "API Key无效".to_string()),
-            Error::ApiKeyExpired => (StatusCode::UNAUTHORIZED, "API Key已过期".to_string()),
-            Error::OAuth2Error(msg) => (StatusCode::UNAUTHORIZED, msg),
             Error::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "内部认证错误".to_string()),
             _ => todo!(),
         };

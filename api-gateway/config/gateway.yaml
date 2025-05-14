@@ -88,9 +88,6 @@ rate_limit:
         burst_size: 30
         enabled: true
   
-  # API Key限流
-  api_key_rules: {}
-  
   # IP限流
   ip_rules: {}
 

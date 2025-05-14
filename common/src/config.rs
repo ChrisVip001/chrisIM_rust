@@ -95,29 +95,12 @@ pub struct JwtConfig {
     pub expiration: u64,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct Oauth2Provider {
-    pub client_id: String,
-    pub client_secret: String,
-    pub auth_url: String,
-    pub token_url: String,
-    pub redirect_url: String,
-    pub user_info_url: String,
-    pub email_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Oauth2Config {
-    pub google: Oauth2Provider,
-    pub github: Oauth2Provider,
-}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub ws_lb_strategy: String,
-    pub oauth2: Oauth2Config,
 }
 
 impl ServerConfig {
@@ -133,7 +116,6 @@ impl ServerConfig {
             host: self.host.clone(),
             port,
             ws_lb_strategy: self.ws_lb_strategy.clone(),
-            oauth2: self.oauth2.clone(),
         }
     }
 }
