@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use common::message::GroupMemSeq;
 use async_trait::async_trait;
+use common::message::GroupMemSeq;
 
 use common::config::AppConfig;
 use common::error::Error;

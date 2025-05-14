@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::error::Error;
 use async_trait::async_trait;
+use common::error::Error;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tonic::transport::{Channel, Endpoint};

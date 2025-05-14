@@ -1,10 +1,10 @@
+use crate::model::user::{CreateUserData, UpdateUserData, User};
+use chrono::{TimeZone, Utc};
+use common::utils::{hash_password, verify_password};
 use common::{Error, Result};
 use sqlx::{PgPool, Row};
-use tracing::{error, debug};
+use tracing::{debug, error};
 use uuid::Uuid;
-use crate::model::user::{User, CreateUserData, UpdateUserData};
-use common::utils::{hash_password, verify_password};
-use chrono::{Utc, TimeZone};
 
 /// 用户仓库实现
 pub struct UserRepository {
@@ -15,25 +15,28 @@ impl UserRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-    
+
     /// 创建新用户
     pub async fn create_user(&self, data: CreateUserData) -> Result<User> {
         // 检查用户名是否已存在
         if self.get_user_by_username(&data.username).await.is_ok() {
-            return Err(Error::BadRequest(format!("用户名 {} 已被使用", data.username)));
+            return Err(Error::BadRequest(format!(
+                "用户名 {} 已被使用",
+                data.username
+            )));
         }
-        
+
         // 检查邮箱是否已存在
         if self.get_user_by_email(&data.email).await.is_ok() {
             return Err(Error::BadRequest(format!("邮箱 {} 已被使用", data.email)));
         }
-        
+
         // 生成密码哈希
         let password_hash = hash_password(&data.password)?;
-        
+
         // 生成用户ID
         let id = Uuid::new_v4();
-        
+
         // 插入用户数据
         let row = sqlx::query!(
             r#"
@@ -54,7 +57,7 @@ impl UserRepository {
             error!("创建用户失败: {}", err);
             Error::Database(err)
         })?;
-        
+
         let user = User {
             id: Uuid::parse_str(&row.id).unwrap(),
             username: row.username,
@@ -65,16 +68,16 @@ impl UserRepository {
             created_at: Utc.from_utc_datetime(&row.created_at),
             updated_at: Utc.from_utc_datetime(&row.updated_at),
         };
-        
+
         debug!("用户创建成功: {}", user.id);
         Ok(user)
     }
-    
+
     /// 根据ID查询用户
     pub async fn get_user_by_id(&self, id: &str) -> Result<User> {
         let uuid = Uuid::parse_str(id)
             .map_err(|_| Error::BadRequest(format!("无效的用户ID格式: {}", id)))?;
-        
+
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at
@@ -93,7 +96,7 @@ impl UserRepository {
                 Error::Database(err)
             }
         })?;
-        
+
         let user = User {
             id: Uuid::parse_str(&row.id).unwrap(),
             username: row.username,
@@ -104,10 +107,10 @@ impl UserRepository {
             created_at: Utc.from_utc_datetime(&row.created_at),
             updated_at: Utc.from_utc_datetime(&row.updated_at),
         };
-        
+
         Ok(user)
     }
-    
+
     /// 根据用户名查询用户
     pub async fn get_user_by_username(&self, username: &str) -> Result<User> {
         let row = sqlx::query!(
@@ -128,7 +131,7 @@ impl UserRepository {
                 Error::Database(err)
             }
         })?;
-        
+
         let user = User {
             id: Uuid::parse_str(&row.id).unwrap(),
             username: row.username,
@@ -139,10 +142,10 @@ impl UserRepository {
             created_at: Utc.from_utc_datetime(&row.created_at),
             updated_at: Utc.from_utc_datetime(&row.updated_at),
         };
-        
+
         Ok(user)
     }
-    
+
     /// 根据邮箱查询用户
     pub async fn get_user_by_email(&self, email: &str) -> Result<User> {
         let row = sqlx::query!(
@@ -163,7 +166,7 @@ impl UserRepository {
                 Error::Database(err)
             }
         })?;
-        
+
         let user = User {
             id: Uuid::parse_str(&row.id).unwrap(),
             username: row.username,
@@ -174,25 +177,25 @@ impl UserRepository {
             created_at: Utc.from_utc_datetime(&row.created_at),
             updated_at: Utc.from_utc_datetime(&row.updated_at),
         };
-        
+
         Ok(user)
     }
-    
+
     /// 更新用户信息
     pub async fn update_user(&self, id: &str, data: UpdateUserData) -> Result<User> {
         let uuid = Uuid::parse_str(id)
             .map_err(|_| Error::BadRequest(format!("无效的用户ID格式: {}", id)))?;
-        
+
         // 检查用户是否存在
         let _user = self.get_user_by_id(id).await?;
-        
+
         // 更新密码，如果有提供的话
         let password_hash = if let Some(password) = &data.password {
             Some(hash_password(password)?)
         } else {
             None
         };
-        
+
         // 更新用户数据
         let row = sqlx::query!(
             r#"
@@ -218,7 +221,7 @@ impl UserRepository {
             error!("更新用户失败: {}", err);
             Error::Database(err)
         })?;
-        
+
         let updated_user = User {
             id: Uuid::parse_str(&row.id).unwrap(),
             username: row.username,
@@ -229,34 +232,39 @@ impl UserRepository {
             created_at: Utc.from_utc_datetime(&row.created_at),
             updated_at: Utc.from_utc_datetime(&row.updated_at),
         };
-        
+
         debug!("用户更新成功: {}", updated_user.id);
         Ok(updated_user)
     }
-    
+
     /// 验证用户密码
     pub async fn verify_user_password(&self, username: &str, password: &str) -> Result<User> {
         // 查询用户
         let user = self.get_user_by_username(username).await?;
-        
+
         // 验证密码
         let is_valid = verify_password(password, &user.password)?;
-        
+
         if !is_valid {
             return Err(Error::Authentication("密码不正确".to_string()));
         }
-        
+
         Ok(user)
     }
-    
+
     /// 搜索用户
-    pub async fn search_users(&self, query: &str, page: i32, page_size: i32) -> Result<(Vec<User>, i32)> {
+    pub async fn search_users(
+        &self,
+        query: &str,
+        page: i32,
+        page_size: i32,
+    ) -> Result<(Vec<User>, i32)> {
         // 计算分页
         let offset = (page - 1) * page_size;
-        
+
         // 构造搜索条件
         let search_pattern = format!("%{}%", query);
-        
+
         // 查询符合条件的用户
         let rows = sqlx::query!(
             r#"
@@ -276,9 +284,10 @@ impl UserRepository {
             error!("搜索用户失败: {}", err);
             Error::Database(err)
         })?;
-        
-        let users = rows.into_iter().map(|row| {
-            User {
+
+        let users = rows
+            .into_iter()
+            .map(|row| User {
                 id: Uuid::parse_str(&row.id).unwrap(),
                 username: row.username,
                 email: row.email,
@@ -287,16 +296,16 @@ impl UserRepository {
                 avatar_url: row.avatar_url,
                 created_at: Utc.from_utc_datetime(&row.created_at),
                 updated_at: Utc.from_utc_datetime(&row.updated_at),
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         // 查询总数
         let total: i64 = sqlx::query(
             r#"
             SELECT COUNT(*) as total
             FROM users
             WHERE username ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1
-            "#
+            "#,
         )
         .bind(&search_pattern)
         .fetch_one(&self.pool)
@@ -306,7 +315,7 @@ impl UserRepository {
             Error::Database(err)
         })?
         .get("total");
-        
+
         Ok((users, total as i32))
     }
-} 
+}

@@ -1,5 +1,4 @@
-use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
 /// 认证配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,17 +41,14 @@ impl Default for AuthConfig {
             jwt: JwtConfig {
                 secret: "change_this_to_a_secure_random_string".to_string(),
                 issuer: "api-gateway".to_string(),
-                expiry_seconds: 86400, // 24小时
+                expiry_seconds: 86400,          // 24小时
                 refresh_expiry_seconds: 604800, // 7天
                 verify_issuer: false,
                 allowed_issuers: vec![],
                 header_name: "Authorization".to_string(),
                 header_prefix: "Bearer ".to_string(),
             },
-            ip_whitelist: vec![
-                "127.0.0.1".to_string(),
-                "::1".to_string(),
-            ],
+            ip_whitelist: vec!["127.0.0.1".to_string(), "::1".to_string()],
             path_whitelist: vec![
                 "/api/health".to_string(),
                 "/api/auth/login".to_string(),
@@ -61,4 +57,4 @@ impl Default for AuthConfig {
             ],
         }
     }
-} 
+}

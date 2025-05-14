@@ -95,7 +95,6 @@ pub struct JwtConfig {
     pub expiration: u64,
 }
 
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
     pub host: String,
@@ -427,10 +426,7 @@ impl AppConfig {
 
 impl DynamicConfig {
     // 创建一个新的动态配置实例
-    pub fn new(
-        config_paths: Vec<String>,
-        refresh_interval_secs: u64,
-    ) -> Result<Self, ConfigError> {
+    pub fn new(config_paths: Vec<String>, refresh_interval_secs: u64) -> Result<Self, ConfigError> {
         let interval = Duration::from_secs(refresh_interval_secs);
         let config = AppConfig::new()?;
 

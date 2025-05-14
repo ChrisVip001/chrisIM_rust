@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// 限流配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,4 +72,4 @@ impl Default for RateLimitConfig {
             ip_rules: HashMap::new(),
         }
     }
-} 
+}

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Utc, TimeZone};
+use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -13,15 +13,21 @@ impl GroupRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-    
+
     // 创建群组
-    pub async fn create_group(&self, name: String, description: String, avatar_url: String, owner_id: Uuid) -> Result<Group> {
+    pub async fn create_group(
+        &self,
+        name: String,
+        description: String,
+        avatar_url: String,
+        owner_id: Uuid,
+    ) -> Result<Group> {
         let group = Group::new(name, description, avatar_url, owner_id);
-        
+
         // 将DateTime<Utc>转换为NaiveDateTime
         let created_at_naive = group.created_at.naive_utc();
         let updated_at_naive = group.updated_at.naive_utc();
-        
+
         let result = sqlx::query!(
             r#"
             INSERT INTO groups (id, name, description, avatar_url, owner_id, created_at, updated_at)
@@ -38,7 +44,7 @@ impl GroupRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Group {
             id: Uuid::parse_str(&result.id).unwrap(),
             name: result.name,
@@ -49,7 +55,7 @@ impl GroupRepository {
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
-    
+
     // 获取群组信息
     pub async fn get_group(&self, group_id: Uuid) -> Result<Group> {
         let result = sqlx::query!(
@@ -62,7 +68,7 @@ impl GroupRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Group {
             id: Uuid::parse_str(&result.id).unwrap(),
             name: result.name,
@@ -73,16 +79,21 @@ impl GroupRepository {
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
-    
+
     // 更新群组信息
-    pub async fn update_group(&self, group_id: Uuid, name: Option<String>, 
-                            description: Option<String>, avatar_url: Option<String>) -> Result<Group> {
+    pub async fn update_group(
+        &self,
+        group_id: Uuid,
+        name: Option<String>,
+        description: Option<String>,
+        avatar_url: Option<String>,
+    ) -> Result<Group> {
         let now = Utc::now();
         let now_naive = now.naive_utc();
-        
+
         // 先获取现有数据
         let current = self.get_group(group_id).await?;
-        
+
         // 更新群组信息
         let result = sqlx::query!(
             r#"
@@ -99,7 +110,7 @@ impl GroupRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Group {
             id: Uuid::parse_str(&result.id).unwrap(),
             name: result.name,
@@ -110,7 +121,7 @@ impl GroupRepository {
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
-    
+
     // 删除群组
     pub async fn delete_group(&self, group_id: Uuid, user_id: Uuid) -> Result<bool> {
         // 先检查是否是群主
@@ -118,7 +129,7 @@ impl GroupRepository {
         if group.owner_id != user_id {
             return Err(anyhow::anyhow!("只有群主可以删除群组"));
         }
-        
+
         let rows_affected = sqlx::query!(
             r#"
             DELETE FROM groups
@@ -129,10 +140,10 @@ impl GroupRepository {
         .execute(&self.pool)
         .await?
         .rows_affected();
-        
+
         Ok(rows_affected > 0)
     }
-    
+
     // 获取群组成员数量
     pub async fn get_member_count(&self, group_id: Uuid) -> Result<i32> {
         let result = sqlx::query!(
@@ -145,10 +156,10 @@ impl GroupRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(result.count.unwrap_or(0) as i32)
     }
-    
+
     // 获取用户加入的群组列表
     pub async fn get_user_groups(&self, user_id: Uuid) -> Result<Vec<UserGroup>> {
         let groups = sqlx::query!(
@@ -168,7 +179,7 @@ impl GroupRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        
+
         let result = groups
             .into_iter()
             .map(|g| UserGroup {
@@ -180,7 +191,7 @@ impl GroupRepository {
                 joined_at: Utc.from_utc_datetime(&g.joined_at),
             })
             .collect();
-        
+
         Ok(result)
     }
 }

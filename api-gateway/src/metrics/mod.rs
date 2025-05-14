@@ -1,17 +1,17 @@
+use axum::{
+    body::Body,
+    http::{Request, Response, StatusCode},
+    response::IntoResponse,
+};
+use futures::future::BoxFuture;
+use metrics::{counter, histogram};
+use once_cell::sync::Lazy;
+use prometheus::{Encoder, Registry, TextEncoder};
+use std::sync::Arc;
 use std::time::Instant;
 use tower::Layer;
 use tower::Service;
-use futures::future::BoxFuture;
-use metrics::{counter, histogram};
-use prometheus::{Registry, TextEncoder, Encoder};
-use axum::{
-    http::{Request, Response, StatusCode},
-    body::Body,
-    response::IntoResponse,
-};
 use tracing::info;
-use std::sync::Arc;
-use once_cell::sync::Lazy;
 
 // 全局 Prometheus 注册表
 static REGISTRY: Lazy<Arc<Registry>> = Lazy::new(|| {
@@ -35,19 +35,21 @@ pub fn init_metrics() {
 pub async fn get_metrics_handler() -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let registry = get_registry();
-    
+
     // 收集所有指标
     let metric_families = registry.gather();
     let mut buffer = Vec::new();
-    encoder.encode(&metric_families, &mut buffer).unwrap_or_else(|e| {
-        eprintln!("无法编码指标: {}", e);
-    });
-    
+    encoder
+        .encode(&metric_families, &mut buffer)
+        .unwrap_or_else(|e| {
+            eprintln!("无法编码指标: {}", e);
+        });
+
     let metrics_text = String::from_utf8(buffer).unwrap_or_else(|e| {
         eprintln!("无法将指标转换为UTF-8: {}", e);
         String::from("metrics encoding error")
     });
-    
+
     (StatusCode::OK, metrics_text)
 }
 
@@ -78,7 +80,11 @@ where
     type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+    /// 检查服务是否就绪
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
@@ -86,37 +92,37 @@ where
         // 获取请求路径
         let path = req.uri().path().to_string();
         let method = req.method().clone();
-        
+
         // 获取服务名称
         let service = extract_service_name(&path);
-        
+
         // 增加请求计数
-        counter!("gateway.requests.total", 
-            "method" => method.to_string(), 
-            "path" => path.clone(), 
+        counter!("gateway.requests.total",
+            "method" => method.to_string(),
+            "path" => path.clone(),
             "service" => service.clone()
         );
-        
+
         // 开始计时
         let start = Instant::now();
-        
+
         // 克隆服务
         let mut svc = self.inner.clone();
 
         Box::pin(async move {
             let result = svc.call(req).await;
-            
+
             // 计算请求处理时间
             let duration = start.elapsed();
-            
+
             match &result {
                 Ok(response) => {
                     let status = response.status().as_u16();
-                    
+
                     // 记录请求处理时间（以秒为单位）
                     let duration_secs = duration.as_secs_f64();
                     histogram!("gateway.request.duration").record(duration_secs);
-                    
+
                     // 统计状态码
                     let path_clone = path.clone();
                     let service_clone = service.clone();
@@ -126,7 +132,7 @@ where
                         "service" => service_clone,
                         "status" => status.to_string()
                     );
-                    
+
                     // 统计错误状态码
                     if status >= 400 {
                         counter!("gateway.errors.total",
@@ -147,7 +153,7 @@ where
                     );
                 }
             }
-            
+
             result
         })
     }
@@ -169,9 +175,3 @@ fn extract_service_name(path: &str) -> String {
         "unknown".to_string()
     }
 }
-
-/// 创建指标中间件
-pub fn metrics_middleware() -> impl tower::Layer<tower::util::BoxCloneService<axum::http::Request<Body>, axum::response::Response<Body>, tower::BoxError>> + Clone {
-    // 创建MetricsLayer实例
-    MetricsLayer
-} 

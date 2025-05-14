@@ -25,4 +25,4 @@ pub mod group_message {
 
 pub mod message_gateway {
     tonic::include_proto!("message_gateway");
-} 
+}

@@ -1,8 +1,8 @@
 use anyhow::Result;
+use chrono::{TimeZone, Utc};
+use common::proto::group::MemberRole;
 use sqlx::PgPool;
 use uuid::Uuid;
-use common::proto::group::MemberRole;
-use chrono::{Utc, TimeZone};
 
 use crate::model::member::Member;
 
@@ -14,15 +14,22 @@ impl MemberRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-    
+
     // 添加群组成员
-    pub async fn add_member(&self, group_id: Uuid, user_id: Uuid, username: String, nickname: Option<String>, 
-                        avatar_url: Option<String>, role: MemberRole) -> Result<Member> {
+    pub async fn add_member(
+        &self,
+        group_id: Uuid,
+        user_id: Uuid,
+        username: String,
+        nickname: Option<String>,
+        avatar_url: Option<String>,
+        role: MemberRole,
+    ) -> Result<Member> {
         let member = Member::new(group_id, user_id, username, nickname, avatar_url, role);
-        
+
         // 将DateTime<Utc>转换为NaiveDateTime
         let joined_at_naive = member.joined_at.naive_utc();
-        
+
         let result = sqlx::query!(
             r#"
             INSERT INTO group_members (id, group_id, user_id, role, joined_at)
@@ -37,7 +44,7 @@ impl MemberRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Member {
             id: Uuid::parse_str(&result.id).unwrap(),
             group_id: Uuid::parse_str(&result.group_id).unwrap(),
@@ -49,21 +56,26 @@ impl MemberRepository {
             joined_at: Utc.from_utc_datetime(&result.joined_at),
         })
     }
-    
+
     // 移除群组成员
-    pub async fn remove_member(&self, group_id: Uuid, user_id: Uuid, removed_by_id: Uuid) -> Result<bool> {
+    pub async fn remove_member(
+        &self,
+        group_id: Uuid,
+        user_id: Uuid,
+        removed_by_id: Uuid,
+    ) -> Result<bool> {
         // 验证移除权限
         let remover_role = self.get_member_role(group_id, removed_by_id).await?;
         let member_role = self.get_member_role(group_id, user_id).await?;
-        
+
         if remover_role < MemberRole::Admin as i32 {
             return Err(anyhow::anyhow!("没有权限移除成员"));
         }
-        
+
         if remover_role <= member_role && removed_by_id != user_id {
             return Err(anyhow::anyhow!("无法移除同级或更高级别的成员"));
         }
-        
+
         let rows_affected = sqlx::query!(
             r#"
             DELETE FROM group_members
@@ -75,27 +87,33 @@ impl MemberRepository {
         .execute(&self.pool)
         .await?
         .rows_affected();
-        
+
         Ok(rows_affected > 0)
     }
-    
+
     // 更新成员角色
-    pub async fn update_member_role(&self, group_id: Uuid, user_id: Uuid, updated_by_id: Uuid, role: MemberRole) -> Result<Member> {
+    pub async fn update_member_role(
+        &self,
+        group_id: Uuid,
+        user_id: Uuid,
+        updated_by_id: Uuid,
+        role: MemberRole,
+    ) -> Result<Member> {
         // 验证更新权限
         let updater_role = self.get_member_role(group_id, updated_by_id).await?;
         let _member_role = self.get_member_role(group_id, user_id).await?;
-        
+
         if updater_role < MemberRole::Owner as i32 {
             return Err(anyhow::anyhow!("只有群主可以更新成员角色"));
         }
-        
+
         if role as i32 >= updater_role {
             return Err(anyhow::anyhow!("无法将成员提升为与自己相同或更高的角色"));
         }
-        
+
         // 获取用户信息
         let member_info = self.get_member(group_id, user_id).await?;
-        
+
         // 更新角色
         let result = sqlx::query!(
             r#"
@@ -110,7 +128,7 @@ impl MemberRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Member {
             id: Uuid::parse_str(&result.id).unwrap(),
             group_id: Uuid::parse_str(&result.group_id).unwrap(),
@@ -122,7 +140,7 @@ impl MemberRepository {
             joined_at: Utc.from_utc_datetime(&result.joined_at),
         })
     }
-    
+
     // 获取群组成员
     pub async fn get_member(&self, group_id: Uuid, user_id: Uuid) -> Result<Member> {
         // 在真实环境中，这需要从user-service获取用户信息
@@ -140,7 +158,7 @@ impl MemberRepository {
         )
         .fetch_one(&self.pool)
         .await?;
-        
+
         Ok(Member {
             id: Uuid::parse_str(&result.id).unwrap(),
             group_id: Uuid::parse_str(&result.group_id).unwrap(),
@@ -152,7 +170,7 @@ impl MemberRepository {
             joined_at: Utc.from_utc_datetime(&result.joined_at),
         })
     }
-    
+
     // 获取成员角色
     pub async fn get_member_role(&self, group_id: Uuid, user_id: Uuid) -> Result<i32> {
         let result = sqlx::query!(
@@ -166,13 +184,13 @@ impl MemberRepository {
         )
         .fetch_optional(&self.pool)
         .await?;
-        
+
         match result {
             Some(r) => Ok(r.role.parse::<i32>().unwrap_or(0)),
             None => Err(anyhow::anyhow!("用户不是群组成员")),
         }
     }
-    
+
     // 获取群组成员列表
     pub async fn get_members(&self, group_id: Uuid) -> Result<Vec<Member>> {
         // 在真实环境中，这需要从user-service获取用户信息
@@ -189,7 +207,7 @@ impl MemberRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        
+
         let result = members
             .into_iter()
             .map(|m| Member {
@@ -203,12 +221,16 @@ impl MemberRepository {
                 joined_at: Utc.from_utc_datetime(&m.joined_at),
             })
             .collect();
-        
+
         Ok(result)
     }
-    
+
     // 检查用户是否是群组成员
-    pub async fn check_membership(&self, group_id: Uuid, user_id: Uuid) -> Result<(bool, Option<i32>)> {
+    pub async fn check_membership(
+        &self,
+        group_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<(bool, Option<i32>)> {
         let result = sqlx::query!(
             r#"
             SELECT role
@@ -220,7 +242,7 @@ impl MemberRepository {
         )
         .fetch_optional(&self.pool)
         .await?;
-        
+
         match result {
             Some(r) => Ok((true, Some(r.role.parse::<i32>().unwrap_or(0)))),
             None => Ok((false, None)),

@@ -1,9 +1,9 @@
-use common::message::PlatformType;
+use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
+use common::message::PlatformType;
 use futures::stream::SplitSink;
 use futures::SinkExt;
 use std::sync::Arc;
-use axum::body::Bytes;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 
@@ -25,10 +25,18 @@ pub struct Client {
 #[allow(dead_code)]
 impl Client {
     pub async fn send_text(&self, msg: String) -> Result<(), axum::Error> {
-        self.sender.write().await.send(Message::Text(Utf8Bytes::from(msg))).await
+        self.sender
+            .write()
+            .await
+            .send(Message::Text(Utf8Bytes::from(msg)))
+            .await
     }
 
     pub async fn send_binary(&self, msg: Vec<u8>) -> Result<(), axum::Error> {
-        self.sender.write().await.send(Message::Binary(Bytes::from(msg))).await
+        self.sender
+            .write()
+            .await
+            .send(Message::Binary(Bytes::from(msg)))
+            .await
     }
 }

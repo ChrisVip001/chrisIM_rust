@@ -1,7 +1,7 @@
-use crate::{Error, Result, models::Claims};
+use crate::{models::Claims, Error, Result};
+use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use std::env;
-use chrono::{Duration, Utc};
 use uuid::Uuid;
 
 // JWT工具函数
@@ -56,4 +56,4 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     let is_valid = bcrypt::verify(password, hash)
         .map_err(|e| Error::Internal(format!("密码验证失败: {}", e)))?;
     Ok(is_valid)
-} 
+}

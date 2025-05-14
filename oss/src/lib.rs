@@ -1,7 +1,7 @@
-use common::config::AppConfig;
-use common::error::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
+use common::config::AppConfig;
+use common::error::Error;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;

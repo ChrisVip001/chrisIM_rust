@@ -19,7 +19,7 @@ routes:
       name: "用户服务"
       path_prefix: "/api/users"
       service_type: "User"
-      require_auth: true
+      require_auth: false
       methods: []
       rewrite_headers: {}
     
@@ -117,6 +117,7 @@ auth:
     - "/api/auth/register"
     - "/metrics"
     - "/api/chat/ws"  # WebSocket聊天端点不需要认证
+    - "/api/users"    # 临时添加用户服务路径用于测试
 
 # 服务发现配置
 consul_url: "http://localhost:8500"

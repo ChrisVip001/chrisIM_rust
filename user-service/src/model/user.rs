@@ -38,7 +38,7 @@ pub struct UpdateUserData {
 impl From<User> for user::User {
     fn from(user: User) -> Self {
         use prost_types::Timestamp;
-        
+
         Self {
             id: user.id.to_string(),
             username: user.username,
@@ -63,8 +63,16 @@ impl From<user::CreateUserRequest> for CreateUserData {
             username: req.username,
             email: req.email,
             password: req.password,
-            nickname: if req.nickname.is_empty() { None } else { Some(req.nickname) },
-            avatar_url: if req.avatar_url.is_empty() { None } else { Some(req.avatar_url) },
+            nickname: if req.nickname.is_empty() {
+                None
+            } else {
+                Some(req.nickname)
+            },
+            avatar_url: if req.avatar_url.is_empty() {
+                None
+            } else {
+                Some(req.avatar_url)
+            },
         }
     }
 }
@@ -78,4 +86,4 @@ impl From<user::UpdateUserRequest> for UpdateUserData {
             password: req.password,
         }
     }
-} 
+}
