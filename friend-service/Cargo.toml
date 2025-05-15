@@ -18,3 +18,4 @@ clap = { workspace = true }
 axum-server = { workspace = true }
 axum = { workspace = true }
 prost-types = { workspace = true }
+tonic-reflection = { workspace = true }

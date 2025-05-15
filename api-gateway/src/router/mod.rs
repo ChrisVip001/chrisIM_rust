@@ -54,8 +54,7 @@ impl RouterBuilder {
             let route_path = path.clone();
             if require_auth {
                 info!("添加需要认证的路由: {}", route_path);
-                let auth_route =
-                    axum::routing::any(handler.clone()).layer(middleware::from_fn(auth_middleware));
+                let auth_route = any(handler.clone()).layer(middleware::from_fn(auth_middleware));
                 self.router = self.router.route(&route_path, auth_route);
             } else {
                 info!("添加无需认证的路由: {}", route_path);
@@ -66,7 +65,7 @@ impl RouterBuilder {
             let wildcard_path = format!("{}/{{*path}}", path);
             if require_auth {
                 let auth_wildcard_route =
-                    axum::routing::any(handler.clone()).layer(middleware::from_fn(auth_middleware));
+                    any(handler.clone()).layer(middleware::from_fn(auth_middleware));
                 self.router = self.router.route(&wildcard_path, auth_wildcard_route);
             } else {
                 self.router = self.router.route(&wildcard_path, handler.clone());

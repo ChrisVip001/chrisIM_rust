@@ -118,6 +118,7 @@ auth:
     - "/metrics"
     - "/api/chat/ws"  # WebSocket聊天端点不需要认证
     - "/api/users"    # 临时添加用户服务路径用于测试
+    - "/api/friends"  # 临时添加好友服务路径用于测试
 
 # 服务发现配置
 consul_url: "http://localhost:8500"

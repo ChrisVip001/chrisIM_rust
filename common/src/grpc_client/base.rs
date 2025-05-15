@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tonic::transport::{Channel, Endpoint};
-use tracing::{error, info};
+use tracing::{error, info, debug};
 
 use crate::service_registry::ServiceRegistry;
 
@@ -59,6 +59,7 @@ impl GrpcServiceClient {
 
     /// 刷新服务通道
     pub async fn refresh_channels(&self) -> Result<()> {
+        debug!("开始刷新服务通道: {}", self.service_name);
         // 从Consul获取服务实例
         let service_urls = self
             .service_registry
@@ -77,6 +78,7 @@ impl GrpcServiceClient {
         for url in service_urls {
             // 转换HTTP URL到gRPC URL (移除http:// 前缀)
             let grpc_url = if url.starts_with("http://") {
+                debug!("转换HTTP URL '{}' 为gRPC URL", url);
                 url[7..].to_string()
             } else {
                 url
@@ -113,12 +115,27 @@ impl GrpcServiceClient {
 
     /// 创建单个gRPC通道
     async fn create_channel(&self, target: &str) -> Result<Channel, tonic::transport::Error> {
-        let endpoint = Endpoint::from_shared(format!("http://{}", target))?
+        // 确保gRPC URL格式正确
+        let endpoint_url = if target.starts_with("http://") {
+            // 移除http://前缀，因为tonic会自动添加
+            target[7..].to_string()
+        } else if target.starts_with("https://") {
+            // 移除https://前缀
+            target[8..].to_string()
+        } else {
+            // 已经是正确格式
+            target.to_string()
+        };
+        
+        let endpoint = Endpoint::from_shared(format!("http://{}", endpoint_url))?
             .connect_timeout(self.connection_timeout)
             .timeout(self.request_timeout)
             .concurrency_limit(self.concurrency_limit);
 
-        endpoint.connect().await
+        let channel = endpoint.connect().await?;
+        debug!("gRPC通道连接成功: {}", endpoint_url);
+        
+        Ok(channel)
     }
 
     /// 获取通道（带负载均衡）

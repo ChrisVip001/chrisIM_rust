@@ -7,6 +7,7 @@ edition = "2021"
 common = { path = "../common" }
 tokio = { workspace = true }
 tonic = { workspace = true }
+tonic-reflection = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
