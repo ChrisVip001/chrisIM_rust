@@ -390,6 +390,228 @@ impl GrpcClientFactoryImpl {
                 }
             }
 
+            // 用户账号密码注册
+            (&Method::POST, "registerByUsername") => {
+                let username = body
+                    .get("username")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let password = body
+                    .get("password")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let nickname = body
+                    .get("nickname")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let tenant_id = body
+                    .get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let phone = body
+                    .get("phone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                if username.is_empty() || password.is_empty() {
+                    return Ok((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "code": 400,
+                            "message": "用户名或者密码不能为空",
+                            "success": false
+                        })),
+                    )
+                    .into_response());
+                }
+
+                let request = proto::user::RegisterRequest {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                    nickname: nickname.to_string(),
+                    tenant_id: tenant_id.to_string(),
+                    phone: phone.to_string()
+                };
+
+                match self.user_client.register_by_username(request).await {
+                    Ok(response) => {
+                        let user = response
+                            .user
+                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                        Ok((
+                            StatusCode::CREATED,
+                            Json(json!({
+                                "code": 201,
+                                "data": convert_user_to_json(&user),
+                                "success": true,
+                                "message": "用户注册成功"
+                            })),
+                        )
+                        .into_response())
+                    }
+                    Err(err) => {
+                        error!("注册用户失败: {}", err);
+                        Ok((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "code": 500,
+                                "message": format!("注册用户失败: {}", err),
+                                "success": false
+                            })),
+                        )
+                        .into_response())
+                    }
+                }
+            }
+
+            // 用户手机号注册
+            (&Method::POST, "registerByPhone") => {
+                let username = body
+                    .get("username")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let password = body
+                    .get("password")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let nickname = body
+                    .get("nickname")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let tenant_id = body
+                    .get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let phone = body
+                    .get("phone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                if phone.is_empty() || password.is_empty() {
+                    return Ok((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "code": 400,
+                            "message": "手机号或者密码不能为空",
+                            "success": false
+                        })),
+                    )
+                        .into_response());
+                }
+
+                let request = proto::user::RegisterRequest {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                    nickname: nickname.to_string(),
+                    tenant_id: tenant_id.to_string(),
+                    phone: phone.to_string()
+                };
+
+                match self.user_client.register_by_phone(request).await {
+                    Ok(response) => {
+                        let user = response
+                            .user
+                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                        Ok((
+                            StatusCode::CREATED,
+                            Json(json!({
+                                "code": 201,
+                                "data": convert_user_to_json(&user),
+                                "success": true,
+                                "message": "用户注册成功"
+                            })),
+                        )
+                        .into_response())
+                    }
+                    Err(err) => {
+                        error!("注册用户失败: {}", err);
+                        Ok((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "code": 500,
+                                "message": format!("注册用户失败: {}", err),
+                                "success": false
+                            })),
+                        )
+                        .into_response())
+                    }
+                }
+            }
+
+            // 忘记密码
+            (&Method::POST, "forgetPassword") => {
+                let username = body
+                    .get("username")
+                    .or_else(|| body.get("username"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let phone = body
+                    .get("phone")
+                    .or_else(|| body.get("phone"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                if username.is_empty() && phone.is_empty() {
+                    return Ok((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "code": 400,
+                            "message": "用户名或者手机号不能为空",
+                            "success": false
+                        })),
+                    )
+                    .into_response());
+                }
+
+                let password = body
+                    .get("password")
+                    .or_else(|| body.get("password"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let tenant_id = body
+                    .get("tenant_id")
+                    .or_else(|| body.get("tenant_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                let request = proto::user::ForgetPasswordRequest {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                    tenant_id: tenant_id.to_string(),
+                    phone: phone.to_string(),
+                };
+
+                match self.user_client.forget_password(request).await {
+                    Ok(response) => {
+                        let user = response
+                            .user
+                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                        Ok((
+                            StatusCode::OK,
+                            Json(json!({
+                                "code": 200,
+                                "data": convert_user_to_json(&user),
+                                "success": true,
+                                "message": "密码更新成功"
+                            })),
+                        )
+                            .into_response())
+                    }
+                    Err(err) => {
+                        error!("密码更新失败: {}", err);
+                        Ok((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "code": 500,
+                                "message": format!("密码更新失败: {}", err),
+                                "success": false
+                            })),
+                        )
+                        .into_response())
+                    }
+                }
+            }
+
             // 其他未知方法
             _ => {
                 error!("未知的用户服务方法: {}", method_name);
@@ -1288,6 +1510,16 @@ fn convert_user_to_json(user: &proto::user::User) -> Value {
         })
         .unwrap_or_default();
 
+    let last_login_time = user
+        .last_login_time
+        .as_ref()
+        .map(|ts| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp(ts.seconds, ts.nanos as u32)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+
     json!({
         "id": user.id,
         "username": user.username,
@@ -1295,7 +1527,16 @@ fn convert_user_to_json(user: &proto::user::User) -> Value {
         "nickname": user.nickname,
         "avatarUrl": user.avatar_url,
         "createdAt": created_at,
-        "updatedAt": updated_at
+        "updatedAt": updated_at,
+        "phone" : user.phone,
+        "address" : user.address,
+        "head_image" : user.head_image,
+        "head_image_thumb" : user.head_image_thumb,
+        "sex" : user.sex,
+        "user_stat" : user.user_stat,
+        "tenant_id" : user.tenant_id,
+        "last_login_time"  : last_login_time,
+        "user_idx" : user.user_idx,
     })
 }
 

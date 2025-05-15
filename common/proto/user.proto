@@ -23,6 +23,15 @@ service UserService {
   
   // 搜索用户
   rpc SearchUsers (SearchUsersRequest) returns (SearchUsersResponse);
+
+  // 用户账号密码注册
+  rpc registerByUsername (RegisterRequest) returns (UserResponse);
+
+  // 用户手机号注册
+  rpc registerByPhone (RegisterRequest) returns (UserResponse);
+
+  // 忘记密码
+  rpc forgetPassword (ForgetPasswordRequest) returns (UserResponse);
 }
 
 // 创建用户请求
@@ -92,4 +101,30 @@ message User {
   optional string avatar_url = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
-} 
+  string phone = 8;
+  optional string address = 9;
+  optional string head_image = 10;
+  optional string head_image_thumb = 11;
+  optional int32 sex = 12;
+  int32 user_stat = 13;
+  string tenant_id = 14;
+  google.protobuf.Timestamp last_login_time = 15;
+  optional string user_idx = 16;
+}
+
+// 用户注册请求
+message RegisterRequest {
+  string username = 1;
+  string password = 2;
+  string nickname = 3;
+  string tenant_id = 4;
+  string phone = 5;
+}
+
+// 忘记密码请求
+message ForgetPasswordRequest{
+  string username = 1;
+  string password = 2;
+  string tenant_id = 3;
+  string phone = 4;
+}

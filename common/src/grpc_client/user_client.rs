@@ -2,10 +2,7 @@ use anyhow::Result;
 use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
-use crate::proto::user::{
-    CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest,
-    UserResponse,
-};
+use crate::proto::user::{CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, UpdateUserRequest, UserResponse};
 
 use crate::grpc_client::GrpcServiceClient;
 
@@ -68,6 +65,33 @@ impl UserServiceGrpcClient {
         let mut client = UserServiceClient::new(channel);
 
         let response = client.update_user(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 用户账号密码注册
+    pub async fn register_by_username(&self, request: RegisterRequest) -> Result<UserResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = UserServiceClient::new(channel);
+
+        let response = client.register_by_username(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 用户手机号注册
+    pub async fn register_by_phone(&self, request: RegisterRequest) -> Result<UserResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = UserServiceClient::new(channel);
+
+        let response = client.register_by_phone(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 忘记密码
+    pub async fn forget_password(&self, request: ForgetPasswordRequest) -> Result<UserResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = UserServiceClient::new(channel);
+
+        let response = client.forget_password(Request::new(request)).await?;
         Ok(response.into_inner())
     }
 }
