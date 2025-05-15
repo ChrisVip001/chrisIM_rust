@@ -1,5 +1,5 @@
 use crate::config::CONFIG;
-use tracing::info;
+use tracing::{info, Level};
 use tracing_subscriber::fmt::Layer as FmtLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -9,12 +9,18 @@ pub async fn init_tracer() -> Result<(), Box<dyn std::error::Error + Send + Sync
     // 读取配置
     let config = CONFIG.read().await;
 
+    // 设置日志级别为DEBUG
+    let env_filter = EnvFilter::from_default_env()
+        .add_directive(Level::DEBUG.into())
+        .add_directive("hyper=info".parse().unwrap())  // 限制hyper日志
+        .add_directive("tower=info".parse().unwrap()); // 限制tower日志
+
     // 如果未启用OpenTelemetry，只设置标准日志
     if !config.tracing.enable_opentelemetry {
         let fmt_layer = FmtLayer::new();
 
         tracing_subscriber::registry()
-            .with(EnvFilter::from_default_env())
+            .with(env_filter)
             .with(fmt_layer)
             .init();
 
@@ -31,7 +37,7 @@ pub async fn init_tracer() -> Result<(), Box<dyn std::error::Error + Send + Sync
 
     // 初始化订阅者
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
+        .with(env_filter)
         .with(fmt_layer)
         .init();
 

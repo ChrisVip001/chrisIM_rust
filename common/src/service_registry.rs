@@ -3,24 +3,44 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, debug, error};
+
+/// 服务节点信息
+#[derive(Debug, Serialize, Deserialize)]
+struct ConsulNode {
+    // 节点相关信息，这里我们不关心具体字段
+}
+
+/// Consul服务信息结构 - 针对健康检查API响应格式
+#[derive(Debug, Serialize, Deserialize)]
+struct ConsulServiceWithHealth {
+    Node: ConsulNode,
+    Service: ConsulService,
+    Checks: Vec<ConsulCheck>,
+}
 
 /// Consul服务信息结构
 #[derive(Debug, Serialize, Deserialize)]
 struct ConsulService {
-    #[serde(rename = "ServiceID")]
-    service_id: String,
-    #[serde(rename = "ServiceName")]
-    service_name: String,
-    #[serde(rename = "ServiceAddress")]
-    service_address: String,
-    #[serde(rename = "ServicePort")]
-    service_port: u32,
+    #[serde(rename = "ID")]
+    ID: String,
+    #[serde(rename = "Service")]
+    Service: String,
+    #[serde(rename = "Address")]
+    Address: String,
+    #[serde(rename = "Port")]
+    Port: u32,
 }
 
-// Consul服务发现响应
+/// Consul健康检查信息
 #[derive(Debug, Serialize, Deserialize)]
-struct ConsulServicesResponse(Vec<ConsulService>);
+struct ConsulCheck {
+    // 健康检查相关信息，这里我们不关心具体字段
+}
+
+// Consul健康检查API响应
+#[derive(Debug, Serialize, Deserialize)]
+struct ConsulHealthResponse(Vec<ConsulServiceWithHealth>);
 
 /// 服务注册管理器
 #[derive(Clone, Debug)]
@@ -65,6 +85,15 @@ impl ServiceRegistry {
         // 生成唯一服务ID
         let service_id = format!("{}-{}-{}", service_name, host, port);
 
+        // 确定健康检查URL
+        let health_check_url = if health_check_path.starts_with("http://") || health_check_path.starts_with("https://") {
+            // 如果已经是完整URL，直接使用
+            health_check_path.to_string()
+        } else {
+            // 否则，使用服务地址和端口构建URL
+            format!("http://{}:{}{}", host, port, health_check_path)
+        };
+        
         // 构建注册请求体
         let register_payload = serde_json::json!({
             "ID": service_id,
@@ -73,7 +102,7 @@ impl ServiceRegistry {
             "Address": host,
             "Port": port,
             "Check": {
-                "HTTP": format!("http://{}:{}{}", host, port, health_check_path),
+                "HTTP": health_check_url,
                 "Interval": health_check_interval,
                 "Timeout": "5s",
                 "DeregisterCriticalServiceAfter": "30s",
@@ -164,18 +193,35 @@ impl ServiceRegistry {
             return Err(anyhow::anyhow!("Consul API请求失败: {}", response.status()));
         }
 
-        let services: ConsulServicesResponse = response.json().await?;
+        let response_body = match response.text().await {
+            Ok(body) => {
+                debug!("Consul响应体: {}", body);
+                body
+            },
+            Err(err) => {
+                error!("读取Consul响应体失败: {}", err);
+                return Err(anyhow::anyhow!("读取Consul响应体失败: {}", err));
+            }
+        };
 
-        let service_urls = services
-            .0
-            .into_iter()
-            .map(|svc| {
-                let host = if svc.service_address.is_empty() {
+        let services: ConsulHealthResponse = match serde_json::from_str(&response_body) {
+            Ok(svcs) => svcs,
+            Err(err) => {
+                error!("解析Consul响应JSON失败: {}", err);
+                error!("响应体: {}", response_body);
+                return Err(anyhow::anyhow!("解析Consul响应失败: {}", err));
+            }
+        };
+
+        let service_urls = services.0.into_iter()
+            .map(|health_entry| {
+                let svc = health_entry.Service;
+                let host = if svc.Address.is_empty() {
                     "127.0.0.1".to_string()
                 } else {
-                    svc.service_address
+                    svc.Address
                 };
-                format!("http://{}:{}", host, svc.service_port)
+                format!("http://{}:{}", host, svc.Port)
             })
             .collect();
 

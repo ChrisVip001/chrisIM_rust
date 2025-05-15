@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use tokio::signal;
 use tokio::sync::oneshot;
 use tonic::transport::Server;
+use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -18,6 +19,8 @@ mod service;
 
 use common::proto::friend::friend_service_server::FriendServiceServer;
 use service::friend_service::FriendServiceImpl;
+// 导入好友服务proto文件描述符，用于gRPC反射
+const FILE_DESCRIPTOR_SET: &[u8] = common::proto::friend::FILE_DESCRIPTOR_SET;
 
 #[derive(Parser, Debug)]
 #[clap(name = "friend-service", about = "好友关系服务")]
@@ -67,6 +70,7 @@ async fn main() -> Result<()> {
 
     // 创建HTTP服务器用于健康检查
     let health_port = port + 1;
+    let health_check_url = format!("http://{}:{}/health", host, health_port);
     let health_service = start_health_service(host, health_port).await?;
 
     // 创建并注册到Consul
@@ -75,9 +79,9 @@ async fn main() -> Result<()> {
         .register_service(
             "friend-service",
             host,
-            health_port as u32, // 显式转换为u32类型
+            port as u32, // 注册gRPC服务端口
             vec!["friend".to_string(), "api".to_string()],
-            "/health",
+            &health_check_url, // 明确指定健康检查URL
             "15s",
         )
         .await?;
@@ -87,12 +91,17 @@ async fn main() -> Result<()> {
     // 设置关闭通道
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let shutdown_signal_task = tokio::spawn(shutdown_signal(shutdown_tx, service_registry.clone()));
+    // 创建反射服务
+    let reflection_service = ReflectionBuilder::configure()
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build()?;
 
     // 启动gRPC服务
     info!("好友服务启动，监听地址: {}", addr);
 
     // 创建服务器并运行
     let server = Server::builder()
+        .add_service(reflection_service) // 添加反射服务
         .add_service(FriendServiceServer::new(friend_service))
         .serve_with_shutdown(addr, async {
             let _ = shutdown_rx.await;
