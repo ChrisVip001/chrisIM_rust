@@ -27,6 +27,8 @@ mod router;
 mod tracing_setup;
 
 pub use common::grpc_client::user_client::UserServiceGrpcClient;
+pub use common::grpc_client::friend_client::FriendServiceGrpcClient;
+pub use common::grpc_client::group_client::GroupServiceGrpcClient;
 use common::service_registry::ServiceRegistry;
 use config::CONFIG;
 

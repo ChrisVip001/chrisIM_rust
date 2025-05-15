@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use common::message::GroupMemSeq;
 use prost_types;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;

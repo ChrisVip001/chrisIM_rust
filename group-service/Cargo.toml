@@ -13,9 +13,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-dotenv = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
-thiserror = { workspace = true }
 axum-server = {workspace = true}
+axum = { workspace = true }
 prost-types = { workspace = true }
