@@ -113,8 +113,8 @@ auth:
   # 路径白名单
   path_whitelist:
     - "/api/health"
-    - "/api/auth/login"
-    - "/api/auth/register"
+    - "/api/users/login"
+    - "/api/users/register"
     - "/metrics"
     - "/api/chat/ws"  # WebSocket聊天端点不需要认证
     - "/api/users"    # 临时添加用户服务路径用于测试

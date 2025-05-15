@@ -17,17 +17,12 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 reqwest = { workspace = true }
 jsonwebtoken = { workspace = true }
-thiserror = { workspace = true }
-uuid = { workspace = true, features = ["v4", "serde"] }
-dotenv = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 http-body-util = { version = "0.1" }
 axum-server = { workspace = true, features = ["tls-rustls"] }
-tokio-signal = "0.2.9"
 rand = { workspace = true, features = ["small_rng"] }
 flate2 = "1.1.1"
-bytes = "1.4.0"
 
 # 限流相关
 tower_governor = "0.7.0"
@@ -53,7 +48,6 @@ once_cell = "1.19.0"
 serde_yaml = "0.9.25"
 
 # 内存缓存
-lru = "0.13.0"
 parking_lot = "0.12.1"
 
 # 其他依赖
