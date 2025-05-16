@@ -332,46 +332,11 @@ impl GrpcClientFactoryImpl {
         match (method, method_name.as_str()) {
             // 发送好友请求
             (&Method::POST, "sendRequest") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let friend_id = body.get("friendId").or_else(|| body.get("friend_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少好友ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("好友ID格式错误"))?;
-                let message = body.get("message")
-                    .ok_or_else(|| anyhow::anyhow!("缺少验证信息"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("验证信息格式错误"))?;
+                let message = extract_string_param(&body, "message", Some("message"))?;
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
-
-                match self.friend_client.send_friend_request(user_id, friend_id,message).await {
-                    Ok(response) => {
-                        let friendship = response.friendship
-                            .ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_friendship_to_json(&friendship),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("发送好友请求失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("发送好友请求失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
-                let response = self.friend_client.send_friend_request(&user_id, &friend_id).await?;
+                
+                let response = self.friend_client.send_friend_request(&user_id, &friend_id,&message).await?;
                 let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
 
                 Ok(success_response(convert_friendship_to_json(&friendship), StatusCode::OK))
