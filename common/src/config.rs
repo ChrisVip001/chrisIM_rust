@@ -57,6 +57,9 @@ pub struct RedisConfig {
     pub host: String,
     pub port: u16,
     pub seq_step: i32,
+    pub max_connections: Option<usize>,
+    pub pool_timeout_ms: Option<u64>,
+    pub connection_timeout_ms: Option<u64>,
 }
 
 impl RedisConfig {

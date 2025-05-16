@@ -113,6 +113,9 @@ redis:
   host: 127.0.0.1
   port: 6379
   seq_step: 10000
+  max_connections: 100
+  pool_timeout_ms:  5000
+  connection_timeout_ms:  5000
 
 # Kafka配置
 kafka:
@@ -150,11 +153,4 @@ oss:
   avatar_bucket: rustIM-avatar
   region: us-east-1
 
-mail:
-  server: smtp.qq.com
-  # server: 127.0.0.1
-  # account: rustIM@gmail.com
-  account: 17788889999@qq.com
-  password: iejtiohyreybgdf
-  temp_path: ./api/fixtures/templates/*
-  temp_file: email_temp.html
+
