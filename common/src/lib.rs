@@ -7,6 +7,7 @@ pub mod proto;
 pub mod service_registry;
 pub mod types;
 pub mod utils;
+pub mod validation;
 
 pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;

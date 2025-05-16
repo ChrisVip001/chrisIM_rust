@@ -23,6 +23,9 @@ service UserService {
   
   // 搜索用户
   rpc SearchUsers (SearchUsersRequest) returns (SearchUsersResponse);
+  
+  // 检查用户状态
+  rpc CheckUserStatus (CheckUserStatusRequest) returns (CheckUserStatusResponse);
 }
 
 // 创建用户请求
@@ -51,6 +54,7 @@ message UpdateUserRequest {
   optional string email = 3;
   optional string avatar_url = 4;
   optional string password = 5;
+  optional UserStatus status = 6;
 }
 
 // 验证密码请求
@@ -78,6 +82,26 @@ message SearchUsersResponse {
   int32 total = 2;
 }
 
+// 检查用户状态请求
+message CheckUserStatusRequest {
+  string user_id = 1;
+}
+
+// 检查用户状态响应
+message CheckUserStatusResponse {
+  bool exists = 1;
+  UserStatus status = 2;
+  bool is_active = 3;
+}
+
+// 用户状态枚举
+enum UserStatus {
+  ACTIVE = 0;
+  INACTIVE = 1;
+  BANNED = 2;
+  DELETED = 3;
+}
+
 // 用户响应
 message UserResponse {
   User user = 1;
@@ -90,6 +114,7 @@ message User {
   string email = 3;
   optional string nickname = 4;
   optional string avatar_url = 5;
-  google.protobuf.Timestamp created_at = 6;
-  google.protobuf.Timestamp updated_at = 7;
+  UserStatus status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
 } 
