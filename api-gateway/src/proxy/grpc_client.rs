@@ -427,8 +427,11 @@ impl GrpcClientFactoryImpl {
                 let friend_id = body.get("friendId").or_else(|| body.get("friend_id"))
                     .ok_or_else(|| anyhow::anyhow!("缺少好友ID"))?
                     .as_str().ok_or_else(|| anyhow::anyhow!("好友ID格式错误"))?;
+                let message = body.get("message")
+                    .ok_or_else(|| anyhow::anyhow!("缺少验证信息"))?
+                    .as_str().ok_or_else(|| anyhow::anyhow!("验证信息格式错误"))?;
 
-                match self.friend_client.send_friend_request(user_id, friend_id).await {
+                match self.friend_client.send_friend_request(user_id, friend_id,message).await {
                     Ok(response) => {
                         let friendship = response.friendship
                             .ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
@@ -1344,6 +1347,7 @@ fn convert_friendship_to_json(friendship: &proto::friend::Friendship) -> Value {
         "id": friendship.id,
         "userId": friendship.user_id,
         "friendId": friendship.friend_id,
+        "message": friendship.message,
         "status": friendship.status,
         "statusText": status_text,
         "createdAt": created_at,

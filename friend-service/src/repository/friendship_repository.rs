@@ -20,8 +20,9 @@ impl FriendshipRepository {
         &self,
         user_id: Uuid,
         friend_id: Uuid,
+        message: String,
     ) -> Result<Friendship> {
-        let friendship = Friendship::new(user_id, friend_id);
+        let friendship = Friendship::new(user_id, friend_id,message);
 
         // 将DateTime<Utc>转换为NaiveDateTime
         let created_at_naive = friendship.created_at.naive_utc();
@@ -29,13 +30,14 @@ impl FriendshipRepository {
 
         let result = sqlx::query!(
             r#"
-            INSERT INTO friendships (id, user_id, friend_id, status, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id, user_id, friend_id, status, created_at, updated_at
+            INSERT INTO friendships (id, user_id, friend_id, message,status, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6,$7)
+            RETURNING id, user_id, friend_id, message,status, created_at, updated_at
             "#,
             friendship.id.to_string(),
             friendship.user_id.to_string(),
             friendship.friend_id.to_string(),
+            friendship.message.to_string(),
             friendship.status.to_string(),
             created_at_naive,
             updated_at_naive
@@ -47,6 +49,7 @@ impl FriendshipRepository {
             id: Uuid::parse_str(&result.id).unwrap(),
             user_id: Uuid::parse_str(&result.user_id).unwrap(),
             friend_id: Uuid::parse_str(&result.friend_id).unwrap(),
+            message: result.message.unwrap_or_default(),
             status: result.status.parse::<i32>().unwrap_or(0),
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
@@ -67,12 +70,12 @@ impl FriendshipRepository {
             UPDATE friendships
             SET status = $1, updated_at = $2
             WHERE user_id = $3 AND friend_id = $4
-            RETURNING id, user_id, friend_id, status, created_at, updated_at
+            RETURNING id, user_id, friend_id, message,status, created_at, updated_at
             "#,
             (FriendshipStatus::Accepted as i32).to_string(),
             now_naive,
-            friend_id.to_string(),
-            user_id.to_string()
+            user_id.to_string(),
+            friend_id.to_string()
         )
         .fetch_one(&self.pool)
         .await?;
@@ -81,6 +84,7 @@ impl FriendshipRepository {
             id: Uuid::parse_str(&result.id).unwrap(),
             user_id: Uuid::parse_str(&result.user_id).unwrap(),
             friend_id: Uuid::parse_str(&result.friend_id).unwrap(),
+            message: result.message.unwrap_or_default(),
             status: result.status.parse::<i32>().unwrap_or(0),
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
@@ -101,12 +105,12 @@ impl FriendshipRepository {
             UPDATE friendships
             SET status = $1, updated_at = $2
             WHERE user_id = $3 AND friend_id = $4
-            RETURNING id, user_id, friend_id, status, created_at, updated_at
+            RETURNING id, user_id, friend_id, message,status, created_at, updated_at
             "#,
             (FriendshipStatus::Rejected as i32).to_string(),
             now_naive,
-            friend_id.to_string(),
-            user_id.to_string()
+            user_id.to_string(),
+            friend_id.to_string()
         )
         .fetch_one(&self.pool)
         .await?;
@@ -115,6 +119,7 @@ impl FriendshipRepository {
             id: Uuid::parse_str(&result.id).unwrap(),
             user_id: Uuid::parse_str(&result.user_id).unwrap(),
             friend_id: Uuid::parse_str(&result.friend_id).unwrap(),
+            message: result.message.unwrap_or_default(),
             status: result.status.parse::<i32>().unwrap_or(0),
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
@@ -161,7 +166,7 @@ impl FriendshipRepository {
     pub async fn get_friend_requests(&self, user_id: Uuid) -> Result<Vec<Friendship>> {
         let requests = sqlx::query!(
             r#"
-            SELECT id, user_id, friend_id, status, created_at, updated_at
+            SELECT id, user_id, friend_id,message, status, created_at, updated_at
             FROM friendships
             WHERE friend_id = $1 AND status = $2
             "#,
@@ -177,6 +182,7 @@ impl FriendshipRepository {
                 id: Uuid::parse_str(&r.id).unwrap(),
                 user_id: Uuid::parse_str(&r.user_id).unwrap(),
                 friend_id: Uuid::parse_str(&r.friend_id).unwrap(),
+                message: r.message.unwrap_or_default(),
                 status: r.status.parse::<i32>().unwrap_or(0),
                 created_at: Utc.from_utc_datetime(&r.created_at),
                 updated_at: Utc.from_utc_datetime(&r.updated_at),
