@@ -79,7 +79,6 @@ cargo build
 
 ```
 rustIM_demo/
-├── auth-service/           # 认证服务
 ├── user-service/           # 用户服务
 ├── group-service/          # 群组服务
 ├── friend-service/         # 好友服务

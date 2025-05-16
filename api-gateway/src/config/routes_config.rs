@@ -35,8 +35,6 @@ pub struct RouteRule {
 /// 目标服务类型
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ServiceType {
-    /// 认证服务
-    Auth,
     /// 用户服务
     User,
     /// 好友服务
@@ -67,21 +65,6 @@ impl Default for RoutesConfig {
     fn default() -> Self {
         Self {
             routes: vec![
-                // 默认认证服务路由
-                RouteRule {
-                    id: "auth-service".to_string(),
-                    name: "认证服务".to_string(),
-                    path_prefix: "/api/auth".to_string(),
-                    service_type: ServiceType::Auth,
-                    require_auth: false,
-                    methods: vec![],
-                    rewrite_headers: HashMap::new(),
-                    path_rewrite: Some(PathRewrite {
-                        replace_prefix: Some("/".to_string()),
-                        regex_match: None,
-                        regex_replace: None,
-                    }),
-                },
                 // 默认用户服务路由
                 RouteRule {
                     id: "user-service".to_string(),

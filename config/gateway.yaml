@@ -1,19 +1,10 @@
-# API网关配置文件
+# API网关基础配置
+server:
+  addr: "0.0.0.0:8000"
 
 # 路由配置
 routes:
   routes:
-    # 认证服务路由
-    - id: "auth-service"
-      name: "认证服务"
-      path_prefix: "/api/auth"
-      service_type: "Auth"
-      require_auth: false
-      methods: []
-      rewrite_headers: {}
-      path_rewrite:
-        replace_prefix: "/"
-    
     # 用户服务路由
     - id: "user-service"
       name: "用户服务"
@@ -61,14 +52,14 @@ rate_limit:
   # 按路径限流
   path_rules:
     # 登录接口限流
-    - path_prefix: "/api/auth/login"
+    - path_prefix: "/api/user/login"
       rule:
         requests_per_second: 5
         burst_size: 3
         enabled: true
     
     # 注册接口限流
-    - path_prefix: "/api/auth/register"
+    - path_prefix: "/api/user/register"
       rule:
         requests_per_second: 2
         burst_size: 5
@@ -126,7 +117,7 @@ consul_url: "http://localhost:8500"
 # 服务刷新间隔（秒）
 service_refresh_interval: 30
 
-# Metrics暴露端点
+# Metrics暴露端点 指标配置
 metrics_endpoint: "/metrics"
 
 # 链路追踪配置
@@ -134,6 +125,7 @@ tracing:
   enable_opentelemetry: true
   jaeger_endpoint: "http://localhost:14268/api/traces"
   sampling_ratio: 0.1
+  service_name: "api-gateway"
 
 # 重试配置
 retry:
@@ -144,4 +136,25 @@ retry:
 circuit_breaker:
   enabled: true
   failure_threshold: 5
-  half_open_timeout_secs: 30 
+  half_open_timeout_secs: 30
+
+# Consul服务发现配置
+consul:
+  addr: "127.0.0.1:8500"
+  token: ""  # 如果有的话
+
+
+# 上游服务配置
+services:
+  user:
+    addr: "127.0.0.1:50051"
+    timeout_ms: 5000
+  message:
+    addr: "127.0.0.1:50052"
+    timeout_ms: 5000
+  friend:
+    addr: "127.0.0.1:50053"
+    timeout_ms: 5000
+  group:
+    addr: "127.0.0.1:50054"
+    timeout_ms: 5000

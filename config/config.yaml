@@ -134,11 +134,6 @@ kafka:
     session_timeout: 20000
 
 
-# JWT配置
-jwt:
-  secret: "development_jwt_secret_do_not_use_in_production"
-  expiration: 86400  # 24小时
-
 # Consul配置
 consul:
   url: "http://consul:8500"

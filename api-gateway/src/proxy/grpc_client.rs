@@ -6,7 +6,6 @@ use axum::{
 };
 use futures::future::BoxFuture;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use tonic::transport::Channel;
 use tracing::{debug, error};
 use common::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
@@ -88,6 +87,72 @@ pub struct GrpcClientFactoryImpl {
     group_client: GroupServiceGrpcClient,
 }
 
+/// 通用响应生成辅助函数 - 成功响应
+fn success_response<T: serde::Serialize>(data: T, status_code: StatusCode) -> Response<Body> {
+    (
+        status_code,
+        Json(json!({
+            "code": status_code.as_u16(),
+            "data": data,
+            "success": true
+        })),
+    ).into_response()
+}
+
+/// 通用响应生成辅助函数 - 成功带消息
+fn success_with_message<T: serde::Serialize>(data: T, message: &str, status_code: StatusCode) -> Response<Body> {
+    (
+        status_code,
+        Json(json!({
+            "code": status_code.as_u16(),
+            "data": data,
+            "message": message,
+            "success": true
+        })),
+    ).into_response()
+}
+
+/// 通用响应生成辅助函数 - 错误响应
+fn error_response(message: &str, status_code: StatusCode) -> Response<Body> {
+    (
+        status_code,
+        Json(json!({
+            "code": status_code.as_u16(),
+            "message": message,
+            "success": false
+        })),
+    ).into_response()
+}
+
+/// 参数提取辅助函数 - 从JSON中提取字符串参数
+fn extract_string_param(body: &Value, param_name: &str, alt_name: Option<&str>) -> Result<String, anyhow::Error> {
+    body.get(param_name)
+        .or_else(|| alt_name.and_then(|alt| body.get(alt)))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("参数 {} 缺失或格式错误", param_name))
+}
+
+/// 参数提取辅助函数 - 从JSON中提取可选字符串参数
+fn get_optional_string(body: &Value, param_name: &str, alt_name: Option<&str>) -> Option<String> {
+    body.get(param_name)
+        .or_else(|| alt_name.and_then(|alt| body.get(alt)))
+        .and_then(|v| {
+            if v.is_null() { 
+                None 
+            } else { 
+                v.as_str().map(|s| s.to_string()) 
+            }
+        })
+}
+
+/// 参数提取辅助函数 - 从JSON中提取i64整数参数
+fn get_i64_param(body: &Value, param_name: &str, default: i64) -> i64 {
+    body.get(param_name)
+        .and_then(|v| v.as_i64())
+        .unwrap_or(default)
+}
+
 impl GrpcClientFactoryImpl {
     /// 创建新的通用gRPC客户端工厂
     pub fn new() -> Self {
@@ -109,27 +174,49 @@ impl GrpcClientFactoryImpl {
         // 解析路径格式: /api/[service]/[method]
         let parts: Vec<&str> = path.split('/').collect();
 
-        let service_name = if parts.len() > 2 {
-            parts[2].to_string()
-        } else {
-            "unknown".to_string()
-        };
-        let method_name = if parts.len() > 3 {
-            parts[3].to_string()
-        } else {
-            "unknown".to_string()
-        };
+        let service_name = parts.get(2).map_or("unknown".to_string(), |s| s.to_string());
+        let method_name = parts.get(3).map_or("unknown".to_string(), |s| s.to_string());
 
         // 转换服务名为 gRPC 服务名
         let grpc_service = match service_name.as_str() {
             "users" => "user".to_string(),
             "friends" => "friend".to_string(),
             "groups" => "group".to_string(),
-            "auth" => "auth".to_string(),
             _ => service_name.clone(),
         };
 
         (service_name, grpc_service, method_name)
+    }
+
+    /// 将请求体和URL参数合并到一个Value中
+    async fn extract_request_body(req: Request<Body>) -> Result<(Method, String, Value), anyhow::Error> {
+        let method = req.method().clone();
+        let path = req.uri().path().to_string();
+        let query = req.uri().query().map(|q| q.to_string());
+        
+        // 提取请求体
+        let body_bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+            .await
+            .map_err(|e| anyhow::anyhow!("读取请求体失败: {}", e))?;
+
+        // 解析JSON请求体或URL参数
+        let body: Value = match serde_json::from_slice(&body_bytes) {
+            Ok(json) => json,
+            Err(_) => {
+                // 尝试从URL参数获取
+                let mut map = serde_json::map::Map::new();
+                if let Some(query_str) = query {
+                    for param in query_str.split('&') {
+                        if let Some((key, value)) = param.split_once('=') {
+                            map.insert(key.to_string(), Value::String(value.to_string()));
+                        }
+                    }
+                }
+                Value::Object(map)
+            }
+        };
+
+        Ok((method, path, body))
     }
 
     /// 将HTTP请求转换为用户服务gRPC请求
@@ -146,133 +233,37 @@ impl GrpcClientFactoryImpl {
         match (method, method_name.as_str()) {
             // 用户查询
             (&Method::GET, "getUserById") | (&Method::GET, "getUser") => {
-                let user_id = match body.get("userId").or_else(|| body.get("user_id")) {
-                    Some(id) => id.as_str().unwrap_or_default().to_string(),
-                    None => {
-                        return Ok((
-                            StatusCode::BAD_REQUEST,
-                            Json(json!({
-                                "code": 400,
-                                "message": "缺少用户ID参数",
-                                "success": false
-                            })),
-                        )
-                            .into_response());
-                    }
-                };
-
-                match self.user_client.get_user(&user_id).await {
-                    Ok(response) => {
-                        let user = response
-                            .user
-                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_user_to_json(&user),
-                                "success": true
-                            })),
-                        )
-                            .into_response())
-                    }
-                    Err(err) => {
-                        error!("获取用户失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("获取用户失败: {}", err),
-                                "success": false
-                            })),
-                        )
-                            .into_response())
-                    }
-                }
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                
+                let response = self.user_client.get_user(&user_id).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                
+                Ok(success_response(convert_user_to_json(&user), StatusCode::OK))
             }
 
             // 用户名查询
             (&Method::GET, "getUserByUsername") => {
-                let username = match body.get("username") {
-                    Some(name) => name.as_str().unwrap_or_default().to_string(),
-                    None => {
-                        return Ok((
-                            StatusCode::BAD_REQUEST,
-                            Json(json!({
-                                "code": 400,
-                                "message": "缺少username参数",
-                                "success": false
-                            })),
-                        )
-                            .into_response());
-                    }
-                };
-
-                match self.user_client.get_user_by_username(&username).await {
-                    Ok(response) => {
-                        let user = response
-                            .user
-                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_user_to_json(&user),
-                                "success": true
-                            })),
-                        )
-                            .into_response())
-                    }
-                    Err(err) => {
-                        error!("获取用户失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("获取用户失败: {}", err),
-                                "success": false
-                            })),
-                        )
-                            .into_response())
-                    }
-                }
+                let username = extract_string_param(&body, "username", None)?;
+                
+                let response = self.user_client.get_user_by_username(&username).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                
+                Ok(success_response(convert_user_to_json(&user), StatusCode::OK))
             }
 
             // 创建用户
             (&Method::POST, "createUser") | (&Method::POST, "register") => {
-                let username = body
-                    .get("username")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let email = body
-                    .get("email")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let password = body
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let nickname = body
-                    .get("nickname")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let avatar_url = body
-                    .get("avatarUrl")
-                    .or_else(|| body.get("avatar_url"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
+                let username = body.get("username").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("用户名不能为空"))?;
+                let password = body.get("password").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("密码不能为空"))?;
+                
                 if username.is_empty() || password.is_empty() {
-                    return Ok((
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({
-                            "code": 400,
-                            "message": "用户名和密码不能为空",
-                            "success": false
-                        })),
-                    )
-                        .into_response());
+                    return Err(anyhow::anyhow!("用户名和密码不能为空"));
                 }
+                
+                let email = body.get("email").and_then(|v| v.as_str()).unwrap_or_default();
+                let nickname = body.get("nickname").and_then(|v| v.as_str()).unwrap_or_default();
+                let avatar_url = body.get("avatarUrl").or_else(|| body.get("avatar_url"))
+                    .and_then(|v| v.as_str()).unwrap_or_default();
 
                 let request = proto::user::CreateUserRequest {
                     username: username.to_string(),
@@ -282,126 +273,47 @@ impl GrpcClientFactoryImpl {
                     avatar_url: avatar_url.to_string(),
                 };
 
-                match self.user_client.create_user(request).await {
-                    Ok(response) => {
-                        let user = response
-                            .user
-                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                        Ok((
-                            StatusCode::CREATED,
-                            Json(json!({
-                                "code": 201,
-                                "data": convert_user_to_json(&user),
-                                "success": true,
-                                "message": "用户创建成功"
-                            })),
-                        )
-                            .into_response())
-                    }
-                    Err(err) => {
-                        error!("创建用户失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("创建用户失败: {}", err),
-                                "success": false
-                            })),
-                        )
-                            .into_response())
-                    }
-                }
+                let response = self.user_client.create_user(request).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                
+                Ok(success_with_message(
+                    convert_user_to_json(&user), 
+                    "用户创建成功",
+                    StatusCode::CREATED
+                ))
             }
 
             // 更新用户
             (&Method::PUT, "updateUser") | (&Method::PATCH, "updateUser") => {
-                let user_id = body
-                    .get("userId")
-                    .or_else(|| body.get("user_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if user_id.is_empty() {
-                    return Ok((
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({
-                            "code": 400,
-                            "message": "用户ID不能为空",
-                            "success": false
-                        })),
-                    )
-                        .into_response());
-                }
-
-                let nickname = body
-                    .get("nickname")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let email = body
-                    .get("email")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let avatar_url = body
-                    .get("avatarUrl")
-                    .or_else(|| body.get("avatar_url"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let password = body
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                
+                let nickname = get_optional_string(&body, "nickname", None);
+                let email = get_optional_string(&body, "email", None);
+                let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
+                let password = get_optional_string(&body, "password", None);
 
                 let request = proto::user::UpdateUserRequest {
-                    user_id: user_id.to_string(),
+                    user_id,
                     nickname,
                     email,
                     avatar_url,
                     password,
                 };
 
-                match self.user_client.update_user(request).await {
-                    Ok(response) => {
-                        let user = response
-                            .user
-                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_user_to_json(&user),
-                                "success": true,
-                                "message": "用户更新成功"
-                            })),
-                        )
-                            .into_response())
-                    }
-                    Err(err) => {
-                        error!("更新用户失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("更新用户失败: {}", err),
-                                "success": false
-                            })),
-                        )
-                            .into_response())
-                    }
-                }
+                let response = self.user_client.update_user(request).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                
+                Ok(success_with_message(
+                    convert_user_to_json(&user),
+                    "用户更新成功",
+                    StatusCode::OK
+                ))
             }
 
             // 其他未知方法
             _ => {
                 error!("未知的用户服务方法: {}", method_name);
-                Ok((
-                    StatusCode::NOT_IMPLEMENTED,
-                    Json(json!({
-                        "code": 501,
-                        "message": format!("未实现的方法: {}", method_name),
-                        "success": false
-                    })),
-                )
-                    .into_response())
+                Err(anyhow::anyhow!("未实现的方法: {}", method_name))
             }
         }
     }
@@ -420,270 +332,95 @@ impl GrpcClientFactoryImpl {
         match (method, method_name.as_str()) {
             // 发送好友请求
             (&Method::POST, "sendRequest") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let friend_id = body.get("friendId").or_else(|| body.get("friend_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少好友ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("好友ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
-                match self.friend_client.send_friend_request(user_id, friend_id).await {
-                    Ok(response) => {
-                        let friendship = response.friendship
-                            .ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_friendship_to_json(&friendship),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("发送好友请求失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("发送好友请求失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.friend_client.send_friend_request(&user_id, &friend_id).await?;
+                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
+                
+                Ok(success_response(convert_friendship_to_json(&friendship), StatusCode::OK))
             }
 
             // 接受好友请求
             (&Method::POST, "acceptRequest") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let friend_id = body.get("friendId").or_else(|| body.get("friend_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少好友ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("好友ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
-                match self.friend_client.accept_friend_request(user_id, friend_id).await {
-                    Ok(response) => {
-                        let friendship = response.friendship
-                            .ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_friendship_to_json(&friendship),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("接受好友请求失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("接受好友请求失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.friend_client.accept_friend_request(&user_id, &friend_id).await?;
+                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
+                
+                Ok(success_response(convert_friendship_to_json(&friendship), StatusCode::OK))
             }
 
             // 拒绝好友请求
             (&Method::POST, "rejectRequest") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let friend_id = body.get("friendId").or_else(|| body.get("friend_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少好友ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("好友ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
-                match self.friend_client.reject_friend_request(user_id, friend_id).await {
-                    Ok(response) => {
-                        let friendship = response.friendship
-                            .ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_friendship_to_json(&friendship),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("拒绝好友请求失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("拒绝好友请求失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.friend_client.reject_friend_request(&user_id, &friend_id).await?;
+                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
+                
+                Ok(success_response(convert_friendship_to_json(&friendship), StatusCode::OK))
             }
 
             // 获取好友列表
             (&Method::GET, "getList") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
-                match self.friend_client.get_friend_list(user_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": response.friends.iter().map(convert_friend_to_json).collect::<Vec<_>>(),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("获取好友列表失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("获取好友列表失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.friend_client.get_friend_list(&user_id).await?;
+                let friends = response.friends.iter().map(convert_friend_to_json).collect::<Vec<_>>();
+                
+                Ok(success_response(friends, StatusCode::OK))
             }
 
             // 获取好友请求列表
             (&Method::GET, "getRequests") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
-                match self.friend_client.get_friend_requests(user_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": response.requests.iter().map(convert_friendship_to_json).collect::<Vec<_>>(),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("获取好友请求列表失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("获取好友请求列表失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.friend_client.get_friend_requests(&user_id).await?;
+                let requests = response.requests.iter().map(convert_friendship_to_json).collect::<Vec<_>>();
+                
+                Ok(success_response(requests, StatusCode::OK))
             }
 
             // 删除好友
             (&Method::DELETE, "delete") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let friend_id = body.get("friendId").or_else(|| body.get("friend_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少好友ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("好友ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
-                match self.friend_client.delete_friend(user_id, friend_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": { "success": response.success },
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("删除好友失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("删除好友失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.friend_client.delete_friend(&user_id, &friend_id).await?;
+                
+                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
             }
 
             // 检查好友关系
             (&Method::GET, "checkFriendship") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let friend_id = body.get("friendId").or_else(|| body.get("friend_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少好友ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("好友ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
-                match self.friend_client.check_friendship(user_id, friend_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": {
-                                    "status": response.status,
-                                    "statusText": match response.status {
-                                        0 => "PENDING",
-                                        1 => "ACCEPTED",
-                                        2 => "REJECTED",
-                                        3 => "BLOCKED",
-                                        _ => "UNKNOWN"
-                                    }
-                                },
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("检查好友关系失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("检查好友关系失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.friend_client.check_friendship(&user_id, &friend_id).await?;
+                
+                let status_text = match response.status {
+                    0 => "PENDING",
+                    1 => "ACCEPTED",
+                    2 => "REJECTED",
+                    3 => "BLOCKED",
+                    _ => "UNKNOWN"
+                };
+                
+                Ok(success_response(
+                    json!({
+                        "status": response.status,
+                        "statusText": status_text
+                    }), 
+                    StatusCode::OK
+                ))
             }
 
             // 其他未实现的方法
             _ => {
                 error!("好友服务不支持的方法: {} {}", method, method_name);
-                Ok((
-                    StatusCode::NOT_IMPLEMENTED,
-                    Json(json!({
-                        "code": 501,
-                        "message": format!("好友服务不支持的方法: {}", method_name),
-                        "success": false
-                    })),
-                ).into_response())
+                Err(anyhow::anyhow!("好友服务不支持的方法: {}", method_name))
             }
         }
     }
@@ -702,180 +439,80 @@ impl GrpcClientFactoryImpl {
         match (method, method_name.as_str()) {
             // 创建群组
             (&Method::POST, "create") => {
-                let name = body.get("name")
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组名称"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组名称格式错误"))?;
+                let name = extract_string_param(&body, "name", None)?;
+                let owner_id = extract_string_param(&body, "ownerId", Some("owner_id"))?;
                 
                 let description = body.get("description")
-                    .map(|v| v.as_str().unwrap_or_default())
+                    .and_then(|v| v.as_str())
                     .unwrap_or_default();
                 
-                let owner_id = body.get("ownerId").or_else(|| body.get("owner_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少拥有者ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("拥有者ID格式错误"))?;
-                
-                let avatar_url = body.get("avatarUrl").or_else(|| body.get("avatar_url"))
-                    .map(|v| v.as_str().unwrap_or_default())
+                let avatar_url = body.get("avatarUrl")
+                    .or_else(|| body.get("avatar_url"))
+                    .and_then(|v| v.as_str())
                     .unwrap_or_default();
 
-                match self.group_client.create_group(name, description, owner_id, avatar_url).await {
-                    Ok(response) => {
-                        let group = response.group
-                            .ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_group_to_json(&group),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("创建群组失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("创建群组失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.create_group(
+                    &name, 
+                    description, 
+                    &owner_id, 
+                    avatar_url
+                ).await?;
+                
+                let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
+                
+                Ok(success_response(convert_group_to_json(&group), StatusCode::OK))
             }
 
             // 获取群组信息
             (&Method::GET, "getInfo") | (&Method::GET, "get") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
 
-                match self.group_client.get_group(group_id).await {
-                    Ok(response) => {
-                        let group = response.group
-                            .ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_group_to_json(&group),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("获取群组信息失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("获取群组信息失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.get_group(&group_id).await?;
+                let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
+                
+                Ok(success_response(convert_group_to_json(&group), StatusCode::OK))
             }
 
             // 更新群组信息
             (&Method::PUT, "update") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
                 
-                let name = body.get("name").map(|v| {
-                    if v.is_null() { None } else { Some(v.as_str().unwrap_or_default().to_string()) }
-                }).unwrap_or(None);
-                
-                let description = body.get("description").map(|v| {
-                    if v.is_null() { None } else { Some(v.as_str().unwrap_or_default().to_string()) }
-                }).unwrap_or(None);
-                
-                let avatar_url = body.get("avatarUrl").or_else(|| body.get("avatar_url")).map(|v| {
-                    if v.is_null() { None } else { Some(v.as_str().unwrap_or_default().to_string()) }
-                }).unwrap_or(None);
+                let name = get_optional_string(&body, "name", None);
+                let description = get_optional_string(&body, "description", None);
+                let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
 
-                match self.group_client.update_group(group_id, name, description, avatar_url).await {
-                    Ok(response) => {
-                        let group = response.group
-                            .ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_group_to_json(&group),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("更新群组信息失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("更新群组信息失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.update_group(
+                    &group_id, 
+                    name, 
+                    description, 
+                    avatar_url
+                ).await?;
+                
+                let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
+                
+                Ok(success_response(convert_group_to_json(&group), StatusCode::OK))
             }
 
             // 删除群组
             (&Method::DELETE, "delete") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
-                
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
-                match self.group_client.delete_group(group_id, user_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": { "success": response.success },
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("删除群组失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("删除群组失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.delete_group(&group_id, &user_id).await?;
+                
+                Ok(success_response(
+                    json!({"success": response.success}), 
+                    StatusCode::OK
+                ))
             }
 
             // 添加成员
             (&Method::POST, "addMember") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let added_by_id = extract_string_param(&body, "addedById", Some("added_by_id"))?;
                 
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let added_by_id = body.get("addedById").or_else(|| body.get("added_by_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少操作者ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("操作者ID格式错误"))?;
-                
-                let role_value = body.get("role").and_then(|v| v.as_i64()).unwrap_or(0);
+                let role_value = get_i64_param(&body, "role", 0);
                 let role = match role_value {
                     0 => proto::group::MemberRole::Member,
                     1 => proto::group::MemberRole::Admin,
@@ -883,88 +520,33 @@ impl GrpcClientFactoryImpl {
                     _ => proto::group::MemberRole::Member,
                 };
 
-                match self.group_client.add_member(group_id, user_id, added_by_id, role).await {
-                    Ok(response) => {
-                        let member = response.member
-                            .ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_member_to_json(&member),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("添加群组成员失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("添加群组成员失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.add_member(&group_id, &user_id, &added_by_id, role).await?;
+                let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
+                
+                Ok(success_response(convert_member_to_json(&member), StatusCode::OK))
             }
 
             // 移除成员
             (&Method::DELETE, "removeMember") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
-                
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let removed_by_id = body.get("removedById").or_else(|| body.get("removed_by_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少操作者ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("操作者ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let removed_by_id = extract_string_param(&body, "removedById", Some("removed_by_id"))?;
 
-                match self.group_client.remove_member(group_id, user_id, removed_by_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": { "success": response.success },
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("移除群组成员失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("移除群组成员失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.remove_member(&group_id, &user_id, &removed_by_id).await?;
+                
+                Ok(success_response(
+                    json!({"success": response.success}), 
+                    StatusCode::OK
+                ))
             }
 
             // 更新成员角色
             (&Method::PUT, "updateMemberRole") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let updated_by_id = extract_string_param(&body, "updatedById", Some("updated_by_id"))?;
                 
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
-                
-                let updated_by_id = body.get("updatedById").or_else(|| body.get("updated_by_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少操作者ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("操作者ID格式错误"))?;
-                
-                let role_value = body.get("role").and_then(|v| v.as_i64()).unwrap_or(0);
+                let role_value = get_i64_param(&body, "role", 0);
                 let role = match role_value {
                     0 => proto::group::MemberRole::Member,
                     1 => proto::group::MemberRole::Admin,
@@ -972,157 +554,64 @@ impl GrpcClientFactoryImpl {
                     _ => proto::group::MemberRole::Member,
                 };
 
-                match self.group_client.update_member_role(group_id, user_id, updated_by_id, role).await {
-                    Ok(response) => {
-                        let member = response.member
-                            .ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": convert_member_to_json(&member),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("更新成员角色失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("更新成员角色失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.update_member_role(&group_id, &user_id, &updated_by_id, role).await?;
+                let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
+                
+                Ok(success_response(convert_member_to_json(&member), StatusCode::OK))
             }
 
             // 获取群组成员列表
             (&Method::GET, "getMembers") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
 
-                match self.group_client.get_members(group_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": response.members.iter().map(convert_member_to_json).collect::<Vec<_>>(),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("获取群组成员列表失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("获取群组成员列表失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.get_members(&group_id).await?;
+                let members = response.members.iter().map(convert_member_to_json).collect::<Vec<_>>();
+                
+                Ok(success_response(members, StatusCode::OK))
             }
 
             // 获取用户加入的群组列表
             (&Method::GET, "getUserGroups") => {
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
-                match self.group_client.get_user_groups(user_id).await {
-                    Ok(response) => {
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": response.groups.iter().map(convert_user_group_to_json).collect::<Vec<_>>(),
-                                "success": true
-                            })),
-                        ).into_response())
-                    }
-                    Err(err) => {
-                        error!("获取用户群组列表失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("获取用户群组列表失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                let response = self.group_client.get_user_groups(&user_id).await?;
+                let groups = response.groups.iter().map(convert_user_group_to_json).collect::<Vec<_>>();
+                
+                Ok(success_response(groups, StatusCode::OK))
             }
 
             // 检查用户是否在群组中
             (&Method::GET, "checkMembership") => {
-                let group_id = body.get("groupId").or_else(|| body.get("group_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少群组ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("群组ID格式错误"))?;
-                
-                let user_id = body.get("userId").or_else(|| body.get("user_id"))
-                    .ok_or_else(|| anyhow::anyhow!("缺少用户ID"))?
-                    .as_str().ok_or_else(|| anyhow::anyhow!("用户ID格式错误"))?;
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
-                match self.group_client.check_membership(group_id, user_id).await {
-                    Ok(response) => {
-                        let role_text = if response.is_member {
-                            match response.role.unwrap_or(0) {
-                                0 => "MEMBER",
-                                1 => "ADMIN",
-                                2 => "OWNER",
-                                _ => "UNKNOWN"
-                            }
-                        } else {
-                            "NONE"
-                        };
-                        
-                        Ok((
-                            StatusCode::OK,
-                            Json(json!({
-                                "code": 200,
-                                "data": {
-                                    "isMember": response.is_member,
-                                    "role": response.role,
-                                    "roleText": role_text
-                                },
-                                "success": true
-                            })),
-                        ).into_response())
+                let response = self.group_client.check_membership(&group_id, &user_id).await?;
+                
+                let role_text = if response.is_member {
+                    match response.role.unwrap_or(0) {
+                        0 => "MEMBER",
+                        1 => "ADMIN",
+                        2 => "OWNER",
+                        _ => "UNKNOWN"
                     }
-                    Err(err) => {
-                        error!("检查群组成员资格失败: {}", err);
-                        Ok((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({
-                                "code": 500,
-                                "message": format!("检查群组成员资格失败: {}", err),
-                                "success": false
-                            })),
-                        ).into_response())
-                    }
-                }
+                } else {
+                    "NONE"
+                };
+                
+                Ok(success_response(
+                    json!({
+                        "isMember": response.is_member,
+                        "role": response.role,
+                        "roleText": role_text
+                    }), 
+                    StatusCode::OK
+                ))
             }
 
             // 其他未实现的方法
             _ => {
                 error!("群组服务不支持的方法: {} {}", method, method_name);
-                Ok((
-                    StatusCode::NOT_IMPLEMENTED,
-                    Json(json!({
-                        "code": 501,
-                        "message": format!("群组服务不支持的方法: {}", method_name),
-                        "success": false
-                    })),
-                ).into_response())
+                Err(anyhow::anyhow!("群组服务不支持的方法: {}", method_name))
             }
         }
     }
@@ -1135,47 +624,16 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
         target_url: String,
     ) -> BoxFuture<'static, Response<Body>> {
         let self_clone = self.clone();
-            let method = req.method().clone();
-            let path = req.uri().path().to_string();
-            let query = req.uri().query().map(|q| q.to_string());
 
         Box::pin(async move {
             debug!("收到gRPC转发请求，目标: {}", target_url);
 
-            // 提取请求体
-            let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
-                Ok(bytes) => bytes,
+            // 提取请求信息
+            let (method, path, body) = match Self::extract_request_body(req).await {
+                Ok(data) => data,
                 Err(err) => {
-                    error!("读取请求体失败: {}", err);
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({
-                            "code": 400,
-                            "message": format!("读取请求体失败: {}", err),
-                            "success": false
-                        })),
-                    )
-                        .into_response();
-                }
-            };
-
-            // 解析JSON请求体
-            let body: Value = match serde_json::from_slice(&body_bytes) {
-                Ok(json) => json,
-                Err(_) => {
-                    // 尝试从URL参数获取
-                    match query {
-                        Some(query_str) => {
-                            let mut map = HashMap::new();
-                            for param in query_str.split('&') {
-                                if let Some((key, value)) = param.split_once('=') {
-                                    map.insert(key.to_string(), Value::String(value.to_string()));
-                                }
-                            }
-                            Value::Object(serde_json::map::Map::from_iter(map.into_iter()))
-                        }
-                        None => Value::Object(serde_json::map::Map::new()),
-                    }
+                    error!("请求解析失败: {}", err);
+                    return error_response(&format!("请求解析失败: {}", err), StatusCode::BAD_REQUEST);
                 }
             };
 
@@ -1184,56 +642,28 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
 
             // 根据服务类型调用对应的处理方法
             match service_name.as_str() {
-                "users" => self_clone.handle_user_request(&method, &path, body).await.unwrap_or_else(|err| {
-                    error!("处理用户服务请求失败: {}", err);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                                "code": 500,
-                                "message": format!("处理请求失败: {}", err),
-                                "success": false
-                            })),
-                    )
-                        .into_response()
-                }),
-                "friends" => self_clone.handle_friend_request(&method, &path, body).await.unwrap_or_else(|err| {
-                    error!("处理好友服务请求失败: {}", err);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                                "code": 500,
-                                "message": format!("处理请求失败: {}", err),
-                                "success": false
-                            })),
-                    )
-                        .into_response()
-                }),
-                "groups" => self_clone.handle_group_request(&method, &path, body).await.unwrap_or_else(|err| {
-                    error!("处理群组服务请求失败: {}", err);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                                "code": 500,
-                                "message": format!("处理请求失败: {}", err),
-                                "success": false
-                            })),
-                    )
-                        .into_response()
-                }),
+                "users" => self_clone.handle_user_request(&method, &path, body).await
+                    .unwrap_or_else(|err| {
+                        error!("处理用户服务请求失败: {}", err);
+                        error_response(&format!("处理用户服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                    }),
+                "friends" => self_clone.handle_friend_request(&method, &path, body).await
+                    .unwrap_or_else(|err| {
+                        error!("处理好友服务请求失败: {}", err);
+                        error_response(&format!("处理好友服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                    }),
+                "groups" => self_clone.handle_group_request(&method, &path, body).await
+                    .unwrap_or_else(|err| {
+                        error!("处理群组服务请求失败: {}", err);
+                        error_response(&format!("处理群组服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                    }),
                 // 将来可以添加其他服务的处理分支
-                // "auth" => self_clone.handle_auth_request(method, &path, body).await,
                 _ => {
                     error!("不支持的服务类型: {}", service_name);
-                    (
-                        StatusCode::NOT_IMPLEMENTED,
-                        Json(json!({
-                            "code": 501,
-                            "message": format!("服务 {} 的gRPC转发尚未实现", service_name),
-                            "target": target_url,
-                            "success": false
-                        })),
+                    error_response(
+                        &format!("服务 {} 的gRPC转发尚未实现", service_name),
+                        StatusCode::NOT_IMPLEMENTED
                     )
-                        .into_response()
                 }
             }
         })
@@ -1253,7 +683,7 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
     }
 }
 
-// 克隆实现
+/// 克隆实现
 impl Clone for GrpcClientFactoryImpl {
     fn clone(&self) -> Self {
         Self {

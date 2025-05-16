@@ -16,6 +16,7 @@ use tower_http::trace::TraceLayer;
 // 直接使用tracing宏
 use tracing::{error, info, warn};
 
+mod api_doc;
 mod auth;
 mod circuit_breaker;
 mod config;
@@ -25,11 +26,10 @@ mod rate_limit;
 mod router;
 #[path = "tracing/mod.rs"]
 mod tracing_setup;
-mod api_doc;
 
-pub use common::grpc_client::user_client::UserServiceGrpcClient;
 pub use common::grpc_client::friend_client::FriendServiceGrpcClient;
 pub use common::grpc_client::group_client::GroupServiceGrpcClient;
+pub use common::grpc_client::user_client::UserServiceGrpcClient;
 use common::service_registry::ServiceRegistry;
 use config::CONFIG;
 
@@ -37,7 +37,7 @@ use config::CONFIG;
 #[clap(name = "api-gateway", about = "API网关服务")]
 struct Args {
     /// 配置文件路径
-    #[clap(short = 'f', long, default_value = "config/gateway.yaml")]
+    #[clap(short = 'f', long, default_value = "./config/gateway.yaml")]
     config_file: String,
 
     /// 监听地址
@@ -93,10 +93,16 @@ async fn main() -> anyhow::Result<()> {
     // 配置中间件
     let app = configure_middleware(router, service_proxy.clone()).await;
 
+    // 转换路由器类型为可用于服务器的类型
+    let app = app.into_make_service();
+
     // 绑定地址
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("API网关服务监听: https://{}:{}", host, port);
-    info!("API文档地址: https://{}:{}/api-doc/openapi.json", host, port);
+    info!(
+        "API文档地址: https://{}:{}/api-doc/openapi.json",
+        host, port
+    );
     info!("如需查看完整的gRPC文档，请运行: ./scripts/serve-docs.sh");
 
     // 注册到 Consul
@@ -133,11 +139,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // 启动服务
-    if let Err(err) = axum_server::bind(addr)
-        .handle(handle)
-        .serve(app.into_make_service())
-        .await
-    {
+    if let Err(err) = axum_server::bind(addr).handle(handle).serve(app).await {
         error!("服务器错误: {}", err);
     }
 
@@ -149,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
 async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) -> Router {
     // 添加API文档
     let app = api_doc::api_docs::configure_docs(app);
-    
+
     // 添加链路追踪中间件
     let app = app.layer(TraceLayer::new_for_http());
 
@@ -188,12 +190,12 @@ async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) 
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
 }
 
-/// 优雅关闭信号处理
 async fn shutdown_signal(
     handle: Handle,
     service_proxy: proxy::ServiceProxy,
     service_registry: ServiceRegistry,
 ) {
+    // 等待Ctrl+C或SIGTERM信号
     let ctrl_c = async {
         signal::ctrl_c().await.expect("无法安装Ctrl+C处理器");
     };
@@ -224,9 +226,4 @@ async fn shutdown_signal(
 
     // 清理资源
     service_proxy.shutdown().await;
-
-    // 发送优雅关闭信号，设置30秒超时
-    handle.graceful_shutdown(Some(Duration::from_secs(30)));
-
-    info!("服务关闭准备完成");
 }

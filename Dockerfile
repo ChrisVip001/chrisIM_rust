@@ -20,7 +20,6 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY common/Cargo.toml common/
 COPY cache/Cargo.toml cache/
-COPY auth-service/Cargo.toml auth-service/
 COPY user-service/Cargo.toml user-service/
 COPY group-service/Cargo.toml group-service/
 COPY friend-service/Cargo.toml friend-service/
@@ -30,9 +29,9 @@ COPY msg-gateway/Cargo.toml msg-gateway/
 COPY api-gateway/Cargo.toml gateway-service/
 
 # 创建空源文件，触发依赖下载
-RUN mkdir -p common/src cache/src auth-service/src user-service/src group-service/src \
+RUN mkdir -p common/src cache/src user-service/src group-service/src \
     friend-service/src oss/src msg-server/src msg-gateway/src api-gateway/src \
-    && touch common/src/lib.rs cache/src/lib.rs auth-service/src/main.rs user-service/src/main.rs \
+    && touch common/src/lib.rs cache/src/lib.rs user-service/src/main.rs \
     group-service/src/main.rs friend-service/src/main.rs oss/src/main.rs msg-server/src/main.rs \
     msg-gateway/src/main.rs api-gateway/src/main.rs
 
@@ -43,7 +42,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # 复制源代码
 COPY common/ common/
 COPY cache/ cache/
-COPY auth-service/ auth-service/
 COPY user-service/ user-service/
 COPY group-service/ group-service/
 COPY friend-service/ friend-service/
@@ -60,7 +58,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # 复制编译好的二进制文件到最终位置
 RUN mkdir -p /app/bin \
-    && cp target/release/auth-service /app/bin/ \
     && cp target/release/user-service /app/bin/ \
     && cp target/release/group-service /app/bin/ \
     && cp target/release/friend-service /app/bin/ \

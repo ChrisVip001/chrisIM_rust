@@ -3,7 +3,6 @@ resolver = "2" # 使用 Cargo v2 依赖解析
 members = [
     "common",
     "cache",
-    "auth-service",
     "user-service",
     "group-service",
     "friend-service",
