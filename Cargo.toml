@@ -38,7 +38,7 @@ jsonwebtoken = "9.2"
 bcrypt = "0.17.0"
 async-trait = "0.1.88"
 # 为Windows环境提供动态链接选项，默认使用cmake-build
-rdkafka = { version = "0.37.0", features = ["cmake-build"] }  # Kafka客户端
+rdkafka = { version = "0.37.0" }  # Kafka客户端
 futures = "0.3"
 config = "0.15.11"
 clap = { version = "4", features = ["derive"] }
