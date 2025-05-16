@@ -25,6 +25,7 @@ mod rate_limit;
 mod router;
 #[path = "tracing/mod.rs"]
 mod tracing_setup;
+mod api_doc;
 
 pub use common::grpc_client::user_client::UserServiceGrpcClient;
 pub use common::grpc_client::friend_client::FriendServiceGrpcClient;
@@ -95,6 +96,8 @@ async fn main() -> anyhow::Result<()> {
     // 绑定地址
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("API网关服务监听: https://{}:{}", host, port);
+    info!("API文档地址: https://{}:{}/api-doc/openapi.json", host, port);
+    info!("如需查看完整的gRPC文档，请运行: ./scripts/serve-docs.sh");
 
     // 注册到 Consul
     let service_registry = ServiceRegistry::from_env();
@@ -144,6 +147,9 @@ async fn main() -> anyhow::Result<()> {
 
 /// 配置中间件
 async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) -> Router {
+    // 添加API文档
+    let app = api_doc::api_docs::configure_docs(app);
+    
     // 添加链路追踪中间件
     let app = app.layer(TraceLayer::new_for_http());
 

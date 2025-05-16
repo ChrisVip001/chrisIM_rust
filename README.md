@@ -298,3 +298,65 @@ Docker环境自动处理所有依赖问题，提供一致的运行环境。
 3. **构建缓慢**：
    - 尝试使用系统提供的librdkafka而不是自行构建
    - 使用动态链接特性：`--features dynamic` 
+
+## API 文档
+
+RustIM 系统提供了完整的 API 文档，包括 gRPC 服务接口和 REST API 接口。
+
+### 生成 API 文档
+
+您可以通过以下命令生成 API 文档：
+
+```bash
+# 确保已安装 Docker
+# 生成 gRPC 接口文档
+./scripts/generate-docs.sh
+```
+
+生成的文档将位于 `docs/api` 目录下。
+
+### 查看 API 文档
+
+您可以通过以下命令启动文档服务器：
+
+```bash
+./scripts/serve-docs.sh
+```
+
+然后访问浏览器：
+- 文档首页：http://localhost:8080/home.html
+- gRPC 接口文档：http://localhost:8080/index.html
+- REST API 文档（需要先启动 API 网关）：http://localhost:8000/api-doc/openapi.json
+
+### API 文档结构
+
+- **gRPC 接口文档**：包含所有微服务的 Protocol Buffers 定义，清晰展示每个服务的请求和响应结构。
+- **REST API 文档**：以 OpenAPI JSON 格式展示 API 网关提供的 RESTful 接口定义。
+
+### 在线测试 API
+
+您可以使用以下工具在线测试 API：
+
+1. **gRPC 测试工具**：
+   - [BloomRPC](https://github.com/uw-labs/bloomrpc)：桌面客户端，导入 proto 文件后可视化调试 gRPC 服务
+   - [grpcurl](https://github.com/fullstorydev/grpcurl)：命令行工具，支持 gRPC 服务反射
+
+   ```bash
+   # 使用 grpcurl 列出所有服务
+   grpcurl -plaintext localhost:50051 list
+   
+   # 使用 grpcurl 调用用户服务
+   grpcurl -d '{"username":"test_user","password":"password123"}' \
+     -plaintext localhost:50051 user.UserService/VerifyPassword
+   ```
+
+2. **REST API 测试工具**：
+   - 使用 curl 或 Postman 直接请求 API 网关的 REST 接口
+
+   ```bash
+   # 获取 OpenAPI 文档
+   curl http://localhost:8000/api-doc/openapi.json
+   
+   # 健康检查
+   curl http://localhost:8000/health
+   ```
