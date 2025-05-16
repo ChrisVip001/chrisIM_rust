@@ -1,6 +1,6 @@
 use axum::http::Request;
 use common::error::Error;
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -107,4 +107,79 @@ pub async fn verify_token(
     };
 
     Ok(user_info)
+}
+
+/// 生成JWT Token
+pub fn generate_token(
+    user_id: i64,
+    username: &str,
+    tenant_id: i64,
+    tenant_name: &str,
+    extra: std::collections::HashMap<String, String>,
+    jwt_config: &crate::config::auth_config::JwtConfig,
+) -> Result<String, Error> {
+    // 获取当前时间戳
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .as_secs();
+
+    // 创建Claims
+    let claims = Claims {
+        sub: user_id.to_string(),
+        iss: Some(jwt_config.issuer.clone()),
+        exp: now + jwt_config.expiry_seconds,
+        iat: now,
+        username: username.to_string(),
+        tenant_id,
+        tenant_name: tenant_name.to_string(),
+        extra,
+    };
+
+    // 生成token
+    let token = encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(jwt_config.secret.as_bytes()),
+    )
+    .map_err(|e| Error::Internal(format!("生成JWT令牌失败: {}", e)))?;
+
+    Ok(token)
+}
+
+/// 生成刷新Token
+pub fn generate_refresh_token(
+    user_id: i64,
+    username: &str,
+    tenant_id: i64,
+    tenant_name: &str,
+    jwt_config: &crate::config::auth_config::JwtConfig,
+) -> Result<String, Error> {
+    // 获取当前时间戳
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .as_secs();
+
+    // 创建Claims (刷新令牌通常不包含太多信息)
+    let claims = Claims {
+        sub: user_id.to_string(),
+        iss: Some(jwt_config.issuer.clone()),
+        exp: now + jwt_config.refresh_expiry_seconds,
+        iat: now,
+        username: username.to_string(),
+        tenant_id,
+        tenant_name: tenant_name.to_string(),
+        extra: std::collections::HashMap::new(),
+    };
+
+    // 生成token
+    let token = encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(jwt_config.secret.as_bytes()),
+    )
+    .map_err(|e| Error::Internal(format!("生成刷新令牌失败: {}", e)))?;
+
+    Ok(token)
 }
