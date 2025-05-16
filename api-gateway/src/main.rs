@@ -25,6 +25,7 @@ mod rate_limit;
 mod router;
 #[path = "tracing/mod.rs"]
 mod tracing_setup;
+mod api_doc;
 
 pub use common::grpc_client::user_client::UserServiceGrpcClient;
 pub use common::grpc_client::friend_client::FriendServiceGrpcClient;
@@ -92,9 +93,22 @@ async fn main() -> anyhow::Result<()> {
     // 配置中间件
     let app = configure_middleware(router, service_proxy.clone()).await;
 
+    // 输出API服务信息
+    info!("======================================================");
+    info!("RustIM API服务启动");
+    info!("======================================================");
+    
     // 绑定地址
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("API网关服务监听: https://{}:{}", host, port);
+    
+    // 输出API文档地址
+    info!("API文档可通过以下地址访问:");
+    info!("- Swagger UI: https://{}:{}/swagger-ui", host, port);
+    info!("- OpenAPI JSON: https://{}:{}/api-doc/openapi.json", host, port);
+    info!("- 健康检查: https://{}:{}/health", host, port);
+    info!("- API文档健康检查: https://{}:{}/api-doc/health", host, port);
+    info!("======================================================");
 
     // 注册到 Consul
     let service_registry = ServiceRegistry::from_env();

@@ -34,9 +34,7 @@ pub fn apply_path_rewrite(path: &str, path_prefix: &str, rewrite: &PathRewrite) 
 
 /// 提取服务类型
 pub fn extract_service_type(path: &str) -> &'static str {
-    if path.starts_with("/api/auth") {
-        "auth"
-    } else if path.starts_with("/api/users") {
+    if path.starts_with("/api/users") {
         "user"
     } else if path.starts_with("/api/friends") {
         "friend"

@@ -6,14 +6,13 @@
 
 系统由以下微服务组成：
 
-1. **认证服务 (auth-service)**：负责token管理、权限校验
-2. **用户服务 (user-service)**：负责用户注册、登录、认证和查询用户信息
-3. **群组服务 (group-service)**：管理群组及成员关系
-4. **好友服务 (friend-service)**：管理用户之间的好友关系
-5. **私聊消息服务器 (private-message-server)**：负责一对一聊天消息的处理和分发
-6. **群聊消息服务 (group-message-server)**：负责群组聊天消息的处理和分发
-7. **消息网关（message-gateway）**：负责与客户端的WebSocket连接管理和消息推送
-8. **API网关服务 (gateway-service)**：统一认证、路由转发和负载均衡
+1. **用户服务 (user-service)**：负责用户注册、登录、认证和查询用户信息
+2. **群组服务 (group-service)**：管理群组及成员关系
+3. **好友服务 (friend-service)**：管理用户之间的好友关系
+4. **私聊消息服务器 (private-message-server)**：负责一对一聊天消息的处理和分发
+5. **群聊消息服务 (group-message-server)**：负责群组聊天消息的处理和分发
+6. **消息网关（message-gateway）**：负责与客户端的WebSocket连接管理和消息推送
+7. **API网关服务 (gateway-service)**：统一认证、路由转发和负载均衡
 
 ## 技术栈
 
@@ -298,3 +297,7 @@ Docker环境自动处理所有依赖问题，提供一致的运行环境。
 3. **构建缓慢**：
    - 尝试使用系统提供的librdkafka而不是自行构建
    - 使用动态链接特性：`--features dynamic` 
+
+## API 文档
+
+RustIM 系统提供了完整的 API 文档，包括 gRPC 服务接口和 REST API 接口。
