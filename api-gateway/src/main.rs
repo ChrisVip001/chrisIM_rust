@@ -25,6 +25,7 @@ mod rate_limit;
 mod router;
 #[path = "tracing/mod.rs"]
 mod tracing_setup;
+mod api_doc;
 
 pub use common::grpc_client::user_client::UserServiceGrpcClient;
 pub use common::grpc_client::friend_client::FriendServiceGrpcClient;
@@ -144,6 +145,9 @@ async fn main() -> anyhow::Result<()> {
 
 /// 配置中间件
 async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) -> Router {
+    // 添加API文档
+    let app = api_doc::api_docs::configure_docs(app);
+    
     // 添加链路追踪中间件
     let app = app.layer(TraceLayer::new_for_http());
 
