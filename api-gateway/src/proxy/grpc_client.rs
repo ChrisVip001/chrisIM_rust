@@ -138,10 +138,10 @@ fn get_optional_string(body: &Value, param_name: &str, alt_name: Option<&str>) -
     body.get(param_name)
         .or_else(|| alt_name.and_then(|alt| body.get(alt)))
         .and_then(|v| {
-            if v.is_null() { 
-                None 
-            } else { 
-                v.as_str().map(|s| s.to_string()) 
+            if v.is_null() {
+                None
+            } else {
+                v.as_str().map(|s| s.to_string())
             }
         })
 }
@@ -193,7 +193,7 @@ impl GrpcClientFactoryImpl {
         let method = req.method().clone();
         let path = req.uri().path().to_string();
         let query = req.uri().query().map(|q| q.to_string());
-        
+
         // 提取请求体
         let body_bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
             .await
@@ -234,20 +234,20 @@ impl GrpcClientFactoryImpl {
             // 用户查询
             (&Method::GET, "getUserById") | (&Method::GET, "getUser") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-                
+
                 let response = self.user_client.get_user(&user_id).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                
+
                 Ok(success_response(convert_user_to_json(&user), StatusCode::OK))
             }
 
             // 用户名查询
             (&Method::GET, "getUserByUsername") => {
                 let username = extract_string_param(&body, "username", None)?;
-                
+
                 let response = self.user_client.get_user_by_username(&username).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                
+
                 Ok(success_response(convert_user_to_json(&user), StatusCode::OK))
             }
 
@@ -255,11 +255,11 @@ impl GrpcClientFactoryImpl {
             (&Method::POST, "createUser") | (&Method::POST, "register") => {
                 let username = body.get("username").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("用户名不能为空"))?;
                 let password = body.get("password").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("密码不能为空"))?;
-                
+
                 if username.is_empty() || password.is_empty() {
                     return Err(anyhow::anyhow!("用户名和密码不能为空"));
                 }
-                
+
                 let email = body.get("email").and_then(|v| v.as_str()).unwrap_or_default();
                 let nickname = body.get("nickname").and_then(|v| v.as_str()).unwrap_or_default();
                 let avatar_url = body.get("avatarUrl").or_else(|| body.get("avatar_url"))
@@ -275,9 +275,9 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.user_client.create_user(request).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                
+
                 Ok(success_with_message(
-                    convert_user_to_json(&user), 
+                    convert_user_to_json(&user),
                     "用户创建成功",
                     StatusCode::CREATED
                 ))
@@ -286,7 +286,7 @@ impl GrpcClientFactoryImpl {
             // 更新用户
             (&Method::PUT, "updateUser") | (&Method::PATCH, "updateUser") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-                
+
                 let nickname = get_optional_string(&body, "nickname", None);
                 let email = get_optional_string(&body, "email", None);
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
@@ -302,12 +302,234 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.user_client.update_user(request).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-                
+
                 Ok(success_with_message(
                     convert_user_to_json(&user),
                     "用户更新成功",
                     StatusCode::OK
                 ))
+            }
+
+            // 用户账号密码注册
+            (&Method::POST, "registerByUsername") => {
+                let username = body
+                    .get("username")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let password = body
+                    .get("password")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let nickname = body
+                    .get("nickname")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let tenant_id = body
+                    .get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let phone = body
+                    .get("phone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                if username.is_empty() || password.is_empty() {
+                    return Ok((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "code": 400,
+                            "message": "用户名或者密码不能为空",
+                            "success": false
+                        })),
+                    )
+                    .into_response());
+                }
+
+                let request = proto::user::RegisterRequest {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                    nickname: nickname.to_string(),
+                    tenant_id: tenant_id.to_string(),
+                    phone: phone.to_string()
+                };
+
+                match self.user_client.register_by_username(request).await {
+                    Ok(response) => {
+                        let user = response
+                            .user
+                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                        Ok((
+                            StatusCode::CREATED,
+                            Json(json!({
+                                "code": 201,
+                                "data": convert_user_to_json(&user),
+                                "success": true,
+                                "message": "用户注册成功"
+                            })),
+                        )
+                        .into_response())
+                    }
+                    Err(err) => {
+                        error!("注册用户失败: {}", err);
+                        Ok((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "code": 500,
+                                "message": format!("注册用户失败: {}", err),
+                                "success": false
+                            })),
+                        )
+                        .into_response())
+                    }
+                }
+            }
+
+            // 用户手机号注册
+            (&Method::POST, "registerByPhone") => {
+                let username = body
+                    .get("username")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let password = body
+                    .get("password")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let nickname = body
+                    .get("nickname")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let tenant_id = body
+                    .get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let phone = body
+                    .get("phone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                if phone.is_empty() || password.is_empty() {
+                    return Ok((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "code": 400,
+                            "message": "手机号或者密码不能为空",
+                            "success": false
+                        })),
+                    )
+                        .into_response());
+                }
+
+                let request = proto::user::RegisterRequest {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                    nickname: nickname.to_string(),
+                    tenant_id: tenant_id.to_string(),
+                    phone: phone.to_string()
+                };
+
+                match self.user_client.register_by_phone(request).await {
+                    Ok(response) => {
+                        let user = response
+                            .user
+                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                        Ok((
+                            StatusCode::CREATED,
+                            Json(json!({
+                                "code": 201,
+                                "data": convert_user_to_json(&user),
+                                "success": true,
+                                "message": "用户注册成功"
+                            })),
+                        )
+                        .into_response())
+                    }
+                    Err(err) => {
+                        error!("注册用户失败: {}", err);
+                        Ok((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "code": 500,
+                                "message": format!("注册用户失败: {}", err),
+                                "success": false
+                            })),
+                        )
+                        .into_response())
+                    }
+                }
+            }
+
+            // 忘记密码
+            (&Method::POST, "forgetPassword") => {
+                let username = body
+                    .get("username")
+                    .or_else(|| body.get("username"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let phone = body
+                    .get("phone")
+                    .or_else(|| body.get("phone"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                if username.is_empty() && phone.is_empty() {
+                    return Ok((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "code": 400,
+                            "message": "用户名或者手机号不能为空",
+                            "success": false
+                        })),
+                    )
+                    .into_response());
+                }
+
+                let password = body
+                    .get("password")
+                    .or_else(|| body.get("password"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let tenant_id = body
+                    .get("tenant_id")
+                    .or_else(|| body.get("tenant_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                let request = proto::user::ForgetPasswordRequest {
+                    username: username.to_string(),
+                    password: password.to_string(),
+                    tenant_id: tenant_id.to_string(),
+                    phone: phone.to_string(),
+                };
+
+                match self.user_client.forget_password(request).await {
+                    Ok(response) => {
+                        let user = response
+                            .user
+                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                        Ok((
+                            StatusCode::OK,
+                            Json(json!({
+                                "code": 200,
+                                "data": convert_user_to_json(&user),
+                                "success": true,
+                                "message": "密码更新成功"
+                            })),
+                        )
+                            .into_response())
+                    }
+                    Err(err) => {
+                        error!("密码更新失败: {}", err);
+                        Ok((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({
+                                "code": 500,
+                                "message": format!("密码更新失败: {}", err),
+                                "success": false
+                            })),
+                        )
+                        .into_response())
+                    }
+                }
             }
 
             // 其他未知方法
@@ -332,12 +554,13 @@ impl GrpcClientFactoryImpl {
         match (method, method_name.as_str()) {
             // 发送好友请求
             (&Method::POST, "sendRequest") => {
+                let message = extract_string_param(&body, "message", Some("message"))?;
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
-
-                let response = self.friend_client.send_friend_request(&user_id, &friend_id).await?;
-                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
                 
+                let response = self.friend_client.send_friend_request(&user_id, &friend_id,&message).await?;
+                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
+
                 Ok(success_response(convert_friendship_to_json(&friendship), StatusCode::OK))
             }
 
@@ -348,7 +571,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.friend_client.accept_friend_request(&user_id, &friend_id).await?;
                 let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
-                
+
                 Ok(success_response(convert_friendship_to_json(&friendship), StatusCode::OK))
             }
 
@@ -359,7 +582,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.friend_client.reject_friend_request(&user_id, &friend_id).await?;
                 let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
-                
+
                 Ok(success_response(convert_friendship_to_json(&friendship), StatusCode::OK))
             }
 
@@ -369,7 +592,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.friend_client.get_friend_list(&user_id).await?;
                 let friends = response.friends.iter().map(convert_friend_to_json).collect::<Vec<_>>();
-                
+
                 Ok(success_response(friends, StatusCode::OK))
             }
 
@@ -379,7 +602,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.friend_client.get_friend_requests(&user_id).await?;
                 let requests = response.requests.iter().map(convert_friendship_to_json).collect::<Vec<_>>();
-                
+
                 Ok(success_response(requests, StatusCode::OK))
             }
 
@@ -389,7 +612,7 @@ impl GrpcClientFactoryImpl {
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let response = self.friend_client.delete_friend(&user_id, &friend_id).await?;
-                
+
                 Ok(success_response(json!({"success": response.success}), StatusCode::OK))
             }
 
@@ -399,7 +622,7 @@ impl GrpcClientFactoryImpl {
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let response = self.friend_client.check_friendship(&user_id, &friend_id).await?;
-                
+
                 let status_text = match response.status {
                     0 => "PENDING",
                     1 => "ACCEPTED",
@@ -407,12 +630,12 @@ impl GrpcClientFactoryImpl {
                     3 => "BLOCKED",
                     _ => "UNKNOWN"
                 };
-                
+
                 Ok(success_response(
                     json!({
                         "status": response.status,
                         "statusText": status_text
-                    }), 
+                    }),
                     StatusCode::OK
                 ))
             }
@@ -452,14 +675,14 @@ impl GrpcClientFactoryImpl {
                     .unwrap_or_default();
 
                 let response = self.group_client.create_group(
-                    &name, 
-                    description, 
-                    &owner_id, 
+                    &name,
+                    description,
+                    &owner_id,
                     avatar_url
                 ).await?;
-                
+
                 let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
-                
+
                 Ok(success_response(convert_group_to_json(&group), StatusCode::OK))
             }
 
@@ -469,7 +692,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.group_client.get_group(&group_id).await?;
                 let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
-                
+
                 Ok(success_response(convert_group_to_json(&group), StatusCode::OK))
             }
 
@@ -482,14 +705,14 @@ impl GrpcClientFactoryImpl {
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
 
                 let response = self.group_client.update_group(
-                    &group_id, 
-                    name, 
-                    description, 
+                    &group_id,
+                    name,
+                    description,
                     avatar_url
                 ).await?;
                 
                 let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
-                
+
                 Ok(success_response(convert_group_to_json(&group), StatusCode::OK))
             }
 
@@ -499,9 +722,9 @@ impl GrpcClientFactoryImpl {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.group_client.delete_group(&group_id, &user_id).await?;
-                
+
                 Ok(success_response(
-                    json!({"success": response.success}), 
+                    json!({"success": response.success}),
                     StatusCode::OK
                 ))
             }
@@ -522,7 +745,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.group_client.add_member(&group_id, &user_id, &added_by_id, role).await?;
                 let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
-                
+
                 Ok(success_response(convert_member_to_json(&member), StatusCode::OK))
             }
 
@@ -535,7 +758,7 @@ impl GrpcClientFactoryImpl {
                 let response = self.group_client.remove_member(&group_id, &user_id, &removed_by_id).await?;
                 
                 Ok(success_response(
-                    json!({"success": response.success}), 
+                    json!({"success": response.success}),
                     StatusCode::OK
                 ))
             }
@@ -556,7 +779,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.group_client.update_member_role(&group_id, &user_id, &updated_by_id, role).await?;
                 let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
-                
+
                 Ok(success_response(convert_member_to_json(&member), StatusCode::OK))
             }
 
@@ -566,7 +789,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.group_client.get_members(&group_id).await?;
                 let members = response.members.iter().map(convert_member_to_json).collect::<Vec<_>>();
-                
+
                 Ok(success_response(members, StatusCode::OK))
             }
 
@@ -576,7 +799,7 @@ impl GrpcClientFactoryImpl {
 
                 let response = self.group_client.get_user_groups(&user_id).await?;
                 let groups = response.groups.iter().map(convert_user_group_to_json).collect::<Vec<_>>();
-                
+
                 Ok(success_response(groups, StatusCode::OK))
             }
 
@@ -586,7 +809,7 @@ impl GrpcClientFactoryImpl {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.group_client.check_membership(&group_id, &user_id).await?;
-                
+
                 let role_text = if response.is_member {
                     match response.role.unwrap_or(0) {
                         0 => "MEMBER",
@@ -597,13 +820,13 @@ impl GrpcClientFactoryImpl {
                 } else {
                     "NONE"
                 };
-                
+
                 Ok(success_response(
                     json!({
                         "isMember": response.is_member,
                         "role": response.role,
                         "roleText": role_text
-                    }), 
+                    }),
                     StatusCode::OK
                 ))
             }
@@ -718,6 +941,16 @@ fn convert_user_to_json(user: &proto::user::User) -> Value {
         })
         .unwrap_or_default();
 
+    let last_login_time = user
+        .last_login_time
+        .as_ref()
+        .map(|ts| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp(ts.seconds, ts.nanos as u32)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+
     json!({
         "id": user.id,
         "username": user.username,
@@ -725,7 +958,16 @@ fn convert_user_to_json(user: &proto::user::User) -> Value {
         "nickname": user.nickname,
         "avatarUrl": user.avatar_url,
         "createdAt": created_at,
-        "updatedAt": updated_at
+        "updatedAt": updated_at,
+        "phone" : user.phone,
+        "address" : user.address,
+        "head_image" : user.head_image,
+        "head_image_thumb" : user.head_image_thumb,
+        "sex" : user.sex,
+        "user_stat" : user.user_stat,
+        "tenant_id" : user.tenant_id,
+        "last_login_time"  : last_login_time,
+        "user_idx" : user.user_idx,
     })
 }
 

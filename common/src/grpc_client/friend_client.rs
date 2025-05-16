@@ -34,6 +34,7 @@ impl FriendServiceGrpcClient {
         &self,
         user_id: &str,
         friend_id: &str,
+        message: &str,
     ) -> Result<FriendshipResponse> {
         let channel = self.service_client.get_channel().await?;
         let mut client = FriendServiceClient::new(channel);
@@ -41,6 +42,7 @@ impl FriendServiceGrpcClient {
         let request = Request::new(SendFriendRequestRequest {
             user_id: user_id.to_string(),
             friend_id: friend_id.to_string(),
+            message: message.to_string(),
         });
 
         let response = client.send_friend_request(request).await?;

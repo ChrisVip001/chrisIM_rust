@@ -10,16 +10,18 @@ pub struct Friendship {
     pub user_id: Uuid,
     pub friend_id: Uuid,
     pub status: i32,
+    pub message: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl Friendship {
-    pub fn new(user_id: Uuid, friend_id: Uuid) -> Self {
+    pub fn new(user_id: Uuid, friend_id: Uuid,message: String) -> Self {
         Self {
             id: Uuid::new_v4(),
             user_id,
             friend_id,
+            message,
             status: FriendshipStatus::Pending as i32,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -34,6 +36,7 @@ impl Friendship {
             id: self.id.to_string(),
             user_id: self.user_id.to_string(),
             friend_id: self.friend_id.to_string(),
+            message: self.message.to_string(),
             status: self.status,
             created_at: Some(prost_types::Timestamp::from(created_system_time)),
             updated_at: Some(prost_types::Timestamp::from(updated_system_time)),

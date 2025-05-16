@@ -32,6 +32,7 @@ service FriendService {
 message SendFriendRequestRequest {
   string user_id = 1;
   string friend_id = 2;
+  string message = 3;
 }
 
 // 接受好友请求
@@ -98,9 +99,10 @@ message Friendship {
   string id = 1;
   string user_id = 2;
   string friend_id = 3;
-  FriendshipStatus status = 4;
-  google.protobuf.Timestamp created_at = 5;
-  google.protobuf.Timestamp updated_at = 6;
+  string message = 4;
+  FriendshipStatus status = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
 }
 
 // 好友

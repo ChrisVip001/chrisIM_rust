@@ -43,6 +43,12 @@ impl FriendService for FriendServiceImpl {
             .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的好友ID: {}", e)))?;
 
+        let message = &req.message;
+        if message.chars().count() > 255 {
+            return Err(Status::invalid_argument(
+                format!("消息长度不能超过255个字符，当前长度: {}", message.chars().count())
+            ));
+        }
         // 检查是否已存在好友关系
         match self.repository.check_friendship(user_id, friend_id).await {
             Ok(Some(_)) => {
@@ -58,7 +64,7 @@ impl FriendService for FriendServiceImpl {
         // 创建好友请求
         match self
             .repository
-            .create_friend_request(user_id, friend_id)
+            .create_friend_request(user_id, friend_id, message.to_string())
             .await
         {
             Ok(friendship) => {
