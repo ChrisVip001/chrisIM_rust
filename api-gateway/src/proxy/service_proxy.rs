@@ -71,12 +71,12 @@ impl ServiceDiscovery {
                                         if let Some(addr) =
                                             service.get("Address").and_then(|a| a.as_str())
                                         {
-                                            format!("http://{}:{}", addr, port)
+                                            format!("https://{}:{}", addr, port)
                                         } else {
                                             continue;
                                         }
                                     } else {
-                                        format!("http://{}:{}", address, port)
+                                        format!("https://{}:{}", address, port)
                                     };
 
                                     addresses.push(addr);
@@ -179,8 +179,7 @@ impl ServiceProxy {
                         // 转发HTTP请求
                         self.forward_http_request(req, &service_url).await
                     }
-                    ServiceType::Auth
-                    | ServiceType::User
+                    ServiceType::User
                     | ServiceType::Friend
                     | ServiceType::Group
                     | ServiceType::Chat
@@ -209,7 +208,6 @@ impl ServiceProxy {
     /// 从服务类型获取服务名称
     fn get_service_name(&self, service_type: &ServiceType) -> String {
         match service_type {
-            ServiceType::Auth => "auth-service".to_string(),
             ServiceType::User => "user-service".to_string(),
             ServiceType::Friend => "friend-service".to_string(),
             ServiceType::Group => "group-service".to_string(),
@@ -405,7 +403,7 @@ impl ServiceProxy {
         let service_discovery = self.service_discovery.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
 
             loop {
                 interval.tick().await;

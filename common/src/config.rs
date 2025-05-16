@@ -57,6 +57,9 @@ pub struct RedisConfig {
     pub host: String,
     pub port: u16,
     pub seq_step: i32,
+    pub max_connections: Option<usize>,
+    pub pool_timeout_ms: Option<u64>,
+    pub connection_timeout_ms: Option<u64>,
 }
 
 impl RedisConfig {
@@ -389,28 +392,9 @@ impl AppConfig {
         }
 
         // 3. 检查默认的配置文件路径
-        for path in [
-            "config.toml",
-            "config.yaml",
-            "config.yml",
-            "config.json",
-            "./config/config.yaml",
-            ".env",
-        ] {
-            if Path::new(path).exists() {
-                let format = if path.ends_with(".json") {
-                    FileFormat::Json
-                } else if path.ends_with(".yaml") || path.ends_with(".yml") {
-                    FileFormat::Yaml
-                } else if path.ends_with(".toml") {
-                    FileFormat::Toml
-                } else {
-                    // .env 文件默认使用环境变量格式
-                    continue;
-                };
-
-                builder = builder.add_source(File::with_name(path).format(format));
-            }
+        let path = "./config/config.yaml";
+        if Path::new(path).exists() {
+            builder = builder.add_source(File::with_name(path).format(FileFormat::Yaml));
         }
 
         // 4. 读取环境变量 (最高优先级)

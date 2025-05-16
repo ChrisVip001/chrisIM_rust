@@ -1,5 +1,6 @@
 pub mod jwt;
 pub mod middleware;
+pub mod controller;
 
 use crate::config::CONFIG;
 use axum::http::Request;

@@ -93,11 +93,22 @@ async fn main() -> anyhow::Result<()> {
     // 配置中间件
     let app = configure_middleware(router, service_proxy.clone()).await;
 
+    // 输出API服务信息
+    info!("======================================================");
+    info!("RustIM API服务启动");
+    info!("======================================================");
+    
     // 绑定地址
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("API网关服务监听: https://{}:{}", host, port);
-    info!("API文档地址: https://{}:{}/api-doc/openapi.json", host, port);
-    info!("如需查看完整的gRPC文档，请运行: ./scripts/serve-docs.sh");
+    
+    // 输出API文档地址
+    info!("API文档可通过以下地址访问:");
+    info!("- Swagger UI: https://{}:{}/swagger-ui", host, port);
+    info!("- OpenAPI JSON: https://{}:{}/api-doc/openapi.json", host, port);
+    info!("- 健康检查: https://{}:{}/health", host, port);
+    info!("- API文档健康检查: https://{}:{}/api-doc/health", host, port);
+    info!("======================================================");
 
     // 注册到 Consul
     let service_registry = ServiceRegistry::from_env();
@@ -147,9 +158,6 @@ async fn main() -> anyhow::Result<()> {
 
 /// 配置中间件
 async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) -> Router {
-    // 添加API文档
-    let app = api_doc::api_docs::configure_docs(app);
-    
     // 添加链路追踪中间件
     let app = app.layer(TraceLayer::new_for_http());
 

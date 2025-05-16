@@ -4,7 +4,7 @@ use tonic::Request;
 use crate::proto::user::user_service_client::UserServiceClient;
 use crate::proto::user::{
     CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest,
-    UserResponse,
+    UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse
 };
 
 use crate::grpc_client::GrpcServiceClient;
@@ -68,6 +68,30 @@ impl UserServiceGrpcClient {
         let mut client = UserServiceClient::new(channel);
 
         let response = client.update_user(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+    
+    /// 验证用户密码
+    pub async fn verify_password(&self, request: VerifyPasswordRequest) -> Result<VerifyPasswordResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = UserServiceClient::new(channel);
+
+        let response = client.verify_password(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+    
+    /// 搜索用户
+    pub async fn search_users(&self, query: &str, page: i32, page_size: i32) -> Result<SearchUsersResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = UserServiceClient::new(channel);
+
+        let request = Request::new(SearchUsersRequest {
+            query: query.to_string(),
+            page,
+            page_size,
+        });
+
+        let response = client.search_users(request).await?;
         Ok(response.into_inner())
     }
 }

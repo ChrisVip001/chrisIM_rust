@@ -1,1 +1,1 @@
-pub(crate) mod api_docs;
+pub mod api_docs;
