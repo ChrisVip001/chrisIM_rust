@@ -24,17 +24,21 @@ use std::sync::Arc;
 )]
 pub struct ApiDoc;
 
+/// 健康检查处理函数
+async fn health_handler() -> impl IntoResponse {
+    let response = json!({
+        "status": "OK",
+        "version": env!("CARGO_PKG_VERSION"),
+        "docs": {
+            "openapi": "/api-doc/openapi.json",
+            "grpc_docs": "运行 ./scripts/serve-docs.sh 查看gRPC文档"
+        }
+    });
+    response.to_string()
+}
+
 /// 将API文档路由添加到Router中
 pub fn configure_docs(app: Router) -> Router {
-    // 简单的健康检查接口
-    async fn health_handler() -> impl IntoResponse {
-        let response = json!({
-            "status": "OK",
-            "version": env!("CARGO_PKG_VERSION")
-        });
-        response.to_string()
-    }
-
     // 生成OpenAPI文档
     let openapi_json = serde_json::to_string_pretty(&ApiDoc::openapi()).unwrap();
     let openapi_json = Arc::new(openapi_json);
@@ -50,6 +54,6 @@ pub fn configure_docs(app: Router) -> Router {
     });
 
     // 添加健康检查和OpenAPI文档端点
-    app.route("/health", get(health_handler))
-        .route("/api-doc/openapi.json", openapi_route)
+    app.route("/api-doc/health", get(health_handler))
+       .route("/api-doc/openapi.json", openapi_route)
 }

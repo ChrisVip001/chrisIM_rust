@@ -96,6 +96,8 @@ async fn main() -> anyhow::Result<()> {
     // 绑定地址
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("API网关服务监听: https://{}:{}", host, port);
+    info!("API文档地址: https://{}:{}/api-doc/openapi.json", host, port);
+    info!("如需查看完整的gRPC文档，请运行: ./scripts/serve-docs.sh");
 
     // 注册到 Consul
     let service_registry = ServiceRegistry::from_env();
