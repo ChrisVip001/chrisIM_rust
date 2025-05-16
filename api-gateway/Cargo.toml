@@ -33,6 +33,10 @@ prometheus = { version = "0.13", features = ["process"] }
 metrics = "0.24.1"
 metrics-exporter-prometheus = "0.16.2"
 
+# API文档
+utoipa = { version = "4.1.0", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "5.0.0", features = ["axum"] }
+
 # 链路追踪
 tracing-opentelemetry = "0.30.0"
 opentelemetry = { version = "0.29.0" }
@@ -54,6 +58,3 @@ parking_lot = "0.12.1"
 regex = "1.9.5"
 chrono = { version = "0.4.31", features = ["serde"] }
 futures = "0.3.30"
-
-# 添加 Swagger/OpenAPI 支持
-utoipa = { version = "4.2.0" }

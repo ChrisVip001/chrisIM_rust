@@ -2,6 +2,7 @@ use crate::auth::middleware::auth_middleware;
 use crate::config::CONFIG;
 use crate::proxy::service_proxy::ServiceProxy;
 use crate::{auth::controller, UserServiceGrpcClient};
+use crate::api_doc::api_docs;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware;
@@ -43,6 +44,9 @@ impl RouterBuilder {
 
         // 添加认证相关路由
         self.add_auth_routes();
+
+        // 添加API文档路由
+        self.add_api_docs_routes();
 
         // 遍历路由配置，添加到路由器中
         for route in &routes_config.routes {
@@ -108,9 +112,27 @@ impl RouterBuilder {
             post(controller::refresh_token),
         );
     }
+
+    /// 添加API文档相关路由
+    fn add_api_docs_routes(&mut self) {
+        info!("添加API文档路由...");
+
+        // 添加API文档路由
+        self.router = api_docs::configure_docs(self.router.clone());
+        
+        info!("API文档路由添加完成");
+    }
 }
 
 /// 健康检查处理函数
 async fn health_check() -> impl IntoResponse {
-    (StatusCode::OK, Json(json!({ "status": "ok" })))
+    (StatusCode::OK, Json(json!({
+        "status": "ok",
+        "service": "api-gateway",
+        "version": env!("CARGO_PKG_VERSION"),
+        "api_documentation": {
+            "swagger_ui": "/swagger-ui",
+            "openapi_json": "/api-doc/openapi.json"
+        }
+    })))
 }
