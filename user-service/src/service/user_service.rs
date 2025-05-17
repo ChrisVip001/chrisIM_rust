@@ -1,10 +1,6 @@
-use crate::model::user::{CreateUserData, UpdateUserData};
+use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{
-    user_service_server::UserService, CreateUserRequest, GetUserByIdRequest,
-    GetUserByUsernameRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest,
-    User as ProtoUser, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse,
-};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -25,6 +21,85 @@ impl UserServiceImpl {
 
 #[tonic::async_trait]
 impl UserService for UserServiceImpl {
+
+    /// 用户账号密码注册
+    async fn register_by_username(
+        &self,
+        request: Request<RegisterRequest>,
+    ) -> std::result::Result<Response<UserResponse>, Status> {
+        let req = request.into_inner();
+        debug!("用户账号密码注册请求，用户名: {}", req.username);
+        // 转换请求数据
+        let reg_data = RegisterUserData::from(req);
+        // 创建用户
+        let user = match self.repository.register_user(reg_data).await {
+            Ok(user) => user,
+            Err(err) => {
+                error!("用户注册失败: {}", err);
+                return Err(err.into());
+            }
+        };
+        info!("注册用户成功 {}", user.username);
+        // 返回响应
+        Ok(Response::new(UserResponse {
+            user: Some(ProtoUser::from(user)),
+        }))
+    }
+
+    /// 用户手机号注册
+    async fn register_by_phone(
+        &self,
+        request: Request<RegisterRequest>,
+    ) -> std::result::Result<Response<UserResponse>, Status> {
+        let req = request.into_inner();
+        debug!("用户手机号注册，手机号: {}", req.phone);
+        // 转换请求数据
+        let reg_data = RegisterUserData::from(req);
+        // 手机号格式校验 todo
+
+        // 短信验证码校验 todo
+
+        // 创建用户
+        let user = match self.repository.register_user(reg_data).await {
+            Ok(user) => user,
+            Err(err) => {
+                error!("用户注册失败: {}", err);
+                return Err(err.into());
+            }
+        };
+        info!("注册用户成功 {}", user.phone);
+        // 返回响应
+        Ok(Response::new(UserResponse {
+            user: Some(ProtoUser::from(user)),
+        }))
+    }
+
+    /// 忘记密码
+    async fn forget_password(
+        &self,
+        request: Request<ForgetPasswordRequest>,
+    ) -> std::result::Result<Response<UserResponse>, Status> {
+        let req = request.into_inner();
+        debug!("用户忘记密码修改密码，手机号||用户名: {}||{}", req.phone, req.username);
+        // 转换请求数据
+        let forget_data = ForgetPasswordData::from(req);
+        // 短信验证码校验 todo
+
+        // 创建用户
+        let user = match self.repository.forget_password(forget_data).await {
+            Ok(user) => user,
+            Err(err) => {
+                error!("修改密码失败: {}", err);
+                return Err(err.into());
+            }
+        };
+        info!("修改密码成功 {}", user.phone);
+        // 返回响应
+        Ok(Response::new(UserResponse {
+            user: Some(ProtoUser::from(user)),
+        }))
+    }
+
     /// 创建用户
     async fn create_user(
         &self,
