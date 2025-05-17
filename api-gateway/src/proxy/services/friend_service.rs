@@ -41,8 +41,8 @@ impl FriendServiceHandler {
                 let message = extract_string_param(&body, "message", Some("message"))?;
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
-                
-                let response = self.client.send_friend_request(&user_id, &friend_id, &message).await?;
+
+                let response = self.client.send_friend_request(&user_id, &friend_id,&message).await?;
                 let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
 
                 Ok(success_response(self.convert_friendship_to_json(&friendship), StatusCode::OK))
@@ -63,8 +63,9 @@ impl FriendServiceHandler {
             (&Method::POST, "rejectRequest") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
+                let reason = extract_string_param(&body, "rejectReason", Some("reject_reason"))?;
 
-                let response = self.client.reject_friend_request(&user_id, &friend_id).await?;
+                let response = self.client.reject_friend_request(&user_id, &friend_id,&reason).await?;
                 let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
 
                 Ok(success_response(self.convert_friendship_to_json(&friendship), StatusCode::OK))
@@ -74,7 +75,18 @@ impl FriendServiceHandler {
             (&Method::GET, "getList") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
-                let response = self.client.get_friend_list(&user_id).await?;
+                // 提取分页和排序参数
+                let page = body.get("page").and_then(|v| v.as_i64()).unwrap_or(0);
+                let page_size = body.get("pageSize").and_then(|v| v.as_i64()).unwrap_or(0);
+                let sort_by = body.get("sortBy").and_then(|v| v.as_str()).unwrap_or("");
+
+                let response = self.client.get_friend_list_with_params(
+                    &user_id,
+                    page,
+                    page_size,
+                    sort_by
+                ).await?;
+
                 let friends = response.friends.iter().map(|f| self.convert_friend_to_json(f)).collect::<Vec<_>>();
 
                 Ok(success_response(friends, StatusCode::OK))
@@ -150,6 +162,8 @@ impl FriendServiceHandler {
             "statusText": status_text,
             "createdAt": timestamp_to_rfc3339(&friendship.created_at),
             "updatedAt": timestamp_to_rfc3339(&friendship.updated_at),
+            "message": friendship.message,
+            "rejectReason": friendship.reject_reason,
         })
     }
 
