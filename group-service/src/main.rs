@@ -10,8 +10,7 @@ use tokio::signal;
 use tokio::sync::oneshot;
 use tonic::transport::Server;
 use tonic_reflection::server::Builder as ReflectionBuilder;
-use tracing::{error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{error, info, warn};
 
 mod model;
 mod repository;
@@ -35,16 +34,15 @@ async fn main() -> Result<()> {
     // 初始化命令行参数
     let args = Args::parse();
 
-    // 初始化日志
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
+    // 加载配置
+    let config = AppConfig::from_file(Some(&args.config))?;
+
+    // 初始化日志 - 从配置文件初始化
+    common::logging::init_from_config(&config)?;
 
     info!("正在启动群组服务...");
 
-    // 加载配置
-    let config = AppConfig::from_file(Some(&args.config))?;
+    // 使用已加载的配置
     let host = &config.server.host;
     let port = 50003; // 指定群组服务端口
     let addr = format!("{}:{}", host, port).parse::<SocketAddr>()?;

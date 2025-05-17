@@ -2,8 +2,20 @@ component: all # all, api, ws, rpc, db, pusher
 
 # 日志配置
 log:
-  level: debug
-  output: console
+  # 全局日志级别: trace, debug, info, warn, error
+  level: "info"
+  # 日志输出位置: console, file
+  output: "console"
+  # SQLx库的日志级别
+  sqlx_level: "debug"
+  # 其他组件的日志级别配置
+  components:
+    tower: "info"     # HTTP服务器中间件
+    hyper: "info"     # HTTP客户端/服务器
+    axum: "debug"     # Axum Web框架
+    tonic: "info"     # gRPC框架
+    rustIM: "debug"   # 自定义应用组件
+    redis: "info"     # Redis客户端
 
 # 数据库配置
 database:
