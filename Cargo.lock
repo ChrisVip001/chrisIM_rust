@@ -157,6 +157,7 @@ dependencies = [
  "opentelemetry-jaeger",
  "parking_lot",
  "prometheus",
+ "prost-types",
  "rand 0.9.1",
  "regex",
  "reqwest",
