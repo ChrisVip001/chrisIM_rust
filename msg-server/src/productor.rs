@@ -11,8 +11,10 @@ use tonic::transport::Server;
 use tracing::{error, info};
 
 use common::config::{AppConfig, Component};
+use common::grpc::LoggingInterceptor;
 use common::message::chat_service_server::{ChatService, ChatServiceServer};
 use common::message::{MsgResponse, MsgType, SendMsgRequest};
+use tonic_health::server::{Health, HealthServer};
 
 pub struct ChatRpcService {
     kafka: FutureProducer,
@@ -57,11 +59,14 @@ impl ChatRpcService {
         info!("<chat> rpc service register to service register center");
 
         // health check
-        let health_service = HealthServer::new(HealthService::new());
+        let health_service = HealthServer::new(Health::default());
         info!("<chat> rpc service health check started");
 
+        // 创建日志拦截器
+        let logging_interceptor = LoggingInterceptor::new();
+
         let chat_rpc = Self::new(producer, config.kafka.topic.clone());
-        let service = ChatServiceServer::new(chat_rpc);
+        let service = ChatServiceServer::with_interceptor(chat_rpc, logging_interceptor);
         info!(
             "<chat> rpc service started at {}",
             config.rpc.chat.rpc_server_url()

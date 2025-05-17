@@ -9,11 +9,28 @@ async fn main() -> anyhow::Result<()> {
     // 加载配置
     let config = AppConfig::from_file(Some("./config/config.yaml")).unwrap();
     
-    // 初始化日志 - 从配置文件初始化
-    common::logging::init_from_config(&config)?;
+    // 初始化日志和链路追踪
+    // 根据配置判断是否启用链路追踪
+    if config.telemetry.enabled {
+        // 启动带有分布式链路追踪的日志系统
+        common::logging::init_telemetry(&config, "msg-server")?;
+        info!("链路追踪功能已启用，追踪数据将发送到: {}", config.telemetry.endpoint);
+    } else {
+        // 只初始化日志系统
+        common::logging::init_from_config(&config)?;
+        info!("链路追踪功能未启用，仅初始化日志系统");
+    }
     
     info!("正在启动消息服务...");
     
+    // 在主线程中运行消息服务
     ChatRpcService::start(&config).await;
+    
+    // 在程序结束前关闭链路追踪，确保所有数据都被发送
+    if config.telemetry.enabled {
+        info!("正在关闭链路追踪...");
+        common::logging::shutdown_telemetry();
+    }
+    
     Ok(())
 }

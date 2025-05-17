@@ -133,11 +133,6 @@ circuit_breaker:
   enabled: true
   failure_threshold: 5
   half_open_timeout_secs: 30
-
-# 调试配置
-debug:
-  use_mock_data: false
-
 # Consul服务发现配置
 consul:
   addr: "127.0.0.1:8500"

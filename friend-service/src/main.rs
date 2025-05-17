@@ -3,6 +3,7 @@ use axum::{routing::get, Router};
 use axum_server;
 use clap::Parser;
 use common::config::AppConfig;
+use common::grpc::LoggingInterceptor;
 use common::service_registry::ServiceRegistry;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
@@ -37,8 +38,17 @@ async fn main() -> Result<()> {
     // 加载配置
     let config = AppConfig::from_file(Some(&args.config))?;
 
-    // 初始化日志 - 从配置文件初始化
-    common::logging::init_from_config(&config)?;
+    // 初始化日志和链路追踪
+    // 根据配置判断是否启用链路追踪
+    if config.telemetry.enabled {
+        // 启动带有分布式链路追踪的日志系统
+        common::logging::init_telemetry(&config, "friend-service")?;
+        info!("链路追踪功能已启用，追踪数据将发送到: {}", config.telemetry.endpoint);
+    } else {
+        // 只初始化日志系统
+        common::logging::init_from_config(&config)?;
+        info!("链路追踪功能未启用，仅初始化日志系统");
+    }
 
     info!("正在启动好友服务...");
 
@@ -89,10 +99,14 @@ async fn main() -> Result<()> {
     // 设置关闭通道
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let shutdown_signal_task = tokio::spawn(shutdown_signal(shutdown_tx, service_registry.clone()));
+    
     // 创建反射服务
     let reflection_service = ReflectionBuilder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
         .build()?;
+
+    // 创建日志拦截器
+    let logging_interceptor = LoggingInterceptor::new();
 
     // 启动gRPC服务
     info!("好友服务启动，监听地址: {}", addr);
@@ -100,7 +114,10 @@ async fn main() -> Result<()> {
     // 创建服务器并运行
     let server = Server::builder()
         .add_service(reflection_service) // 添加反射服务
-        .add_service(FriendServiceServer::new(friend_service))
+        .add_service(FriendServiceServer::with_interceptor(
+            friend_service, 
+            logging_interceptor
+        ))
         .serve_with_shutdown(addr, async {
             let _ = shutdown_rx.await;
             info!("接收到关闭信号，gRPC服务准备关闭");
@@ -117,6 +134,12 @@ async fn main() -> Result<()> {
 
     // 等待关闭信号处理完成
     let _ = shutdown_signal_task.await?;
+
+    // 在程序结束前关闭链路追踪，确保所有数据都被发送
+    if config.telemetry.enabled {
+        info!("正在关闭链路追踪...");
+        common::logging::shutdown_telemetry();
+    }
 
     info!("好友服务已完全关闭");
     Ok(())
