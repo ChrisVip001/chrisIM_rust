@@ -1,7 +1,6 @@
 use anyhow::Result;
 use tracing::{info, Level};
 use tracing_subscriber::{fmt, EnvFilter};
-use std::collections::HashMap;
 use std::env;
 
 /// 初始化日志系统
@@ -181,7 +180,7 @@ fn check_env_component_overrides(mut env_filter: EnvFilter) -> EnvFilter {
 /// * `Result<()>` - 成功或失败的结果
 pub fn init_auto() -> Result<()> {
     // 首先检查环境变量 RUST_LOG
-    if let Ok(env_filter) = std::env::var("RUST_LOG") {
+    if let Ok(_env_filter) = env::var("RUST_LOG") {
         return init_with_custom_filter(&[("sqlx", "debug")]);
     }
     

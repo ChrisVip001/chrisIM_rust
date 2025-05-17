@@ -1,8 +1,5 @@
 use crate::config::CONFIG;
-use tracing::{info, Level};
-use tracing_subscriber::fmt::Layer as FmtLayer;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+use tracing::info;
 
 /// 初始化链路追踪
 pub async fn init_tracer() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
