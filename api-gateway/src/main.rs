@@ -158,8 +158,16 @@ async fn main() -> anyhow::Result<()> {
 
 /// 配置中间件
 async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) -> Router {
+    // 创建用户服务客户端
+    let service_client = common::grpc_client::GrpcServiceClient::from_env("user-service");
+    let user_client = Arc::new(UserServiceGrpcClient::new(service_client));
+    info!("创建并注册用户服务客户端扩展");
+
     // 添加链路追踪中间件
     let app = app.layer(TraceLayer::new_for_http());
+
+    // 添加用户服务客户端扩展
+    let app = app.layer(axum::Extension(user_client));
 
     // 添加指标中间件
     let app = app.layer(metrics::MetricsLayer);

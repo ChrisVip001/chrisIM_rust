@@ -12,7 +12,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 定义所有proto文件
     let proto_files = [
-        "auth.proto",
         "user.proto",
         "friend.proto",
         "group.proto",

@@ -29,24 +29,30 @@ impl RouterBuilder {
         let service_client = GrpcServiceClient::from_env("user-service");
         let user_client = Arc::new(UserServiceGrpcClient::new(service_client));
         
+        // 创建基础路由器
+        let router = Router::new();
+        
         Self {
             service_proxy,
-            user_client: user_client.clone(),
-            router: Router::new().layer(axum::Extension(user_client)),
+            user_client,
+            router,
         }
     }
 
     /// 构建动态路由
-    pub async fn build(mut self) -> anyhow::Result<Router> {
+    pub async fn build(self) -> anyhow::Result<Router> {
         // 读取配置
         let config = CONFIG.read().await;
         let routes_config = &config.routes;
 
+        // 添加所有路由
+        let mut router = self.router;
+        
         // 添加认证相关路由
-        self.add_auth_routes();
+        router = Self::add_auth_routes(router);
 
         // 添加API文档路由
-        self.add_api_docs_routes();
+        router = Self::add_api_docs_routes(router);
 
         // 遍历路由配置，添加到路由器中
         for route in &routes_config.routes {
@@ -70,10 +76,10 @@ impl RouterBuilder {
             if require_auth {
                 info!("添加需要认证的路由: {}", route_path);
                 let auth_route = any(handler.clone()).layer(middleware::from_fn(auth_middleware));
-                self.router = self.router.clone().route(&route_path, auth_route);
+                router = router.route(&route_path, auth_route);
             } else {
                 info!("添加无需认证的路由: {}", route_path);
-                self.router = self.router.clone().route(&route_path, handler.clone());
+                router = router.route(&route_path, handler.clone());
             }
 
             // 处理通配符路径
@@ -81,46 +87,50 @@ impl RouterBuilder {
             if require_auth {
                 let auth_wildcard_route =
                     any(handler.clone()).layer(middleware::from_fn(auth_middleware));
-                self.router = self.router.clone().route(&wildcard_path, auth_wildcard_route);
+                router = router.route(&wildcard_path, auth_wildcard_route);
             } else {
-                self.router = self.router.clone().route(&wildcard_path, handler.clone());
+                router = router.route(&wildcard_path, handler.clone());
             }
         }
 
         // 添加健康检查和指标端点
-        self.router = self.router.clone().route("/health", get(health_check)).route(
-            &config.metrics_endpoint,
-            get(crate::metrics::get_metrics_handler),
-        );
+        router = router
+            .route("/health", get(health_check))
+            .route(
+                &config.metrics_endpoint,
+                get(crate::metrics::get_metrics_handler),
+            );
 
-        Ok(self.router)
+        // 最后添加全局中间件
+        let user_client = self.user_client.clone();
+        router = router.layer(axum::Extension(user_client));
+        
+        Ok(router)
     }
 
     /// 添加认证相关路由
-    fn add_auth_routes(&mut self) {
+    fn add_auth_routes(router: Router) -> Router {
         info!("添加认证相关路由");
         
         // 添加登录路由
-        self.router = self.router.clone().route(
-            "/api/user/login",
-            post(controller::login),
-        );
-
-        // 添加令牌刷新路由
-        self.router = self.router.clone().route(
-            "/api/user/refresh",
-            post(controller::refresh_token),
-        );
+        router
+            .route(
+                "/api/user/login",
+                post(controller::login),
+            )
+            .route(
+                "/api/user/refresh",
+                post(controller::refresh_token),
+            )
     }
 
     /// 添加API文档相关路由
-    fn add_api_docs_routes(&mut self) {
+    fn add_api_docs_routes(router: Router) -> Router {
         info!("添加API文档路由...");
 
         // 添加API文档路由
-        self.router = api_docs::configure_docs(self.router.clone());
-        
-        info!("API文档路由添加完成");
+        let router = api_docs::configure_docs(router);
+        router
     }
 }
 

@@ -1,14 +1,9 @@
 use crate::auth::jwt;
 use crate::config::CONFIG;
 use crate::UserServiceGrpcClient;
-use axum::{
-    extract::State, 
-    http::StatusCode, 
-    response::IntoResponse, 
-    Json
-};
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use common::error::Error;
-use common::proto::user::{VerifyPasswordRequest, VerifyPasswordResponse};
+use common::proto::user::VerifyPasswordRequest;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, error, info};
@@ -67,10 +62,21 @@ pub struct UserInfoResponse {
 
 /// 处理登录请求
 pub async fn login(
-    axum::extract::Extension(user_client): axum::extract::Extension<Arc<UserServiceGrpcClient>>,
+    user_client: Option<axum::extract::Extension<Arc<UserServiceGrpcClient>>>,
     Json(login_req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, Error> {
     debug!("登录请求：用户 {}", login_req.username);
+
+    // 需要UserServiceGrpcClient扩展
+    let client = match user_client {
+        Some(axum::extract::Extension(client)) => client,
+        None => {
+            error!("未找到UserServiceGrpcClient扩展");
+            return Err(Error::Internal(
+                "未找到UserServiceGrpcClient扩展".to_string(),
+            ));
+        }
+    };
 
     // 创建验证密码请求
     let verify_request = VerifyPasswordRequest {
@@ -79,13 +85,10 @@ pub async fn login(
     };
 
     // 调用用户服务验证密码
-    let response = user_client
-        .verify_password(verify_request)
-        .await
-        .map_err(|e| {
-            error!("调用用户服务验证密码失败: {}", e);
-            Error::Internal(format!("验证密码服务错误: {}", e))
-        })?;
+    let response = client.verify_password(verify_request).await.map_err(|e| {
+        error!("调用用户服务验证密码失败: {}", e);
+        Error::Internal(format!("验证密码服务错误: {}", e))
+    })?;
 
     // 检查密码是否有效
     if !response.valid || response.user.is_none() {
@@ -94,30 +97,31 @@ pub async fn login(
 
     // 获取用户信息
     let user = response.user.unwrap();
-    
+
     // 读取JWT配置
     let config = CONFIG.read().await;
     let jwt_config = &config.auth.jwt;
 
     // 构建额外信息
     let mut extra = std::collections::HashMap::new();
-    
+
     // email在proto中是String类型，但我们需要考虑其可能为空的情况
     if !user.email.is_empty() {
         extra.insert("email".to_string(), user.email.clone());
     }
 
     // 将user.id (String类型) 转换为i64
-    let user_id = user.id.parse::<i64>().map_err(|_| {
-        Error::Internal("无法解析用户ID".to_string())
-    })?;
+    let user_id = user
+        .id
+        .parse::<i64>()
+        .map_err(|_| Error::Internal("无法解析用户ID".to_string()))?;
 
     // 生成访问令牌
     let access_token = jwt::generate_token(
         user_id,
         &user.username,
         // 简化示例，在实际应用中应从用户信息中获取租户ID和名称
-        1, // 示例租户ID
+        1,         // 示例租户ID
         "default", // 示例租户名称
         extra.clone(),
         jwt_config,
@@ -127,7 +131,7 @@ pub async fn login(
     let refresh_token = jwt::generate_refresh_token(
         user_id,
         &user.username,
-        1, // 示例租户ID
+        1,         // 示例租户ID
         "default", // 示例租户名称
         jwt_config,
     )?;
@@ -136,9 +140,13 @@ pub async fn login(
     let user_info = UserInfoResponse {
         user_id,
         username: user.username,
-        tenant_id: 1, // 示例租户ID
+        tenant_id: 1,                       // 示例租户ID
         tenant_name: "default".to_string(), // 示例租户名称
-        email: if user.email.is_empty() { None } else { Some(user.email) },
+        email: if user.email.is_empty() {
+            None
+        } else {
+            Some(user.email)
+        },
         nickname: user.nickname,
         avatar_url: user.avatar_url,
     };
@@ -220,4 +228,4 @@ pub async fn refresh_token(
 
     // 返回响应
     Ok((StatusCode::OK, Json(refresh_response)))
-} 
+}
