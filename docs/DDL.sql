@@ -42,9 +42,7 @@ CREATE TABLE friendships
     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT check_status CHECK (status IN ('PENDING', 'ACCEPTED', 'REJECTED', 'BLOCKED')),
-    CONSTRAINT unique_friendship UNIQUE (user_id, friend_id),
-    CONSTRAINT fk_user_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    CONSTRAINT fk_friend_id FOREIGN KEY (friend_id) REFERENCES users (id) ON DELETE CASCADE
+    CONSTRAINT unique_friendship UNIQUE (user_id, friend_id)
 );
 
 CREATE INDEX idx_friendships_user_id ON friendships (user_id);
@@ -70,9 +68,7 @@ CREATE TABLE private_messages
     sent_at      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     is_read      BOOLEAN     NOT NULL DEFAULT FALSE,
     is_deleted   BOOLEAN     NOT NULL DEFAULT FALSE,
-    CONSTRAINT check_content_type CHECK (content_type IN ('TEXT', 'IMAGE', 'AUDIO', 'VIDEO', 'FILE')),
-    CONSTRAINT fk_sender_id FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE SET NULL,
-    CONSTRAINT fk_receiver_id FOREIGN KEY (receiver_id) REFERENCES users (id) ON DELETE SET NULL
+    CONSTRAINT check_content_type CHECK (content_type IN ('TEXT', 'IMAGE', 'AUDIO', 'VIDEO', 'FILE'))
 );
 
 CREATE INDEX idx_private_messages_sender_id ON private_messages (sender_id);
@@ -89,8 +85,7 @@ CREATE TABLE groups
     avatar_url  VARCHAR(255),
     owner_id    VARCHAR(36)  NOT NULL,
     created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_owner_id FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_groups_owner_id ON groups (owner_id);
@@ -112,9 +107,7 @@ CREATE TABLE group_members
     role      VARCHAR(10) NOT NULL DEFAULT 'MEMBER',
     joined_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT check_role CHECK (role IN ('MEMBER', 'ADMIN', 'OWNER')),
-    CONSTRAINT unique_membership UNIQUE (group_id, user_id),
-    CONSTRAINT fk_group_id FOREIGN KEY (group_id) REFERENCES groups (id) ON DELETE CASCADE,
-    CONSTRAINT fk_user_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    CONSTRAINT unique_membership UNIQUE (group_id, user_id)
 );
 
 CREATE INDEX idx_group_members_group_id ON group_members (group_id);
@@ -130,9 +123,7 @@ CREATE TABLE group_messages
     content_type VARCHAR(10) NOT NULL DEFAULT 'TEXT',
     sent_at      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     is_deleted   BOOLEAN     NOT NULL DEFAULT FALSE,
-    CONSTRAINT check_content_type CHECK (content_type IN ('TEXT', 'IMAGE', 'AUDIO', 'VIDEO', 'FILE')),
-    CONSTRAINT fk_group_id FOREIGN KEY (group_id) REFERENCES groups (id) ON DELETE CASCADE,
-    CONSTRAINT fk_sender_id FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE SET NULL
+    CONSTRAINT check_content_type CHECK (content_type IN ('TEXT', 'IMAGE', 'AUDIO', 'VIDEO', 'FILE'))
 );
 
 CREATE INDEX idx_group_messages_group_id ON group_messages (group_id);
