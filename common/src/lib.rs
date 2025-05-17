@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod grpc;
 pub mod grpc_client;
 pub mod logging;
 pub mod message;

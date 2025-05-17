@@ -20,6 +20,7 @@ mod auth;
 mod circuit_breaker;
 mod config;
 mod metrics;
+mod middleware;
 pub mod proxy;
 mod rate_limit;
 mod router;
@@ -153,6 +154,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     info!("API网关服务已关闭");
+    
+    // 关闭链路追踪，确保所有数据都被发送
+    info!("正在关闭链路追踪...");
+    common::logging::shutdown_telemetry();
+    
     Ok(())
 }
 
@@ -165,6 +171,9 @@ async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) 
 
     // 添加链路追踪中间件
     let app = app.layer(TraceLayer::new_for_http());
+    
+    // 添加请求路径日志中间件
+    let app = app.layer(middleware::RequestLoggerLayer);
 
     // 添加用户服务客户端扩展
     let app = app.layer(axum::Extension(user_client));

@@ -2,20 +2,26 @@ component: all # all, api, ws, rpc, db, pusher
 
 # 日志配置
 log:
-  # 全局日志级别: trace, debug, info, warn, error
-  level: "info"
-  # 日志输出位置: console, file
-  output: "console"
-  # SQLx库的日志级别
-  sqlx_level: "debug"
-  # 其他组件的日志级别配置
+  level: "info"      # 全局日志级别: trace, debug, info, warn, error
+  output: "console"  # 日志输出位置: console, file
+  format: "json"     # 日志格式: plain, json (使用json格式便于ELK收集)
+  sqlx_level: "debug" # SQL查询日志级别
+  # 各组件的日志级别配置
   components:
-    tower: "info"     # HTTP服务器中间件
-    hyper: "info"     # HTTP客户端/服务器
-    axum: "debug"     # Axum Web框架
-    tonic: "info"     # gRPC框架
-    rustIM: "debug"   # 自定义应用组件
-    redis: "info"     # Redis客户端
+    tower: "warn"    # HTTP中间件
+    hyper: "warn"    # HTTP库
+    axum: "info"     # HTTP框架
+    tonic: "info"    # gRPC框架
+    rustIM: "debug"  # 本项目的日志
+    redis: "warn"    # Redis操作
+
+# 链路追踪配置
+telemetry:
+  enabled: true                             # 是否启用链路追踪
+  endpoint: "http://localhost:4317"         # Jaeger OTLP端点
+  sampling_ratio: 1.0                       # 采样率(0.0 - 1.0)
+  propagation: "tracecontext"               # 传播器: tracecontext, b3, jaeger
+
 
 # 数据库配置
 database:
