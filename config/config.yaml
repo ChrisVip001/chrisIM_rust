@@ -136,7 +136,7 @@ kafka:
 
 # Consul配置
 consul:
-  url: "http://consul:8500"
+  url: "http://localhost:8500"
   service_refresh_interval: 30
 
 # OSS配置
