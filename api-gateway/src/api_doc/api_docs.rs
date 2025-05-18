@@ -1,5 +1,4 @@
 use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
 use axum::{Router, routing::get};
 use utoipa::Modify;
 use tracing::info;

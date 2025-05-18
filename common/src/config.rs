@@ -215,6 +215,9 @@ pub struct MailConfig {
 pub struct LogConfig {
     pub level: String,
     pub output: String,
+    pub sqlx_level: Option<String>,    // SQL查询日志级别
+    pub components: Option<std::collections::HashMap<String, String>>, // 其他组件的日志级别
+    pub format: Option<String>,        // 日志输出格式: plain或json
 }
 
 impl LogConfig {
@@ -228,12 +231,37 @@ impl LogConfig {
             _ => tracing::Level::INFO,
         }
     }
+    
+    // 获取sqlx日志级别
+    pub fn sqlx_level(&self) -> &str {
+        match &self.sqlx_level {
+            Some(level) => level.as_str(),
+            None => "info", // 默认值
+        }
+    }
+    
+    // 获取特定组件的日志级别
+    pub fn component_level(&self, component: &str) -> Option<&str> {
+        match &self.components {
+            Some(components) => components.get(component).map(|s| s.as_str()),
+            None => None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TelemetryConfig {
+    pub enabled: bool,               // 是否启用链路追踪
+    pub endpoint: String,            // Jaeger/OTLP终端点
+    pub sampling_ratio: f64,         // 采样率: 0.0-1.0
+    pub propagation: String,         // 传播方式: tracecontext, b3, jaeger
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub component: Component,
     pub log: LogConfig,
+    pub telemetry: TelemetryConfig,  // 链路追踪配置
     pub database: DatabaseConfig,
     pub server: ServerConfig,
     pub service_center: ServiceCenterConfig,
@@ -293,6 +321,7 @@ impl AppConfig {
             .set_default("component", "all")?
             .set_default("log.level", "debug")?
             .set_default("log.output", "console")?
+            .set_default("log.sqlx_level", "info")?   // 默认sqlx日志级别
             .set_default("database.postgres.host", "127.0.0.1")?
             .set_default("database.postgres.port", 5432)?
             .set_default("database.postgres.user", "kelisi")?
@@ -374,7 +403,8 @@ impl AppConfig {
             .set_default("mail.account", "17788889999@qq.com")?
             .set_default("mail.password", "iejtiohyreybgdf")?
             .set_default("mail.temp_path", "./api/fixtures/templates/*")?
-            .set_default("mail.temp_file", "email_temp.html")?;
+            .set_default("mail.temp_file", "email_temp.html")?
+            .set_default("log.format", "plain")?;
 
         // 2. 配置文件 (如果指定)
         if let Some(path) = file_path {

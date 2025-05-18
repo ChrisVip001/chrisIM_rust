@@ -1,10 +1,4 @@
 // 导入生成的gRPC服务代码
-pub mod auth {
-    tonic::include_proto!("auth");
-
-    // 生成用于反射的文件描述符集
-    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("auth_descriptor");
-}
 
 pub mod user {
     tonic::include_proto!("user");

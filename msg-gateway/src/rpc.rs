@@ -7,11 +7,13 @@ use tracing::{debug, info};
 use crate::manager::Manager;
 use common::config::{AppConfig, Component};
 use common::error::Error;
+use common::grpc::LoggingInterceptor;
 use common::message::msg_service_server::MsgServiceServer;
 use common::message::{
     msg_service_server::MsgService, SendGroupMsgRequest, SendMsgRequest, SendMsgResponse,
 };
 use common::service_registry::ServiceRegistry;
+use tonic_health::server::{Health, HealthServer};
 
 pub struct MsgRpcService {
     manager: Manager,
@@ -40,11 +42,14 @@ impl MsgRpcService {
         info!("<ws> rpc service register to service register center");
 
         // open health check
-        let health_service = HealthServer::new(HealthService::new());
+        let health_service = HealthServer::new(Health::default());
         info!("<ws> rpc service health check started");
 
+        // 创建日志拦截器
+        let logging_interceptor = LoggingInterceptor::new();
+
         let service = Self::new(manager);
-        let svc = MsgServiceServer::new(service);
+        let svc = MsgServiceServer::with_interceptor(service, logging_interceptor);
         info!(
             "<ws> rpc service started at {}",
             config.rpc.ws.rpc_server_url()

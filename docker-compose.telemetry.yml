@@ -1,0 +1,145 @@
+version: '3'
+
+services:
+  # Elasticsearch - 用于存储日志数据
+  elasticsearch:
+    image: elasticsearch:7.14.0
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - 9200:9200
+      - 9300:9300
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - telemetry_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Logstash - 接收和处理日志数据
+  logstash:
+    image: logstash:7.14.0
+    depends_on:
+      - elasticsearch
+    volumes:
+      - ./config/logstash:/usr/share/logstash/pipeline
+    ports:
+      - 5000:5000/tcp   # JSON TCP输入
+      - 5044:5044/tcp   # Beats输入
+      - 9600:9600/tcp   # API端口
+    environment:
+      - xpack.monitoring.enabled=false
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+    networks:
+      - telemetry_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9600"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+  
+  # Kibana - 日志可视化工具
+  kibana:
+    image: kibana:7.14.0
+    depends_on:
+      - elasticsearch
+    ports:
+      - 5601:5601
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    networks:
+      - telemetry_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Filebeat - 日志文件收集器
+  filebeat:
+    image: elastic/filebeat:7.14.0
+    depends_on:
+      - elasticsearch
+      - logstash
+    volumes:
+      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./logs:/var/log/rustim:ro
+    networks:
+      - telemetry_network
+    command: filebeat -e -strict.perms=false
+
+  # Jaeger - 分布式链路追踪
+  jaeger:
+    image: jaegertracing/all-in-one:1.45
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+    ports:
+      - 6831:6831/udp   # Jaeger Thrift UDP (用于旧版本)
+      - 6832:6832/udp   # Jaeger Thrift UDP (用于旧版本)
+      - 4317:4317       # OTLP gRPC (推荐)
+      - 4318:4318       # OTLP HTTP
+      - 16686:16686     # Jaeger UI
+      - 9411:9411       # Zipkin兼容端口
+    networks:
+      - telemetry_network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:16686/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Prometheus - 指标监控
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    ports:
+      - 9090:9090
+    volumes:
+      - ./config/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - telemetry_network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Grafana - 可视化平台
+  grafana:
+    image: grafana/grafana:10.1.2
+    depends_on:
+      - prometheus
+    ports:
+      - 3000:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - telemetry_network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  es_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  telemetry_network:
+    driver: bridge 

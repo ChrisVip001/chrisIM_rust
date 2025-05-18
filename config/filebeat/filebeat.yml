@@ -1,0 +1,41 @@
+filebeat.inputs:
+  # 输入配置
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/rustim/*.log
+    json.keys_under_root: true
+    json.message_key: message
+    json.add_error_key: true
+    fields:
+      type: rustim
+    fields_under_root: true
+    processors:
+      - add_host_metadata: ~
+      - add_cloud_metadata: ~
+      - add_docker_metadata: ~
+
+# 日志处理器配置
+processors:
+  - add_fields:
+      target: ''
+      fields:
+        app: rustim
+
+# 输出配置
+output.logstash:
+  hosts: ["logstash:5044"]
+  
+logging:
+  level: info
+  to_files: true
+  files:
+    path: /var/log
+    name: filebeat.log
+    keepfiles: 5
+    
+# 启用监控
+monitoring:
+  enabled: true
+  elasticsearch:
+    hosts: ["elasticsearch:9200"] 

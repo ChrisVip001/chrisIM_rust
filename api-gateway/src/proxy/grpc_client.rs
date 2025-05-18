@@ -3,7 +3,7 @@ use axum::{
     http::{Method, Request, Response, StatusCode},
 };
 use futures::future::BoxFuture;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tonic::transport::Channel;
 use tracing::{debug, error};
 use common::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
