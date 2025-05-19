@@ -144,6 +144,10 @@ impl UserServiceHandler {
                     .get("phone")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
+                let msg_code = body
+                    .get("msg_code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
 
                 if username.is_empty() || password.is_empty() {
                     return Ok(error_response("用户名或者密码不能为空", StatusCode::BAD_REQUEST));
@@ -154,7 +158,8 @@ impl UserServiceHandler {
                     password: password.to_string(),
                     nickname: nickname.to_string(),
                     tenant_id: tenant_id.to_string(),
-                    phone: phone.to_string()
+                    phone: phone.to_string(),
+                    msg_code: msg_code.to_string(),
                 };
 
                 match self.client.register_by_username(request).await {
@@ -197,6 +202,10 @@ impl UserServiceHandler {
                     .get("phone")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
+                let msg_code = body
+                    .get("msg_code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
 
                 if phone.is_empty() || password.is_empty() {
                     return Ok(error_response("手机号或者密码不能为空", StatusCode::BAD_REQUEST));
@@ -207,7 +216,8 @@ impl UserServiceHandler {
                     password: password.to_string(),
                     nickname: nickname.to_string(),
                     tenant_id: tenant_id.to_string(),
-                    phone: phone.to_string()
+                    phone: phone.to_string(),
+                    msg_code: msg_code.to_string(),
                 };
 
                 match self.client.register_by_phone(request).await {
@@ -281,6 +291,14 @@ impl UserServiceHandler {
                 }
             }
 
+            // 用户设置查询
+            (&Method::GET, "getUserConfig")=> {
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let response = self.client.get_user_config(&user_id).await?;
+                let user_config = response.user_config.unwrap_or_default();
+                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+            }
+
             // 其他未知方法
             _ => {
                 error!("未知的用户服务方法: {}", method_name);
@@ -308,6 +326,19 @@ impl UserServiceHandler {
             "tenant_id" : user.tenant_id,
             "last_login_time" : format_timestamp(user.last_login_time.clone()),
             "user_idx" : user.user_idx,
+        })
+    }
+
+    fn convert_user_config_to_json(&self, user_config: &proto::user::UserConfig) -> Value {
+        json!({
+            "user_id": user_config.user_id,
+            "allow_phone_search": user_config.allow_phone_search,
+            "allow_id_search": user_config.allow_id_search,
+            "auto_load_video": user_config.auto_load_video,
+            "auto_load_pic": user_config.auto_load_pic,
+            "msg_read_flag": user_config.msg_read_flag,
+            "create_time": format_timestamp(user_config.create_time.clone()),
+            "update_time": format_timestamp(user_config.update_time.clone()),
         })
     }
 } 

@@ -40,7 +40,7 @@ impl UserRepository {
         // 生成密码哈希
         let password_hash = hash_password(&data.password)?;
         // 生成用户ID
-        let id = Uuid::new_v4();
+        let id = Uuid::new_v4().simple();
         // 插入用户数据
         let row = sqlx::query!(
             r#"
@@ -161,7 +161,7 @@ impl UserRepository {
         let password_hash = hash_password(&data.password)?;
 
         // 生成用户ID
-        let id = Uuid::new_v4();
+        let id = Uuid::new_v4().simple();
 
         // 插入用户数据
         let row = sqlx::query!(
@@ -212,9 +212,6 @@ impl UserRepository {
 
     /// 根据ID查询用户
     pub async fn get_user_by_id(&self, id: &str) -> Result<User> {
-        let uuid = Uuid::parse_str(id)
-            .map_err(|_| Error::BadRequest(format!("无效的用户ID格式: {}", id)))?;
-
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
@@ -223,7 +220,7 @@ impl UserRepository {
             FROM users
             WHERE id = $1
             "#,
-            uuid.to_string()
+            id
         )
         .fetch_one(&self.pool)
         .await
@@ -397,8 +394,6 @@ impl UserRepository {
 
     /// 更新用户信息
     pub async fn update_user(&self, id: &str, data: UpdateUserData) -> Result<User> {
-        let uuid = Uuid::parse_str(id)
-            .map_err(|_| Error::BadRequest(format!("无效的用户ID格式: {}", id)))?;
 
         // 检查用户是否存在
         let _user = self.get_user_by_id(id).await?;
@@ -454,34 +449,6 @@ impl UserRepository {
         let query = builder.build_query_as::<User>();
         let row = query.fetch_one(&self.pool).await?;
 
-        // 更新用户数据
-        // let row = sqlx::query!(
-        //     r#"
-        //     UPDATE users
-        //     SET
-        //         email = COALESCE($1, email),
-        //         nickname = COALESCE($2, nickname),
-        //         avatar_url = COALESCE($3, avatar_url),
-        //         password = COALESCE($4, password),
-        //         updated_at = NOW()
-        //     WHERE id = $5
-        //     RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-        //     phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-        //     user_idx
-        //     "#,
-        //     data.email.as_deref(),
-        //     data.nickname.as_deref(),
-        //     data.avatar_url.as_deref(),
-        //     password_hash.as_deref(),
-        //     uuid.to_string()
-        // )
-        // .fetch_one(&self.pool)
-        // .await
-        // .map_err(|err| {
-        //     error!("更新用户失败: {}", err);
-        //     Error::Database(err)
-        // })?;
-
         let updated_user = User {
             id: row.id,
             username: row.username,
@@ -495,7 +462,7 @@ impl UserRepository {
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as i32),
+            sex: row.sex,
             user_stat: row.user_stat,
             tenant_id: row.tenant_id,
             last_login_time: row.last_login_time,

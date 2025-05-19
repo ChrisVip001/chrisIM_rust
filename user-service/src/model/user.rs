@@ -128,6 +128,7 @@ pub struct RegisterUserData {
     pub nickname: Option<String>,
     pub tenant_id : String,
     pub phone: String,
+    pub msg_code: String,
 }
 
 impl From<user::RegisterRequest> for RegisterUserData {
@@ -138,6 +139,7 @@ impl From<user::RegisterRequest> for RegisterUserData {
             nickname: if req.nickname.is_empty() { None } else { Some(req.nickname) },
             tenant_id: req.tenant_id,
             phone: req.phone,
+            msg_code: req.msg_code,
         }
     }
 }

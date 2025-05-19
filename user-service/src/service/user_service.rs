@@ -1,20 +1,25 @@
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
+use common::utils::validate_phone;
+use crate::model::user_config::UserConfigData;
+use crate::repository::user_config_repository::UserConfigRepository;
 
 /// 用户服务实现
 pub struct UserServiceImpl {
     repository: UserRepository,
+    user_config_repository: UserConfigRepository,
 }
 
 impl UserServiceImpl {
     pub fn new(pool: PgPool) -> Self {
         Self {
-            repository: UserRepository::new(pool),
+            repository: UserRepository::new(pool.clone()),
+            user_config_repository: UserConfigRepository::new(pool.clone()),
         }
     }
 }
@@ -55,7 +60,12 @@ impl UserService for UserServiceImpl {
         debug!("用户手机号注册，手机号: {}", req.phone);
         // 转换请求数据
         let reg_data = RegisterUserData::from(req);
-        // 手机号格式校验 todo
+
+        // 手机号格式校验
+        if !validate_phone(&reg_data.phone) {
+            error!("手机号格式不正确: {}", reg_data.phone);
+            return Err(Status::invalid_argument("手机号格式不正确"));
+        }
 
         // 短信验证码校验 todo
 
@@ -276,5 +286,91 @@ impl UserService for UserServiceImpl {
 
         // 返回响应
         Ok(Response::new(SearchUsersResponse { users, total }))
+    }
+
+    /******************************用户配置*************************************/
+    /// 查询用户设置
+    async fn get_user_config(
+        &self,
+        request: Request<UserConfigRequest>,
+    ) -> std::result::Result<Response<UserConfigResponse>, Status> {
+        let req = request.into_inner();
+        debug!("查询用户设置请求，id: {}", req.user_id);
+        let user_config = match self.user_config_repository.get_user_config(&req.user_id).await {
+            Ok(Some(config)) => config,
+            Ok(None) => {
+                // 没有找到配置时返回空响应
+                return Ok(Response::new(UserConfigResponse {
+                    user_config: None,  // proto中的配置为optional
+                }));
+            }
+            Err(err) => {
+                error!("查询用户设置失败: {}", err);
+                return Err(err.into());
+            }
+        };
+        let proto_user_config = UserConfig {
+            user_id: user_config.user_id,
+            allow_phone_search: user_config.allow_phone_search,
+            allow_id_search: user_config.allow_id_search,
+            auto_load_video: user_config.auto_load_video,
+            auto_load_pic: user_config.auto_load_pic,
+            msg_read_flag: user_config.msg_read_flag,
+            create_time: user_config.create_time.map(|dt| prost_types::Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+            update_time: user_config.update_time.map(|dt| prost_types::Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+        };
+
+        // 返回响应
+        Ok(Response::new(UserConfigResponse {
+            user_config: Some(UserConfig::from(proto_user_config)),
+        }))
+    }
+
+    /// 保存用户设置
+    async fn save_user_config(
+        &self,
+        request: Request<UserConfigRequest>,
+    ) -> std::result::Result<Response<UserConfigResponse>, Status> {
+        let req = request.into_inner();
+        debug!("保存用户设置请求，id: {}", req.user_id);
+
+        // 转换请求数据
+        let save_data = UserConfigData::from(req.clone());
+
+        let user_config = match self.user_config_repository.save_user_config(&save_data).await {
+            Ok(user_config) => user_config,
+            Err(err) => {
+                error!("查询用户设置失败: {}", err);
+                return Err(err.into());
+            }
+        };
+        info!("查询用户设置成功 {}", req.user_id);
+        let proto_user_config = UserConfig {
+            user_id: user_config.user_id,
+            allow_phone_search: user_config.allow_phone_search,
+            allow_id_search: user_config.allow_id_search,
+            auto_load_video: user_config.auto_load_video,
+            auto_load_pic: user_config.auto_load_pic,
+            msg_read_flag: user_config.msg_read_flag,
+            create_time: user_config.create_time.map(|dt| prost_types::Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+            update_time: user_config.update_time.map(|dt| prost_types::Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+        };
+
+        // 返回响应
+        Ok(Response::new(UserConfigResponse {
+            user_config: Some(UserConfig::from(proto_user_config)),
+        }))
     }
 }

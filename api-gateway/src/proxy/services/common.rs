@@ -103,7 +103,7 @@ pub fn datetime_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     }
 }
 
-// 3. 格式化显示时间(yyyy-MM-dd HH:mm:ss)
+// 格式化显示时间(yyyy-MM-dd HH:mm:ss)
 pub fn format_timestamp(ts: Option<Timestamp>) -> String {
     if let Some(dt) = timestamp_to_datetime(ts) {
         dt.format("%Y-%m-%d %H:%M:%S").to_string()
