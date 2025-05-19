@@ -5,7 +5,7 @@ use axum::{
 use common::grpc_client::UserServiceGrpcClient;
 use common::proto;
 use serde_json::{json, Value};
-use tracing::{error, debug};
+use tracing::{error, debug, info};
 
 use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, timestamp_to_rfc3339, format_timestamp};
 
@@ -293,8 +293,53 @@ impl UserServiceHandler {
 
             // 用户设置查询
             (&Method::GET, "getUserConfig")=> {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let user_id = extract_string_param(&body, "user_id", Some("user_id"))?;
                 let response = self.client.get_user_config(&user_id).await?;
+                let user_config = response.user_config.unwrap_or_default();
+                info!("时间: {}", user_config.clone().create_time.unwrap_or_default());
+                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+            }
+
+            // 保存用户设置
+            (&Method::POST, "saveUserConfig")=> {
+                let user_id = body
+                    .get("user_id")
+                    .or_else(|| body.get("user_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                if user_id.is_empty() {
+                    return Ok(error_response("用户ID不能为空", StatusCode::BAD_REQUEST));
+                }
+                let allow_phone_search = body
+                    .get("allow_phone_search")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<i32>().ok());
+                let allow_id_search = body
+                    .get("allow_id_search")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<i32>().ok());
+                let auto_load_video = body
+                    .get("auto_load_video")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<i32>().ok());
+                let auto_load_pic = body
+                    .get("auto_load_pic")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<i32>().ok());
+                let msg_read_flag = body
+                    .get("msg_read_flag")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<i32>().ok());
+
+                let request = proto::user::UserConfigRequest {
+                    user_id: user_id.to_string(),
+                    allow_phone_search: allow_phone_search,
+                    allow_id_search: allow_id_search,
+                    auto_load_video: auto_load_video,
+                    auto_load_pic: auto_load_pic,
+                    msg_read_flag: msg_read_flag,
+                };
+                let response = self.client.save_user_config(request).await?;
                 let user_config = response.user_config.unwrap_or_default();
                 Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
             }
