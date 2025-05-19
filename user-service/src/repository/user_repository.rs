@@ -2,8 +2,9 @@ use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, U
 use chrono::{TimeZone, Utc};
 use common::utils::{hash_password, verify_password};
 use common::{Error, Result};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, QueryBuilder, Row};
 use tracing::{debug, error};
+use tracing::log::info;
 use uuid::Uuid;
 
 /// 用户仓库实现
@@ -39,7 +40,7 @@ impl UserRepository {
         // 生成密码哈希
         let password_hash = hash_password(&data.password)?;
         // 生成用户ID
-        let id = Uuid::new_v4();
+        let id = Uuid::new_v4().simple();
         // 插入用户数据
         let row = sqlx::query!(
             r#"
@@ -65,20 +66,20 @@ impl UserRepository {
         let user = User {
             id: row.id,
             username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-            phone: row.phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone.unwrap_or_default(),
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            last_login_time: row.last_login_time,
             user_idx: row.user_idx,
         };
         debug!("用户注册成功: {}", user.id);
@@ -121,20 +122,20 @@ impl UserRepository {
         let user = User {
             id: row.id,
             username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-            phone: row.phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone.unwrap_or_default(),
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            last_login_time: row.last_login_time,
             user_idx: row.user_idx,
         };
         debug!("修改密码成功: {}", user.username);
@@ -160,7 +161,7 @@ impl UserRepository {
         let password_hash = hash_password(&data.password)?;
 
         // 生成用户ID
-        let id = Uuid::new_v4();
+        let id = Uuid::new_v4().simple();
 
         // 插入用户数据
         let row = sqlx::query!(
@@ -188,20 +189,20 @@ impl UserRepository {
         let user = User {
             id: row.id,
             username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-            phone: row.phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone.unwrap_or_default(),
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            last_login_time: row.last_login_time,
             user_idx: row.user_idx,
         };
 
@@ -211,9 +212,6 @@ impl UserRepository {
 
     /// 根据ID查询用户
     pub async fn get_user_by_id(&self, id: &str) -> Result<User> {
-        let uuid = Uuid::parse_str(id)
-            .map_err(|_| Error::BadRequest(format!("无效的用户ID格式: {}", id)))?;
-
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
@@ -222,7 +220,7 @@ impl UserRepository {
             FROM users
             WHERE id = $1
             "#,
-            uuid.to_string()
+            id
         )
         .fetch_one(&self.pool)
         .await
@@ -238,20 +236,20 @@ impl UserRepository {
         let user = User {
             id: row.id,
             username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-            phone: row.phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone.unwrap_or_default(),
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            last_login_time: row.last_login_time,
             user_idx: row.user_idx,
         };
 
@@ -284,20 +282,20 @@ impl UserRepository {
         let user = User {
             id: row.id,
             username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-            phone: row.phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone.unwrap_or_default(),
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            last_login_time: row.last_login_time,
             user_idx: row.user_idx,
         };
 
@@ -330,20 +328,20 @@ impl UserRepository {
         let user = User {
             id: row.id,
             username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-            phone: row.phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone.unwrap_or_default(),
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            last_login_time: row.updated_at,
             user_idx: row.user_idx,
         };
 
@@ -375,20 +373,20 @@ impl UserRepository {
         let user = User {
             id: row.id,
             username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-            phone: row.phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone.unwrap_or_default(),
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            last_login_time: row.last_login_time,
             user_idx: row.user_idx,
         };
         Ok(user)
@@ -396,8 +394,6 @@ impl UserRepository {
 
     /// 更新用户信息
     pub async fn update_user(&self, id: &str, data: UpdateUserData) -> Result<User> {
-        let uuid = Uuid::parse_str(id)
-            .map_err(|_| Error::BadRequest(format!("无效的用户ID格式: {}", id)))?;
 
         // 检查用户是否存在
         let _user = self.get_user_by_id(id).await?;
@@ -409,51 +405,67 @@ impl UserRepository {
             None
         };
 
-        // 更新用户数据
-        let row = sqlx::query!(
-            r#"
-            UPDATE users
-            SET 
-                email = COALESCE($1, email),
-                nickname = COALESCE($2, nickname),
-                avatar_url = COALESCE($3, avatar_url),
-                password = COALESCE($4, password),
-                updated_at = NOW()
-            WHERE id = $5
-            RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
-            "#,
-            data.email.as_deref(),
-            data.nickname.as_deref(),
-            data.avatar_url.as_deref(),
-            password_hash.as_deref(),
-            uuid.to_string()
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|err| {
-            error!("更新用户失败: {}", err);
-            Error::Database(err)
-        })?;
+        // 动态构建SET子句
+        let mut builder = QueryBuilder::new(" UPDATE users SET ");
+        let mut first = true;
+        if let Some(email) = data.email {
+            if !first { builder.push(","); }
+            builder.push(" email = COALESCE(" ).push_bind(email).push(", email) ");
+            first = false;
+        }
+        if let Some(nickname) = data.nickname {
+            if !first { builder.push(","); }
+            builder.push(" nickname = COALESCE( ").push_bind(nickname).push(", nickname) ");
+            first = false;
+        }
+        if let Some(head_image) = data.head_image {
+            if !first { builder.push(","); }
+            builder.push(" head_image = COALESCE( ").push_bind(head_image).push(", head_image) ");
+            first = false;
+        }
+        if let Some(head_image_thumb) = data.head_image_thumb {
+            if !first { builder.push(","); }
+            builder.push(" head_image_thumb = COALESCE( ").push_bind(head_image_thumb).push(", head_image) ");
+            first = false;
+        }
+        if let Some(sex) = data.sex {
+            if !first { builder.push(","); }
+            builder.push(" sex = COALESCE( ").push_bind(sex.to_string()).push(", sex) ");
+            first = false;
+        }
+        if let Some(password) = data.password {
+            if !first { builder.push(","); }
+            builder.push(" password = COALESCE( ").push_bind(hash_password(&password)?).push(", password) ");
+            first = false;
+        }
+
+        if !first { builder.push(","); }
+        builder.push(" updated_at = ").push_bind(Utc::now());
+        builder.push(" WHERE id = ").push_bind(&data.user_id);
+        builder.push(" RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, user_idx "
+        );
+        // 生成最终SQL
+        let query = builder.build_query_as::<User>();
+        let row = query.fetch_one(&self.pool).await?;
 
         let updated_user = User {
             id: row.id,
-            username: row.username.unwrap_or_default(),
-            email: row.email.unwrap_or_default(),
+            username: row.username,
+            email: row.email,
             password: row.password,
             nickname: row.nickname,
             avatar_url: row.avatar_url,
-            created_at: Utc.from_utc_datetime(&row.created_at),
-            updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
             phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as u32),
-            user_stat: row.user_stat.unwrap_or_default() as u32,
-            tenant_id: row.tenant_id.unwrap_or_default(),
-            last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+            sex: row.sex,
+            user_stat: row.user_stat,
+            tenant_id: row.tenant_id,
+            last_login_time: row.last_login_time,
             user_idx: row.user_idx,
         };
 
@@ -516,20 +528,20 @@ impl UserRepository {
             .map(|row| User {
                 id: row.id,
                 username: row.username.unwrap_or_default(),
-                email: row.email.unwrap_or_default(),
+                email: row.email,
                 password: row.password,
                 nickname: row.nickname,
                 avatar_url: row.avatar_url,
-                created_at: Utc.from_utc_datetime(&row.created_at),
-                updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
-                phone: row.phone,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                phone: row.phone.unwrap_or_default(),
                 address: row.address,
                 head_image: row.head_image,
                 head_image_thumb: row.head_image_thumb,
-                sex: row.sex.map(|x| x as u32),
-                user_stat: row.user_stat.unwrap_or_default() as u32,
+                sex: row.sex.map(|x| x as i32),
+                user_stat: row.user_stat.unwrap_or_default() as i32,
                 tenant_id: row.tenant_id.unwrap_or_default(),
-                last_login_time: Utc.from_utc_datetime(&row.last_login_time.unwrap_or_default()),
+                last_login_time: row.last_login_time,
                 user_idx: row.user_idx
             })
             .collect();

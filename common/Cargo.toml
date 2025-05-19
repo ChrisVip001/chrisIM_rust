@@ -32,13 +32,15 @@ rand = { workspace = true }
 notify = { version = "8.0.0", optional = true }
 mongodb = "2.8.2"
 
-# 链路追踪和日志 
+# 链路追踪和日志
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # 分布式链路追踪依赖，可选
 opentelemetry = { version = "0.20", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.13", features = ["http-proto", "tonic"] }
 tracing-opentelemetry = "0.20"
 tower = "0.4.13"
+# 正则表达式
+regex = "1.11.1"
 
 [features]
 default = []

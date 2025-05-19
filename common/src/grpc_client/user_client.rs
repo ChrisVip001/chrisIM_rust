@@ -2,10 +2,7 @@ use anyhow::Result;
 use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
-use crate::proto::user::{
-    CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest,
-    UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse
-};
+use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse};
 
 use crate::grpc_client::GrpcServiceClient;
 
@@ -119,6 +116,22 @@ impl UserServiceGrpcClient {
         let mut client = UserServiceClient::new(channel);
 
         let response = client.forget_password(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+
+    // 查询用户设置
+    pub async fn get_user_config(&self, user_id: &str) -> Result<UserConfigResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = UserServiceClient::new(channel);
+        let request = Request::new(UserConfigRequest {
+            user_id: user_id.to_string(),
+            allow_phone_search: Option::from(0 as i32),
+            allow_id_search: Option::from(0 as i32),
+            auto_load_video: Option::from(0 as i32),
+            auto_load_pic: Option::from(0 as i32),
+            msg_read_flag: Option::from(0 as i32),
+        });
+        let response = client.get_user_config(request).await?;
         Ok(response.into_inner())
     }
 }

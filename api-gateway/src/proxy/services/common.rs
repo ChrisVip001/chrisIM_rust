@@ -4,6 +4,8 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use chrono::{DateTime, TimeZone, Utc};
+use prost_types::Timestamp;
 use serde_json::{json, Value};
 
 /// 通用响应生成辅助函数 - 成功响应
@@ -82,4 +84,30 @@ pub fn timestamp_to_rfc3339(timestamp: &Option<prost_types::Timestamp>) -> Strin
                 .unwrap_or_default()
         })
         .unwrap_or_default()
-} 
+}
+
+// Timestamp 转 DateTime<Utc>
+pub fn timestamp_to_datetime(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
+    ts.map(|ts| {
+        Utc.timestamp_opt(ts.seconds, ts.nanos as u32)
+            .single()
+            .unwrap_or_default()
+    })
+}
+
+// DateTime<Utc> 转 Timestamp
+pub fn datetime_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
+    Timestamp {
+        seconds: dt.timestamp(),
+        nanos: dt.timestamp_subsec_nanos() as i32,
+    }
+}
+
+// 格式化显示时间(yyyy-MM-dd HH:mm:ss)
+pub fn format_timestamp(ts: Option<Timestamp>) -> String {
+    if let Some(dt) = timestamp_to_datetime(ts) {
+        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        "".to_string()
+    }
+}

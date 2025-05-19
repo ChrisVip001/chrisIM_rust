@@ -32,6 +32,12 @@ service UserService {
 
   // 忘记密码
   rpc forgetPassword (ForgetPasswordRequest) returns (UserResponse);
+
+  // 查询用户设置
+  rpc GetUserConfig (UserConfigRequest) returns (UserConfigResponse);
+
+  // 保存用户设置
+  rpc saveUserConfig (UserConfigRequest) returns (UserConfigResponse);
 }
 
 // 创建用户请求
@@ -60,6 +66,10 @@ message UpdateUserRequest {
   optional string email = 3;
   optional string avatar_url = 4;
   optional string password = 5;
+  optional string address = 6;
+  optional string head_image = 7;
+  optional string head_image_thumb = 8;
+  optional int32 sex = 9;
 }
 
 // 验证密码请求
@@ -119,6 +129,7 @@ message RegisterRequest {
   string nickname = 3;
   string tenant_id = 4;
   string phone = 5;
+  string msg_code = 6;
 }
 
 // 忘记密码请求
@@ -127,4 +138,31 @@ message ForgetPasswordRequest{
   string password = 2;
   string tenant_id = 3;
   string phone = 4;
+}
+
+// 用户设置请求
+message UserConfigRequest{
+  string user_id = 1;
+  optional int32 allow_phone_search = 2;
+  optional int32 allow_id_search = 3;
+  optional int32 auto_load_video = 4;
+  optional int32 auto_load_pic = 5;
+  optional int32 msg_read_flag = 6;
+}
+
+// 用户设置响应
+message UserConfigResponse {
+  optional UserConfig userConfig = 1;
+}
+
+// 用户设置消息定义
+message UserConfig {
+  string user_id = 1;
+  optional int32 allow_phone_search = 2;
+  optional int32 allow_id_search = 3;
+  optional int32 auto_load_video = 4;
+  optional int32 auto_load_pic = 5;
+  optional int32 msg_read_flag = 6;
+  google.protobuf.Timestamp create_time = 7;
+  google.protobuf.Timestamp update_time = 8;
 }
