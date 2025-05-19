@@ -72,6 +72,7 @@ impl FriendServiceGrpcClient {
         &self,
         user_id: &str,
         friend_id: &str,
+        reason: &str,
     ) -> Result<FriendshipResponse> {
         let channel = self.service_client.get_channel().await?;
         let mut client = FriendServiceClient::new(channel);
@@ -79,6 +80,7 @@ impl FriendServiceGrpcClient {
         let request = Request::new(RejectFriendRequestRequest {
             user_id: user_id.to_string(),
             friend_id: friend_id.to_string(),
+            reason: reason.to_string(),
         });
 
         let response = client.reject_friend_request(request).await?;
@@ -87,11 +89,25 @@ impl FriendServiceGrpcClient {
 
     /// 获取好友列表
     pub async fn get_friend_list(&self, user_id: &str) -> Result<GetFriendListResponse> {
+        self.get_friend_list_with_params(user_id, 0, 0, "").await
+    }
+
+    /// 获取好友列表（带参数）
+    pub async fn get_friend_list_with_params(
+        &self,
+        user_id: &str,
+        page: i64,
+        page_size: i64,
+        sort_by: &str,
+    ) -> Result<GetFriendListResponse> {
         let channel = self.service_client.get_channel().await?;
         let mut client = FriendServiceClient::new(channel);
 
         let request = Request::new(GetFriendListRequest {
             user_id: user_id.to_string(),
+            page,
+            page_size,
+            sort_by: sort_by.to_string(),
         });
 
         let response = client.get_friend_list(request).await?;
