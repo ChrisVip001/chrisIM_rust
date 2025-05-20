@@ -82,4 +82,25 @@ pub fn timestamp_to_rfc3339(timestamp: &Option<prost_types::Timestamp>) -> Strin
                 .unwrap_or_default()
         })
         .unwrap_or_default()
+}
+
+/// 时间戳转换为yyyy-MM-dd HH:mm:ss格式的字符串（东八区时间）
+pub fn timestamp_to_datetime_string(timestamp: &Option<prost_types::Timestamp>) -> String {
+    timestamp
+        .as_ref()
+        .map(|ts| {
+            if ts.seconds < 0 {
+                return String::new();
+            }
+            chrono::DateTime::<chrono::Utc>::from_timestamp(ts.seconds, ts.nanos as u32)
+                .map(|dt| {
+                    // 转换为东八区时间
+                    let beijing = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+                    dt.with_timezone(&beijing)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string()
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
 } 

@@ -80,7 +80,7 @@ impl FriendService for FriendServiceImpl {
                     FriendshipStatus::Pending | FriendshipStatus::Accepted => {
                         return Err(Status::already_exists("已经存在好友关系或请求"));
                     }
-                    FriendshipStatus::Rejected => {
+                    FriendshipStatus::Rejected | FriendshipStatus::Expired => {
                         match self.repository.delete_friend(user_id, friend_id).await{
                             Ok(_) => {}
                             Err(e) => {
@@ -251,19 +251,20 @@ impl FriendService for FriendServiceImpl {
         let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
         let sort_by = if req.sort_by.is_empty() { None } else { Some(req.sort_by) };
 
-        match self.repository.get_friend_list(user_id, page, page_size, sort_by).await {
-            Ok(friends) => {
-                let proto_friends = friends.into_iter().map(|f| f.to_proto()).collect();
+        let total = self.repository.count_friends(user_id).await.map_err(|e| {
+            error!("获取好友总数失败: {}", e);
+            Status::internal("获取好友总数失败")
+        })?;
+        let friends = self.repository.get_friend_list(user_id, page, page_size, sort_by).await.map_err(|e| {
+            error!("获取好友列表失败: {}", e);
+            Status::internal("获取好友列表失败")
+        })?;
+        let proto_friends = friends.into_iter().map(|f| f.to_proto()).collect();
 
-                Ok(Response::new(GetFriendListResponse {
-                    friends: proto_friends,
-                }))
-            }
-            Err(e) => {
-                error!("获取好友列表失败: {}", e);
-                Err(Status::internal("获取好友列表失败"))
-            }
-        }
+        Ok(Response::new(GetFriendListResponse {
+            friends: proto_friends,
+            total,
+        }))
     }
 
     // 获取好友请求列表
@@ -278,19 +279,23 @@ impl FriendService for FriendServiceImpl {
             .parse::<Uuid>()
             .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
 
-        match self.repository.get_friend_requests(user_id).await {
-            Ok(requests) => {
-                let proto_requests = requests.into_iter().map(|r| r.to_proto()).collect();
+        let page = if req.page > 0 { Some(req.page) } else { None };
+        let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
 
-                Ok(Response::new(GetFriendRequestsResponse {
-                    requests: proto_requests,
-                }))
-            }
-            Err(e) => {
-                error!("获取好友请求列表失败: {}", e);
-                Err(Status::internal("获取好友请求列表失败"))
-            }
-        }
+        let total = self.repository.count_friend_requests(user_id).await.map_err(|e| {
+            error!("获取好友请求总数失败: {}", e);
+            Status::internal("获取好友请求总数失败")
+        })?;
+        let requests = self.repository.get_friend_requests(user_id, page, page_size).await.map_err(|e| {
+            error!("获取好友请求列表失败: {}", e);
+            Status::internal("获取好友请求列表失败")
+        })?;
+        let proto_requests = requests.into_iter().map(|r| r.to_proto()).collect();
+
+        Ok(Response::new(GetFriendRequestsResponse {
+            requests: proto_requests,
+            total,
+        }))
     }
 
     // 删除好友

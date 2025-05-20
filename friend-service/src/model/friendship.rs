@@ -5,7 +5,7 @@ use sqlx::{postgres::PgRow, FromRow, Row};
 use std::time::SystemTime;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Friendship {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -15,6 +15,9 @@ pub struct Friendship {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub reject_reason: Option<String>,
+    pub friend_username: Option<String>,
+    pub friend_nickname: Option<String>,
+    pub friend_avatar_url: Option<String>,
 }
 
 impl Friendship {
@@ -25,10 +28,13 @@ impl Friendship {
             user_id,
             friend_id,
             message,
-            status: FriendshipStatus::Pending as i32,
+            status: 0, // PENDING
             created_at: now,
             updated_at: now,
             reject_reason: None,
+            friend_username: None,
+            friend_nickname: None,
+            friend_avatar_url: None,
         }
     }
 
@@ -42,6 +48,9 @@ impl Friendship {
             created_at: Some(prost_types::Timestamp::from(SystemTime::from(self.created_at))),
             updated_at: Some(prost_types::Timestamp::from(SystemTime::from(self.updated_at))),
             reject_reason: self.reject_reason.clone(),
+            friend_username: self.friend_username.clone(),
+            friend_nickname: self.friend_nickname.clone(),
+            friend_avatar_url: self.friend_avatar_url.clone(),
         }
     }
 }

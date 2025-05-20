@@ -89,7 +89,7 @@ impl FriendServiceGrpcClient {
 
     /// 获取好友列表
     pub async fn get_friend_list(&self, user_id: &str) -> Result<GetFriendListResponse> {
-        self.get_friend_list_with_params(user_id, 0, 0, "").await
+        self.get_friend_list_with_params(user_id, 1, 20, "").await
     }
 
     /// 获取好友列表（带参数）
@@ -100,27 +100,27 @@ impl FriendServiceGrpcClient {
         page_size: i64,
         sort_by: &str,
     ) -> Result<GetFriendListResponse> {
-        let channel = self.service_client.get_channel().await?;
-        let mut client = FriendServiceClient::new(channel);
-
-        let request = Request::new(GetFriendListRequest {
+        let request = GetFriendListRequest {
             user_id: user_id.to_string(),
             page,
             page_size,
             sort_by: sort_by.to_string(),
-        });
+        };
 
-        let response = client.get_friend_list(request).await?;
+        let mut client = self.service_client.get_channel().await?;
+        let response = FriendServiceClient::new(client).get_friend_list(request).await?;
         Ok(response.into_inner())
     }
 
-    /// 获取好友请求列表
-    pub async fn get_friend_requests(&self, user_id: &str) -> Result<GetFriendRequestsResponse> {
+    /// 获取好友请求列表（带分页参数）
+    pub async fn get_friend_requests_with_params(&self, user_id: &str, page: i64, page_size: i64) -> Result<GetFriendRequestsResponse> {
         let channel = self.service_client.get_channel().await?;
         let mut client = FriendServiceClient::new(channel);
 
         let request = Request::new(GetFriendRequestsRequest {
             user_id: user_id.to_string(),
+            page,
+            page_size,
         });
 
         let response = client.get_friend_requests(request).await?;

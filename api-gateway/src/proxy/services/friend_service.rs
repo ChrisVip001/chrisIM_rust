@@ -7,9 +7,7 @@ use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
 
-use super::common::{
-    success_response, extract_string_param, timestamp_to_rfc3339
-};
+use super::common::{success_response, extract_string_param, timestamp_to_datetime_string, get_i64_param};
 
 /// 好友服务处理器
 #[derive(Clone)]
@@ -72,12 +70,11 @@ impl FriendServiceHandler {
             }
 
             // 获取好友列表
-            (&Method::GET, "getList") => {
+            (&Method::POST, "getList") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-
                 // 提取分页和排序参数
-                let page = body.get("page").and_then(|v| v.as_i64()).unwrap_or(0);
-                let page_size = body.get("pageSize").and_then(|v| v.as_i64()).unwrap_or(0);
+                let page = get_i64_param(&body, "page", 1);
+                let page_size = get_i64_param(&body, "pageSize", 20);
                 let sort_by = body.get("sortBy").and_then(|v| v.as_str()).unwrap_or("");
 
                 let response = self.client.get_friend_list_with_params(
@@ -89,17 +86,24 @@ impl FriendServiceHandler {
 
                 let friends = response.friends.iter().map(|f| self.convert_friend_to_json(f)).collect::<Vec<_>>();
 
-                Ok(success_response(friends, StatusCode::OK))
+                Ok(success_response(json!({
+                    "friends": friends,
+                    "total": response.total
+                }), StatusCode::OK))
             }
 
             // 获取好友请求列表
-            (&Method::GET, "getRequests") => {
+            (&Method::POST, "getRequests") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-
-                let response = self.client.get_friend_requests(&user_id).await?;
+                let page = get_i64_param(&body, "page", 1);
+                let page_size = get_i64_param(&body, "pageSize", 20);
+                let response = self.client.get_friend_requests_with_params(&user_id, page, page_size).await?;
                 let requests = response.requests.iter().map(|r| self.convert_friendship_to_json(r)).collect::<Vec<_>>();
 
-                Ok(success_response(requests, StatusCode::OK))
+                Ok(success_response(json!({
+                    "requests": requests,
+                    "total": response.total
+                }), StatusCode::OK))
             }
 
             // 删除好友
@@ -151,6 +155,7 @@ impl FriendServiceHandler {
             1 => "ACCEPTED",
             2 => "REJECTED",
             3 => "BLOCKED",
+            4 => "EXPIRED",
             _ => "UNKNOWN"
         };
 
@@ -160,10 +165,13 @@ impl FriendServiceHandler {
             "friendId": friendship.friend_id,
             "status": friendship.status,
             "statusText": status_text,
-            "createdAt": timestamp_to_rfc3339(&friendship.created_at),
-            "updatedAt": timestamp_to_rfc3339(&friendship.updated_at),
+            "createdAt": timestamp_to_datetime_string(&friendship.created_at),
+            "updatedAt": timestamp_to_datetime_string(&friendship.updated_at),
             "message": friendship.message,
             "rejectReason": friendship.reject_reason,
+            "friendUsername": friendship.friend_username,
+            "friendNickname": friendship.friend_nickname,
+            "friendAvatarUrl": friendship.friend_avatar_url,
         })
     }
 
@@ -174,7 +182,7 @@ impl FriendServiceHandler {
             "username": friend.username,
             "nickname": friend.nickname,
             "avatarUrl": friend.avatar_url,
-            "friendshipCreatedAt": timestamp_to_rfc3339(&friend.friendship_created_at),
+            "friendshipCreatedAt": timestamp_to_datetime_string(&friend.friendship_created_at),
         })
     }
 } 
