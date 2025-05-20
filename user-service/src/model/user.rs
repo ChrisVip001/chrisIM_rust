@@ -23,7 +23,6 @@ pub struct User {
     pub user_stat: i32,
     pub tenant_id: String,
     pub last_login_time: Option<DateTime<Utc>>,
-    pub user_idx: Option<String>,
 }
 
 /// 创建用户请求数据
@@ -47,7 +46,8 @@ pub struct UpdateUserData {
     pub head_image: Option<String>,
     pub head_image_thumb: Option<String>,
     pub sex: Option<u32>,
-    pub user_id: String,
+    pub user_id: Option<String>,
+    pub username: Option<String>,
 }
 
 impl From<User> for user::User {
@@ -79,7 +79,6 @@ impl From<User> for user::User {
                 seconds: dt.timestamp(),
                 nanos: dt.timestamp_subsec_nanos() as i32,
             }),
-            user_idx: user.user_idx,
         }
     }
 }
@@ -115,7 +114,8 @@ impl From<user::UpdateUserRequest> for UpdateUserData {
             head_image: req.head_image,
             head_image_thumb: req.head_image_thumb,
             sex: req.sex.map(|x| x as u32),
-            user_id: req.user_id
+            user_id: req.user_id,
+            username: req.username,
         }
     }
 }
@@ -150,7 +150,6 @@ pub struct ForgetPasswordData {
     pub username: String,
     pub password: String,
     pub tenant_id : String,
-    pub phone: String,
 }
 
 impl From<user::ForgetPasswordRequest> for ForgetPasswordData {
@@ -159,7 +158,6 @@ impl From<user::ForgetPasswordRequest> for ForgetPasswordData {
             username: req.username,
             password: req.password,
             tenant_id: req.tenant_id,
-            phone: req.phone,
         }
     }
 }

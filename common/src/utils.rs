@@ -2,6 +2,8 @@ use crate::{models::Claims, Error, Result};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use std::env;
+use rand::distr::Alphanumeric;
+use rand::Rng;
 use uuid::Uuid;
 use regex::Regex;
 
@@ -62,3 +64,18 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 pub fn validate_phone(phone: &str) -> bool {
     Regex::new(r"^1[3-9]\d{9}$").expect("手机号正则表达式编译失败").is_match(phone)
 }
+
+
+pub fn generate_user_id() -> String {
+    let uuid = Uuid::new_v4().simple(); // 生成32位的UUID（无连字符）
+    let mut rng = rand::rng();
+
+    // 取UUID的前16位，并补充6位随机字母和数字
+    let prefix = &uuid.to_string()[..16];
+    let suffix: String = (0..6)
+        .map(|_| rng.sample(Alphanumeric) as char)
+        .collect();
+
+    format!("{}{}", prefix, suffix)
+}
+

@@ -88,7 +88,10 @@ impl UserServiceHandler {
 
             // 更新用户
             (&Method::PUT, "updateUser") | (&Method::PATCH, "updateUser") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let user_id = get_optional_string(&body, "user_id", None);
+                if user_id.clone().unwrap_or_default().is_empty() {
+                    return Ok(error_response("用户ID不能为空", StatusCode::BAD_REQUEST));
+                }
 
                 let nickname = get_optional_string(&body, "nickname", None);
                 let email = get_optional_string(&body, "email", None);
@@ -99,6 +102,7 @@ impl UserServiceHandler {
                 let head_image_thumb = get_optional_string(&body, "head_image_thumb", None);
                 let sex = get_optional_string(&body, "sex", None)
                     .and_then(|s| s.parse::<i32>().ok());
+                let username = get_optional_string(&body, "username", None);
 
                 let request = proto::user::UpdateUserRequest {
                     user_id,
@@ -110,6 +114,7 @@ impl UserServiceHandler {
                     head_image,
                     head_image_thumb,
                     sex,
+                    username,
                 };
 
                 let response = self.client.update_user(request).await?;
@@ -149,8 +154,8 @@ impl UserServiceHandler {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
 
-                if username.is_empty() || password.is_empty() {
-                    return Ok(error_response("用户名或者密码不能为空", StatusCode::BAD_REQUEST));
+                if username.is_empty() {
+                    return Ok(error_response("用户名不能为空", StatusCode::BAD_REQUEST));
                 }
 
                 let request = proto::user::RegisterRequest {
@@ -207,8 +212,8 @@ impl UserServiceHandler {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
 
-                if phone.is_empty() || password.is_empty() {
-                    return Ok(error_response("手机号或者密码不能为空", StatusCode::BAD_REQUEST));
+                if phone.is_empty() {
+                    return Ok(error_response("手机号不能为空", StatusCode::BAD_REQUEST));
                 }
 
                 let request = proto::user::RegisterRequest {
@@ -245,14 +250,8 @@ impl UserServiceHandler {
                     .or_else(|| body.get("username"))
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
-                let phone = body
-                    .get("phone")
-                    .or_else(|| body.get("phone"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if username.is_empty() && phone.is_empty() {
-                    return Ok(error_response("用户名或者手机号不能为空", StatusCode::BAD_REQUEST));
+                if username.is_empty() {
+                    return Ok(error_response("账号或者手机号不能为空", StatusCode::BAD_REQUEST));
                 }
 
                 let password = body
@@ -260,6 +259,10 @@ impl UserServiceHandler {
                     .or_else(|| body.get("password"))
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
+                if password.is_empty() {
+                    return Ok(error_response("密码不能为空", StatusCode::BAD_REQUEST));
+                }
+
                 let tenant_id = body
                     .get("tenant_id")
                     .or_else(|| body.get("tenant_id"))
@@ -270,7 +273,6 @@ impl UserServiceHandler {
                     username: username.to_string(),
                     password: password.to_string(),
                     tenant_id: tenant_id.to_string(),
-                    phone: phone.to_string(),
                 };
 
                 match self.client.forget_password(request).await {
@@ -370,7 +372,6 @@ impl UserServiceHandler {
             "user_stat" : user.user_stat,
             "tenant_id" : user.tenant_id,
             "last_login_time" : format_timestamp(user.last_login_time.clone()),
-            "user_idx" : user.user_idx,
         })
     }
 

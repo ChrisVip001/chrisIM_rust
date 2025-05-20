@@ -6,7 +6,7 @@ use sqlx::FromRow;
 /// 用户设置数据库模型
 #[derive(Debug, Clone, Serialize, Deserialize,FromRow)]
 pub struct UserConfig {
-    pub id: String,
+    pub id: i32,
     pub user_id: String,
     pub allow_phone_search: Option<i32>,
     pub allow_id_search: Option<i32>,

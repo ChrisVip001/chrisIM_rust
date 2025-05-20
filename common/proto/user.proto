@@ -61,7 +61,7 @@ message GetUserByUsernameRequest {
 
 // 更新用户请求
 message UpdateUserRequest {
-  string user_id = 1;
+  optional string user_id = 1;
   optional string nickname = 2;
   optional string email = 3;
   optional string avatar_url = 4;
@@ -70,6 +70,7 @@ message UpdateUserRequest {
   optional string head_image = 7;
   optional string head_image_thumb = 8;
   optional int32 sex = 9;
+  optional string username = 10;
 }
 
 // 验证密码请求
@@ -119,7 +120,6 @@ message User {
   int32 user_stat = 13;
   string tenant_id = 14;
   google.protobuf.Timestamp last_login_time = 15;
-  optional string user_idx = 16;
 }
 
 // 用户注册请求
@@ -137,7 +137,6 @@ message ForgetPasswordRequest{
   string username = 1;
   string password = 2;
   string tenant_id = 3;
-  string phone = 4;
 }
 
 // 用户设置请求
