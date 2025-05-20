@@ -45,11 +45,15 @@ message AcceptFriendRequestRequest {
 message RejectFriendRequestRequest {
   string user_id = 1;
   string friend_id = 2;
+  string reason = 3;
 }
 
 // 获取好友列表请求
 message GetFriendListRequest {
   string user_id = 1;
+  int64 page = 2;         // 页码，从1开始，0表示使用默认值
+  int64 page_size = 3;    // 每页数量，0表示使用默认值
+  string sort_by = 4;     // 排序方式: username_asc, username_desc, created_at_asc, created_at_desc
 }
 
 // 获取好友列表响应
@@ -103,6 +107,7 @@ message Friendship {
   FriendshipStatus status = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
+  optional string reject_reason = 8;
 }
 
 // 好友
@@ -112,6 +117,7 @@ message Friend {
   optional string nickname = 3;
   optional string avatar_url = 4;
   google.protobuf.Timestamp friendship_created_at = 5;
+  optional string remark = 6;   // 好友备注名称
 }
 
 // 好友关系状态

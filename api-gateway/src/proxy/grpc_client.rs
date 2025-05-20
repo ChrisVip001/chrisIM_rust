@@ -92,12 +92,12 @@ impl GrpcClientFactoryImpl {
     /// 创建新的通用gRPC客户端工厂
     pub fn new() -> Self {
         let service_registry = ServiceRegistry::from_env();
-        
+
         // 创建各服务客户端
         let user_client = UserServiceGrpcClient::from_env();
         let friend_client = FriendServiceGrpcClient::from_env();
         let group_client = GroupServiceGrpcClient::from_env();
-        
+
         // 创建各服务处理器
         let user_service = UserServiceHandler::new(user_client);
         let friend_service = FriendServiceHandler::new(friend_client);

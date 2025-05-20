@@ -7,10 +7,7 @@ use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
 
-use super::common::{
-    success_response, success_with_message, error_response,
-    extract_string_param, get_optional_string, timestamp_to_rfc3339
-};
+use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, timestamp_to_rfc3339, format_timestamp};
 
 /// 用户服务处理器
 #[derive(Clone)]
@@ -97,6 +94,11 @@ impl UserServiceHandler {
                 let email = get_optional_string(&body, "email", None);
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
                 let password = get_optional_string(&body, "password", None);
+                let address = get_optional_string(&body, "address", None);
+                let head_image = get_optional_string(&body, "head_image", None);
+                let head_image_thumb = get_optional_string(&body, "head_image_thumb", None);
+                let sex = get_optional_string(&body, "sex", None)
+                    .and_then(|s| s.parse::<i32>().ok());
 
                 let request = proto::user::UpdateUserRequest {
                     user_id,
@@ -104,6 +106,10 @@ impl UserServiceHandler {
                     email,
                     avatar_url,
                     password,
+                    address,
+                    head_image,
+                    head_image_thumb,
+                    sex,
                 };
 
                 let response = self.client.update_user(request).await?;
@@ -291,8 +297,8 @@ impl UserServiceHandler {
             "email": user.email,
             "nickname": user.nickname,
             "avatarUrl": user.avatar_url,
-            "createdAt": timestamp_to_rfc3339(&user.created_at),
-            "updatedAt": timestamp_to_rfc3339(&user.updated_at),
+            "createdAt": format_timestamp(user.created_at.clone()),
+            "updatedAt": format_timestamp(user.updated_at.clone()),
             "phone" : user.phone,
             "address" : user.address,
             "head_image" : user.head_image,
@@ -300,7 +306,7 @@ impl UserServiceHandler {
             "sex" : user.sex,
             "user_stat" : user.user_stat,
             "tenant_id" : user.tenant_id,
-            "last_login_time" : timestamp_to_rfc3339(&user.last_login_time),
+            "last_login_time" : format_timestamp(user.last_login_time.clone()),
             "user_idx" : user.user_idx,
         })
     }

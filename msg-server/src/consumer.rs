@@ -8,33 +8,49 @@ use cache::Cache;
 use common::config::AppConfig;
 use common::error::Error;
 use common::message::{GroupMemSeq, Msg, MsgRead, MsgType};
+use common::db::DbRepo;
+use common::message_box::MsgRecBoxRepo;
+use common::utils;
 
 use crate::pusher::{push_service, Pusher};
 
-/// message type: single, group, other
+/// 消息类型的简化枚举
+/// 用于内部区分单聊和群聊消息的处理逻辑
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum MsgType2 {
+    // 单聊消息
     Single,
+    // 群聊消息
     Group,
 }
 
+/// 消息消费者服务
+/// 负责从Kafka消费消息，处理消息，并分发到各个目标
 pub struct ConsumerService {
+    // Kafka消费者实例
     consumer: StreamConsumer,
+    // 数据库操作封装
     db: Arc<DbRepo>,
+    // 消息盒子仓库，用于存储离线消息
     msg_box: Arc<dyn MsgRecBoxRepo>,
+    // 消息推送器，用于将消息推送给客户端
     pusher: Arc<dyn Pusher>,
+    // 缓存接口，用于存取高频访问数据
     cache: Arc<dyn Cache>,
+    // 序列号步长，用于生成消息序列号
     seq_step: i32,
 }
 
 impl ConsumerService {
+    /// 创建一个新的消费者服务实例
+    /// 初始化Kafka消费者和各种依赖组件
     pub async fn new(config: &AppConfig) -> Self {
-        info!("start kafka consumer:\t{:?}", config.kafka);
-        // init kafka consumer
+        info!("启动Kafka消费者:\t{:?}", config.kafka);
+        // 初始化Kafka消费者
         let consumer: StreamConsumer = ClientConfig::new()
             .set("group.id", &config.kafka.group)
             .set("bootstrap.servers", config.kafka.hosts.join(","))
-            .set("enable.auto.commit", "false")
+            .set("enable.auto.commit", "false") // 禁用自动提交，使用手动提交确保消息处理
             .set(
                 "session.timeout.ms",
                 config.kafka.consumer.session_timeout.to_string(),
@@ -43,25 +59,29 @@ impl ConsumerService {
                 "socket.timeout.ms",
                 config.kafka.connect_timeout.to_string(),
             )
-            .set("enable.partition.eof", "false")
+            .set("enable.partition.eof", "false") // 禁用分区结束标记
             .set(
                 "auto.offset.reset",
                 config.kafka.consumer.auto_offset_reset.clone(),
             )
             .create()
-            .expect("Consumer creation failed");
+            .expect("消费者创建失败");
 
-        // todo register to service register center to monitor the service
-        // subscribe to topic
+        // TODO: 向服务注册中心注册服务以监控服务状态
+        // 订阅Kafka主题
         consumer
             .subscribe(&[&config.kafka.topic])
-            .expect("Can't subscribe to specified topic");
+            .expect("无法订阅指定的主题");
 
+        // 初始化推送服务
         let pusher = push_service(config).await;
+        // 初始化数据库仓库
         let db = Arc::new(DbRepo::new(config).await);
 
+        // 获取序列号步长配置
         let seq_step = config.redis.seq_step;
 
+        // 初始化缓存和消息盒子仓库
         let cache = cache::cache(config);
         let msg_box = msg_rec_box_repo(config).await;
 
@@ -75,18 +95,22 @@ impl ConsumerService {
         }
     }
 
+    /// 启动消息消费循环
+    /// 不断从Kafka获取消息并处理
     pub async fn consume(&mut self) -> Result<(), Error> {
         loop {
             match self.consumer.recv().await {
-                Err(e) => error!("Kafka error: {}", e),
+                Err(e) => error!("Kafka错误: {}", e),
                 Ok(m) => {
+                    // 尝试获取消息内容并处理
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Err(e) = self.handle_msg(payload).await {
-                            error!("Failed to handle message: {:?}", e);
+                            error!("处理消息失败: {:?}", e);
                             continue;
                         }
+                        // 异步提交消息偏移量，确认消息已处理
                         if let Err(e) = self.consumer.commit_message(&m, CommitMode::Async) {
-                            error!("Failed to commit message: {:?}", e);
+                            error!("提交消息偏移量失败: {:?}", e);
                         }
                     }
                 }
@@ -94,42 +118,52 @@ impl ConsumerService {
         }
     }
 
-    // todo handle error for the task
+    /// 处理单条消息的核心逻辑
+    /// 解析消息内容，根据类型进行不同处理
     async fn handle_msg(&self, payload: &str) -> Result<(), Error> {
-        debug!("Received message: {:#?}", payload);
+        debug!("收到消息: {:#?}", payload);
 
+        // 将JSON字符串解析为消息对象
         let mut msg: Msg = serde_json::from_str(payload)?;
 
+        // 将整数类型转换为枚举类型，便于处理
         let mt = MsgType::try_from(msg.msg_type).map_err(|e| Error::Internal(e.to_string()))?;
 
-        // handle message read type
+        // 处理已读类型的消息，这类消息有特殊的处理逻辑
         if mt == MsgType::Read {
             return self.handle_msg_read(msg).await;
         }
 
+        // 根据消息类型进行分类，确定处理策略
         let (msg_type, need_increase_seq, need_history) = self.classify_msg_type(mt).await;
 
-        // check send seq if need to increase max_seq
+        // 检查发送者序列号，如果需要则增加最大序列号
         self.handle_send_seq(&msg.send_id).await?;
 
-        // handle receiver seq
+        // 处理接收者序列号
         if need_increase_seq {
+            // 为消息分配一个新的序列号
             let cur_seq = self.increase_message_seq(&msg.receiver_id).await?;
             msg.seq = cur_seq;
         }
 
-        // query members id from cache if the message type is group
+        // 如果是群聊消息，查询群成员ID并处理群聊序列号
         let members = self.handle_group_seq(&msg_type, &mut msg).await?;
 
+        // 创建任务集合，包含数据库存储和消息推送
         let mut tasks = Vec::with_capacity(2);
-        // send to db
+        
+        // 判断是否需要发送到数据库
         if Self::get_send_to_db_flag(&mt) {
             let cloned_msg = msg.clone();
             let cloned_type = msg_type.clone();
             let cloned_members = members.clone();
-            // send to db rpc server
+            
+            // 克隆数据库和消息盒子引用用于异步任务
             let db = self.db.clone();
             let msg_box = self.msg_box.clone();
+            
+            // 创建发送到数据库的异步任务
             let to_db = tokio::spawn(async move {
                 if let Err(e) = Self::send_to_db(
                     db,
@@ -141,31 +175,34 @@ impl ConsumerService {
                 )
                 .await
                 {
-                    error!("failed to send message to db, error: {:?}", e);
+                    error!("发送消息到数据库失败: {:?}", e);
                 }
             });
 
             tasks.push(to_db);
         }
 
-        // send to pusher
+        // 创建发送到推送服务的异步任务
         let pusher = self.pusher.clone();
         let to_pusher = tokio::spawn(async move {
             match msg_type {
+                // 处理单聊消息推送
                 MsgType2::Single => {
                     if let Err(e) = pusher.push_single_msg(msg).await {
-                        error!("failed to send message to pusher, error: {:?}", e);
+                        error!("发送消息到推送服务失败: {:?}", e);
                     }
                 }
+                // 处理群聊消息推送
                 MsgType2::Group => {
                     if let Err(e) = pusher.push_group_msg(msg, members).await {
-                        error!("failed to send message to pusher, error: {:?}", e);
+                        error!("发送消息到推送服务失败: {:?}", e);
                     }
                 }
             }
         });
         tasks.push(to_pusher);
 
+        // 等待所有任务完成
         futures::future::try_join_all(tasks)
             .await
             .map_err(|e| Error::Internal(e.to_string()))?;
@@ -173,12 +210,15 @@ impl ConsumerService {
         Ok(())
     }
 
+    /// 根据消息类型分类，确定处理策略
+    /// 返回值: (消息类型, 是否需要增加序列号, 是否需要存储历史记录)
     async fn classify_msg_type(&self, mt: MsgType) -> (MsgType2, bool, bool) {
         let msg_type;
         let mut need_increase_seq = false;
         let mut need_history = true;
 
         match mt {
+            // 单聊消息类型，需要增加序列号
             MsgType::SingleMsg
             | MsgType::SingleCallInviteNotAnswer
             | MsgType::SingleCallInviteCancel
@@ -188,15 +228,17 @@ impl ConsumerService {
             | MsgType::FriendApplyReq
             | MsgType::FriendApplyResp
             | MsgType::FriendDelete => {
-                // single message and need to increase seq
+                // 单聊消息，需要增加序列号
                 msg_type = MsgType2::Single;
                 need_increase_seq = true;
             }
+            // 群聊消息类型，序列号处理方式特殊
             MsgType::GroupMsg => {
-                // group message and need to increase seq
-                // but not here, need to increase everyone's seq
+                // 群聊消息，需要增加每个成员的序列号
+                // 但不是在这里处理，而是在handle_group_seq中处理
                 msg_type = MsgType2::Group;
             }
+            // 其他消息类型...
             MsgType::GroupInvitation
             | MsgType::GroupInviteNew
             | MsgType::GroupMemberExit
@@ -224,8 +266,8 @@ impl ConsumerService {
                 need_history = false;
             }
         }
-
-        (msg_type, need_increase_seq, need_history)
+        
+        return (msg_type, need_increase_seq, need_history);
     }
 
     /// query members id from cache

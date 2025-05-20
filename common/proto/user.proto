@@ -60,6 +60,10 @@ message UpdateUserRequest {
   optional string email = 3;
   optional string avatar_url = 4;
   optional string password = 5;
+  optional string address = 6;
+  optional string head_image = 7;
+  optional string head_image_thumb = 8;
+  optional int32 sex = 9;
 }
 
 // 验证密码请求

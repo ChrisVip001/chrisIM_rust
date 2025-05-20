@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use common::proto::friend::FriendshipStatus;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row, FromRow, types::chrono::NaiveDateTime};
 use uuid::Uuid;
 
 use crate::model::friendship::{Friend, Friendship};
@@ -53,6 +53,7 @@ impl FriendshipRepository {
             status: result.status.parse::<i32>().unwrap_or(0),
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
+            reject_reason: None,
         })
     }
 
@@ -65,6 +66,10 @@ impl FriendshipRepository {
         let now = Utc::now();
         let now_naive = now.naive_utc();
 
+        // 开始事务
+        let mut tx = self.pool.begin().await?;
+
+        // 1. 更新friendships表中的状态为已接受
         let result = sqlx::query!(
             r#"
             UPDATE friendships
@@ -77,8 +82,44 @@ impl FriendshipRepository {
             user_id.to_string(),
             friend_id.to_string()
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+
+        // 2. 为用户和好友双向插入好友关系
+        // 用户 -> 好友方向
+        let relation_id1 = Uuid::new_v4();
+        sqlx::query!(
+            r#"
+            INSERT INTO friend_relation (id, user_id, friend_id, status, create_time)
+            VALUES ($1, $2, $3, 1, $4)
+            ON CONFLICT (user_id, friend_id) DO NOTHING
+            "#,
+            relation_id1.to_string(),
+            user_id.to_string(),
+            friend_id.to_string(),
+            now_naive
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // 好友 -> 用户方向
+        let relation_id2 = Uuid::new_v4();
+        sqlx::query!(
+            r#"
+            INSERT INTO friend_relation (id, user_id, friend_id, status, create_time)
+            VALUES ($1, $2, $3, 1, $4)
+            ON CONFLICT (user_id, friend_id) DO NOTHING
+            "#,
+            relation_id2.to_string(),
+            friend_id.to_string(),
+            user_id.to_string(),
+            now_naive
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // 提交事务
+        tx.commit().await?;
 
         Ok(Friendship {
             id: Uuid::parse_str(&result.id).unwrap(),
@@ -88,6 +129,7 @@ impl FriendshipRepository {
             status: result.status.parse::<i32>().unwrap_or(0),
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
+            reject_reason: None,
         })
     }
 
@@ -96,19 +138,20 @@ impl FriendshipRepository {
         &self,
         user_id: Uuid,
         friend_id: Uuid,
+        reason: Option<String>,
     ) -> Result<Friendship> {
         let now = Utc::now();
         let now_naive = now.naive_utc();
-
         let result = sqlx::query!(
             r#"
             UPDATE friendships
-            SET status = $1, updated_at = $2
-            WHERE user_id = $3 AND friend_id = $4
-            RETURNING id, user_id, friend_id, message,status, created_at, updated_at
+            SET status = $1, updated_at = $2, reject_reason = $3
+            WHERE user_id = $4 AND friend_id = $5
+            RETURNING id, user_id, friend_id, message, status, created_at, updated_at, reject_reason
             "#,
             (FriendshipStatus::Rejected as i32).to_string(),
             now_naive,
+            reason.as_deref(),
             user_id.to_string(),
             friend_id.to_string()
         )
@@ -123,56 +166,96 @@ impl FriendshipRepository {
             status: result.status.parse::<i32>().unwrap_or(0),
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
+            reject_reason: result.reject_reason,
         })
     }
 
     // 获取好友列表
-    pub async fn get_friend_list(&self, user_id: Uuid) -> Result<Vec<Friend>> {
-        let friends = sqlx::query!(
+    pub async fn get_friend_list(
+        &self,
+        user_id: Uuid,
+        page: Option<i64>,
+        page_size: Option<i64>,
+        sort_by: Option<String>,
+    ) -> Result<Vec<Friend>> {
+        // 默认分页参数
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(20);
+        let offset = (page - 1) * page_size;
+        
+        // 排序字段处理 - 使用安全的预定义字段排序
+        let order_by = match sort_by.as_deref() {
+            Some("username_asc") => "u.username ASC",
+            Some("username_desc") => "u.username DESC",
+            Some("created_at_asc") => "fr.create_time ASC",
+            Some("created_at_desc") => "fr.create_time DESC",
+            _ => "fr.create_time DESC", // 默认按创建时间降序
+        };
+
+        // 构建SQL查询字符串
+        let query = format!(
             r#"
             SELECT 
-                u.id, 
+                u.id::text, 
                 u.username, 
                 u.nickname, 
                 u.avatar_url, 
-                f.created_at as friendship_created_at
+                fr.create_time as friendship_created_at, 
+                fr.remark
             FROM users u
-            JOIN friendships f ON 
-                (f.friend_id = u.id AND f.user_id = $1) OR 
-                (f.user_id = u.id AND f.friend_id = $1)
-            WHERE f.status = $2
+            JOIN friend_relation fr ON fr.friend_id = u.id 
+            WHERE fr.user_id = $1 AND fr.status = 1
+            ORDER BY {}
+            LIMIT $2 OFFSET $3
             "#,
-            user_id.to_string(),
-            (FriendshipStatus::Accepted as i32).to_string()
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let result = friends
+            order_by
+        );
+        
+        // 创建一个中间结构体用于接收数据库结果
+        #[derive(sqlx::FromRow)]
+        struct FriendRow {
+            id: String,
+            username: String,
+            nickname: Option<String>,
+            avatar_url: Option<String>,
+            friendship_created_at: NaiveDateTime,
+            remark: Option<String>,
+        }
+        
+        // 使用query_as执行查询并映射结果
+        let rows = sqlx::query_as::<_, FriendRow>(&query)
+            .bind(user_id.to_string())
+            .bind(page_size)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+        
+        // 将FriendRow转换为Friend
+        let friends = rows
             .into_iter()
-            .map(|f| Friend {
-                id: Uuid::parse_str(&f.id).unwrap(),
-                username: f.username,
-                nickname: f.nickname,
-                avatar_url: f.avatar_url,
-                friendship_created_at: Utc.from_utc_datetime(&f.friendship_created_at),
+            .map(|row| Friend {
+                id: Uuid::parse_str(&row.id).unwrap(),
+                username: row.username,
+                nickname: row.nickname,
+                avatar_url: row.avatar_url,
+                friendship_created_at: Utc.from_utc_datetime(&row.friendship_created_at),
+                remark: row.remark,
             })
             .collect();
-
-        Ok(result)
+            
+        Ok(friends)
     }
 
     // 获取好友请求列表
     pub async fn get_friend_requests(&self, user_id: Uuid) -> Result<Vec<Friendship>> {
         let requests = sqlx::query!(
             r#"
-            SELECT id, user_id, friend_id,message, status, created_at, updated_at
+            SELECT id, user_id, friend_id, message, status, created_at, updated_at,reject_reason
             FROM friendships
-            WHERE friend_id = $1 AND status = $2
+            WHERE friend_id = $1 or user_id=$2
             "#,
             user_id.to_string(),
-            (FriendshipStatus::Pending as i32).to_string()
-        )
+            user_id.to_string())
         .fetch_all(&self.pool)
         .await?;
 
@@ -186,6 +269,7 @@ impl FriendshipRepository {
                 status: r.status.parse::<i32>().unwrap_or(0),
                 created_at: Utc.from_utc_datetime(&r.created_at),
                 updated_at: Utc.from_utc_datetime(&r.updated_at),
+                reject_reason: Some(r.reject_reason.unwrap_or_default()),
             })
             .collect();
 
@@ -237,5 +321,22 @@ impl FriendshipRepository {
                 _ => FriendshipStatus::Pending,
             }
         }))
+    }
+
+    // 检查用户是否存在
+    pub async fn check_user_exists(&self, user_id: Uuid) -> Result<bool> {
+        let result = sqlx::query!(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM users
+                WHERE id = $1
+            ) AS "exists!"
+            "#,
+            user_id.to_string()
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(result.exists)
     }
 }

@@ -16,17 +16,27 @@ use common::message::chat_service_server::{ChatService, ChatServiceServer};
 use common::message::{MsgResponse, MsgType, SendMsgRequest};
 use tonic_health::server::{Health, HealthServer};
 
+/// 消息RPC服务实现
+/// 负责接收客户端消息并发送到Kafka消息队列
 pub struct ChatRpcService {
+    // Kafka生产者实例，用于发送消息到Kafka
     kafka: FutureProducer,
+    // Kafka主题名称，消息将被发送到此主题
     topic: String,
 }
 
 impl ChatRpcService {
+    /// 创建一个新的ChatRpcService实例
     pub fn new(kafka: FutureProducer, topic: String) -> Self {
         Self { kafka, topic }
     }
+    
+    /// 启动消息服务
+    /// 初始化Kafka生产者、确保主题存在、注册服务，并启动RPC服务器
     pub async fn start(config: &AppConfig) {
+        // 构建Kafka代理地址字符串
         let broker = config.kafka.hosts.join(",");
+        // 配置并创建Kafka生产者
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", &broker)
             .set(
@@ -38,7 +48,7 @@ impl ChatRpcService {
                 config.kafka.connect_timeout.to_string(),
             )
             .set("acks", config.kafka.producer.acks.clone())
-            // make sure the message is sent exactly once
+            // 确保消息精确发送一次
             .set("enable.idempotence", "true")
             .set("retries", config.kafka.producer.max_retry.to_string())
             .set(
@@ -46,32 +56,38 @@ impl ChatRpcService {
                 config.kafka.producer.retry_interval.to_string(),
             )
             .create()
-            .expect("Producer creation error");
+            .expect("生产者创建失败");
 
+        // 确保Kafka主题存在，如不存在则创建
         Self::ensure_topic_exists(&config.kafka.topic, &broker, config.kafka.connect_timeout)
             .await
-            .expect("Topic creation error");
+            .expect("主题创建失败");
 
-        // register service
+        // 向服务注册中心注册消息服务
         utils::register_service(config, Component::MessageServer)
             .await
-            .expect("Service register error");
-        info!("<chat> rpc service register to service register center");
+            .expect("服务注册失败");
+        info!("<chat> RPC服务已注册到服务注册中心");
 
-        // health check
+        // 创建健康检查服务
+        // 用于其他服务检查此服务是否在正常运行
         let health_service = HealthServer::new(Health::default());
-        info!("<chat> rpc service health check started");
+        info!("<chat> RPC服务健康检查已启动");
 
         // 创建日志拦截器
+        // 用于记录和跟踪所有RPC请求
         let logging_interceptor = LoggingInterceptor::new();
 
+        // 创建聊天RPC服务实例
         let chat_rpc = Self::new(producer, config.kafka.topic.clone());
+        // 包装服务并添加日志拦截器
         let service = ChatServiceServer::with_interceptor(chat_rpc, logging_interceptor);
         info!(
-            "<chat> rpc service started at {}",
+            "<chat> RPC服务已启动，监听地址: {}",
             config.rpc.chat.rpc_server_url()
         );
 
+        // 启动RPC服务器，添加健康检查和聊天服务
         Server::builder()
             .add_service(health_service)
             .add_service(service)
@@ -80,18 +96,20 @@ impl ChatRpcService {
             .unwrap();
     }
 
+    /// 确保Kafka主题存在
+    /// 如果主题不存在，则创建该主题
     async fn ensure_topic_exists(
         topic_name: &str,
         brokers: &str,
         timeout: u16,
     ) -> Result<(), KafkaError> {
-        // Create Kafka AdminClient
+        // 创建Kafka管理客户端
         let admin_client: AdminClient<DefaultClientContext> = ClientConfig::new()
             .set("bootstrap.servers", brokers)
             .set("socket.timeout.ms", timeout.to_string())
             .create()?;
 
-        // create topic
+        // 创建新主题的配置
         let new_topics = [NewTopic {
             name: topic_name,
             num_partitions: 1,
@@ -99,19 +117,18 @@ impl ChatRpcService {
             config: vec![],
         }];
 
-        // fixme not find the way to check topic exist
-        // so just create it and judge the error,
-        // but don't find the error type for topic exist
-        // and this way below can work well.
+        // 注意：暂时没有找到检查主题是否存在的方法
+        // 因此我们尝试创建主题，并通过错误判断主题是否已存在
+        // 这种方法虽然不是最优的，但目前可以正常工作
         let options = AdminOptions::new();
         admin_client.create_topics(&new_topics, &options).await?;
         match admin_client.create_topics(&new_topics, &options).await {
             Ok(_) => {
-                info!("Topic not exist; create '{}' ", topic_name);
+                info!("主题不存在；已创建主题 '{}' ", topic_name);
                 Ok(())
             }
             Err(KafkaError::AdminOpCreation(_)) => {
-                println!("Topic '{}' already exists.", topic_name);
+                println!("主题 '{}' 已存在。", topic_name);
                 Ok(())
             }
             Err(err) => Err(err),
@@ -121,43 +138,49 @@ impl ChatRpcService {
 
 #[async_trait]
 impl ChatService for ChatRpcService {
-    /// send message to mq
-    /// generate msg id and send time
+    /// 发送消息到消息队列
+    /// 生成消息ID和发送时间，并将消息发送到Kafka
     async fn send_msg(
         &self,
         request: tonic::Request<SendMsgRequest>,
     ) -> Result<tonic::Response<MsgResponse>, tonic::Status> {
+        // 从请求中提取消息
         let mut msg = request
             .into_inner()
             .message
-            .ok_or(tonic::Status::invalid_argument("message is empty"))?;
+            .ok_or(tonic::Status::invalid_argument("消息为空"))?;
 
-        // generate msg id
+        // 为特定类型的消息生成服务器ID
+        // 某些系统消息不需要生成新的服务器ID
         if !(msg.msg_type == MsgType::GroupDismissOrExitReceived as i32
             || msg.msg_type == MsgType::GroupInvitationReceived as i32
             || msg.msg_type == MsgType::FriendshipReceived as i32)
         {
+            // 使用nanoid生成唯一的消息ID
             msg.server_id = nanoid!();
         }
+        // 设置消息发送时间为当前时间戳
         msg.send_time = chrono::Utc::now().timestamp_millis();
 
-        // send msg to kafka
+        // 将消息序列化为JSON并发送到Kafka
         let payload = serde_json::to_string(&msg).unwrap();
-        // let kafka generate key, then we need set FutureRecord<String, type>
+        // 让Kafka自动生成消息键
         let record: FutureRecord<String, String> = FutureRecord::to(&self.topic).payload(&payload);
 
-        info!("send msg to kafka: {:?}", record);
+        info!("将消息发送到Kafka: {:?}", record);
+        // 发送消息到Kafka并处理结果
         let err = match self.kafka.send(record, Duration::from_secs(0)).await {
             Ok(_) => String::new(),
             Err((err, msg)) => {
                 error!(
-                    "send msg to kafka error: {:?}; owned message: {:?}",
+                    "发送消息到Kafka失败: {:?}; 原始消息: {:?}",
                     err, msg
                 );
                 err.to_string()
             }
         };
 
+        // 返回消息响应，包含本地ID、服务器ID、发送时间和错误信息
         return Ok(tonic::Response::new(MsgResponse {
             local_id: msg.local_id,
             server_id: msg.server_id,
