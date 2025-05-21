@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use prost_types::Timestamp;
 use serde_json::{json, Value};
 
@@ -106,7 +106,11 @@ pub fn datetime_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
 // 格式化显示时间(yyyy-MM-dd HH:mm:ss)
 pub fn format_timestamp(ts: Option<Timestamp>) -> String {
     if let Some(dt) = timestamp_to_datetime(ts) {
-        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+        // 创建一个 UTC+8 的固定偏移量
+        let shanghai_offset = FixedOffset::east_opt(8 * 3600).unwrap(); // 8 小时 = 8 * 3600 秒
+        // 将 UTC 时间转换为东八区时间
+        let shanghai_time = dt.with_timezone(&shanghai_offset);
+        shanghai_time.format("%Y-%m-%d %H:%M:%S").to_string()
     } else {
         "".to_string()
     }

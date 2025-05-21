@@ -398,13 +398,6 @@ impl UserRepository {
         // 检查用户是否存在
         let _user = self.get_user_by_id(id).await?;
 
-        // 更新密码，如果有提供的话
-        let password_hash = if let Some(password) = &data.password {
-            Some(hash_password(password)?)
-        } else {
-            None
-        };
-
         // 动态构建SET子句
         let mut builder = QueryBuilder::new(" UPDATE users SET ");
         let mut first = true;

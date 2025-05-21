@@ -134,4 +134,12 @@ impl UserServiceGrpcClient {
         let response = client.get_user_config(request).await?;
         Ok(response.into_inner())
     }
+
+    // 保存用户设置
+    pub async fn save_user_config(&self, request: UserConfigRequest) -> Result<UserConfigResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = UserServiceClient::new(channel);
+        let response = client.save_user_config(request).await?;
+        Ok(response.into_inner())
+    }
 }

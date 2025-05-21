@@ -1,3 +1,4 @@
+use chrono::FixedOffset;
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
 use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse};
@@ -288,7 +289,7 @@ impl UserService for UserServiceImpl {
         Ok(Response::new(SearchUsersResponse { users, total }))
     }
 
-    /******************************用户配置*************************************/
+    /******************************用户设置*************************************/
     /// 查询用户设置
     async fn get_user_config(
         &self,
@@ -297,13 +298,7 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
         debug!("查询用户设置请求，id: {}", req.user_id);
         let user_config = match self.user_config_repository.get_user_config(&req.user_id).await {
-            Ok(Some(config)) => config,
-            Ok(None) => {
-                // 没有找到配置时返回空响应
-                return Ok(Response::new(UserConfigResponse {
-                    user_config: None,  // proto中的配置为optional
-                }));
-            }
+            Ok(user_config) => user_config,
             Err(err) => {
                 error!("查询用户设置失败: {}", err);
                 return Err(err.into());
