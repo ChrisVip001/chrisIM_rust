@@ -4,6 +4,7 @@ use common::proto::friend::{
     DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest,
     GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse,
     RejectFriendRequestRequest, SendFriendRequestRequest,FriendshipStatus,
+    UnblockUserRequest,BlockUserRequest,UnblockUserResponse,BlockUserResponse,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -351,4 +352,90 @@ impl FriendService for FriendServiceImpl {
             }
         }
     }
+
+    // 拉黑用户
+    async fn block_user(
+        &self,
+        request: Request<BlockUserRequest>,
+    ) -> Result<Response<BlockUserResponse>, Status> {
+        let req = request.into_inner();
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
+            .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+        let blocked_user_id = req
+            .blocked_user_id
+            .parse::<Uuid>()
+            .map_err(|e| Status::invalid_argument(format!("无效的被拉黑用户ID: {}", e)))?;
+
+        // 检查用户是否存在
+        self.check_user_exists(user_id).await?;
+        self.check_user_exists(blocked_user_id).await?;
+
+        // 检查是否已经拉黑
+        if self.repository.is_user_blocked(user_id, blocked_user_id).await.map_err(|e| {
+            error!("检查用户是否被拉黑失败: {}", e);
+            Status::internal("检查用户是否被拉黑失败")
+        })? {
+            return Err(Status::already_exists("该用户已被拉黑"));
+        }
+
+        // 执行拉黑操作
+        match self.repository.block_user(user_id, blocked_user_id).await {
+            Ok(success) => {
+                info!("用户 {} 成功拉黑用户 {}", user_id, blocked_user_id);
+                Ok(Response::new(BlockUserResponse { success }))
+            }
+            Err(e) => {
+                error!("拉黑用户失败: {}", e);
+                Err(Status::internal("拉黑用户失败"))
+            }
+        }
+    }
+
+    // 解除拉黑
+    async fn unblock_user(
+        &self,
+        request: Request<UnblockUserRequest>,
+    ) -> Result<Response<UnblockUserResponse>, Status> {
+        let req = request.into_inner();
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
+            .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+        let blocked_user_id = req
+            .blocked_user_id
+            .parse::<Uuid>()
+            .map_err(|e| Status::invalid_argument(format!("无效的被解除拉黑用户ID: {}", e)))?;
+
+        // 检查用户是否存在
+        self.check_user_exists(user_id).await?;
+        self.check_user_exists(blocked_user_id).await?;
+
+        // 检查是否已经拉黑
+        if !self.repository.is_user_blocked(user_id, blocked_user_id).await.map_err(|e| {
+            error!("检查用户是否被拉黑失败: {}", e);
+            Status::internal("检查用户是否被拉黑失败")
+        })? {
+            return Err(Status::not_found("该用户未被拉黑"));
+        }
+
+        // 执行解除拉黑操作
+        match self.repository.unblock_user(user_id, blocked_user_id).await {
+            Ok(success) => {
+                info!("用户 {} 成功解除拉黑用户 {}", user_id, blocked_user_id);
+                Ok(Response::new(UnblockUserResponse { success }))
+            }
+            Err(e) => {
+                error!("解除拉黑用户失败: {}", e);
+                Err(Status::internal("解除拉黑用户失败"))
+            }
+        }
+    }
+
+  
 }

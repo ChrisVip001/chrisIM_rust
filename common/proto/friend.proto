@@ -26,6 +26,13 @@ service FriendService {
   
   // 检查好友关系
   rpc CheckFriendship (CheckFriendshipRequest) returns (CheckFriendshipResponse);
+  
+  // 拉黑用户
+  rpc BlockUser (BlockUserRequest) returns (BlockUserResponse);
+  
+  // 解除拉黑
+  rpc UnblockUser (UnblockUserRequest) returns (UnblockUserResponse);
+  
 }
 
 // 发送好友请求
@@ -134,4 +141,26 @@ enum FriendshipStatus {
   REJECTED = 2;
   BLOCKED = 3;
   EXPIRED = 4;  // 过期状态
-} 
+}
+
+// 拉黑用户请求
+message BlockUserRequest {
+  string user_id = 1;        // 操作用户ID
+  string blocked_user_id = 2; // 被拉黑用户ID
+}
+
+// 拉黑用户响应
+message BlockUserResponse {
+  bool success = 1;
+}
+
+// 解除拉黑请求
+message UnblockUserRequest {
+  string user_id = 1;        // 操作用户ID
+  string blocked_user_id = 2; // 被解除拉黑的用户ID
+}
+
+// 解除拉黑响应
+message UnblockUserResponse {
+  bool success = 1;
+}

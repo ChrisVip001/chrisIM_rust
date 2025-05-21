@@ -6,7 +6,7 @@ use crate::proto::friend::{
     AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest,
     DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse,
     GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest,
-    SendFriendRequestRequest,
+    SendFriendRequestRequest, BlockUserRequest, BlockUserResponse, UnblockUserRequest, UnblockUserResponse,
 };
 
 use crate::grpc_client::GrpcServiceClient;
@@ -158,4 +158,33 @@ impl FriendServiceGrpcClient {
         let response = client.check_friendship(request).await?;
         Ok(response.into_inner())
     }
+
+    /// 拉黑用户
+    pub async fn block_user(&self, user_id: &str, blocked_user_id: &str) -> Result<BlockUserResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = FriendServiceClient::new(channel);
+
+        let request = Request::new(BlockUserRequest {
+            user_id: user_id.to_string(),
+            blocked_user_id: blocked_user_id.to_string(),
+        });
+
+        let response = client.block_user(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 解除拉黑
+    pub async fn unblock_user(&self, user_id: &str, blocked_user_id: &str) -> Result<UnblockUserResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = FriendServiceClient::new(channel);
+
+        let request = Request::new(UnblockUserRequest {
+            user_id: user_id.to_string(),
+            blocked_user_id: blocked_user_id.to_string(),
+        });
+
+        let response = client.unblock_user(request).await?;
+        Ok(response.into_inner())
+    }
+    
 } 

@@ -25,20 +25,22 @@ impl FriendshipRepository {
         let friendship = Friendship::new(user_id, friend_id,message);
 
         // // 将DateTime<Utc>转换为NaiveDateTime
-        // let created_at_naive = friendship.created_at.naive_utc();
-        // let updated_at_naive = friendship.updated_at.naive_utc();
+        let created_at_naive = friendship.created_at.naive_utc();
+        let updated_at_naive = friendship.updated_at.naive_utc();
 
         let result = sqlx::query!(
             r#"
             INSERT INTO friendships (id, user_id, friend_id, message,status, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, now(),now())
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, user_id, friend_id, message,status, created_at, updated_at
             "#,
             friendship.id.to_string(),
             friendship.user_id.to_string(),
             friendship.friend_id.to_string(),
             friendship.message.to_string(),
-            friendship.status.to_string()
+            friendship.status.to_string(),
+            created_at_naive,
+            updated_at_naive
         )
         .fetch_one(&self.pool)
         .await?;
@@ -367,6 +369,10 @@ impl FriendshipRepository {
 
     // 删除好友
     pub async fn delete_friend(&self, user_id: Uuid, friend_id: Uuid) -> Result<bool> {
+        // 开始事务
+        let mut tx = self.pool.begin().await?;
+
+        // 1. 删除 friendships 表中的记录
         let rows_affected = sqlx::query!(
             r#"
             DELETE FROM friendships
@@ -375,11 +381,28 @@ impl FriendshipRepository {
             user_id.to_string(),
             friend_id.to_string()
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
 
-        Ok(rows_affected > 0)
+        // 2. 删除 friend_relation 表中的双向记录
+        let relation_rows_affected = sqlx::query!(
+            r#"
+            DELETE FROM friend_relation
+            WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)
+            "#,
+            user_id.to_string(),
+            friend_id.to_string()
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        // 提交事务
+        tx.commit().await?;
+
+        // 如果任一表中删除了记录，则认为删除成功
+        Ok(rows_affected > 0 || relation_rows_affected > 0)
     }
 
     // 检查好友关系
@@ -388,6 +411,30 @@ impl FriendshipRepository {
         user_id: Uuid,
         friend_id: Uuid,
     ) -> Result<Option<FriendshipStatus>> {
+        // 首先检查 friend_relation 表中的状态
+        let relation_result = sqlx::query!(
+            r#"
+            SELECT status
+            FROM friend_relation
+            WHERE user_id = $1 AND friend_id = $2
+            "#,
+            user_id.to_string(),
+            friend_id.to_string()
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        // 如果在 friend_relation 表中找到记录，直接返回对应状态
+        if let Some(relation) = relation_result {
+            let status = match relation.status {
+                1 => FriendshipStatus::Accepted,
+                2 => FriendshipStatus::Blocked,
+                _ => FriendshipStatus::Accepted,
+            };
+            return Ok(Some(status));
+        }
+
+        // 如果在 friend_relation 表中没有找到记录，则检查 friendships 表
         let result = sqlx::query!(
             r#"
             SELECT status, created_at
@@ -455,5 +502,66 @@ impl FriendshipRepository {
         .fetch_one(&self.pool)
         .await?;
         Ok(result.count.unwrap_or(0))
+    }
+
+
+    // 拉黑用户
+    pub async fn block_user(&self, user_id: Uuid, blocked_user_id: Uuid) -> Result<bool> {
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+        let rows_affected = sqlx::query!(
+            r#"
+            UPDATE friend_relation
+            SET status = 2,  updated_at = $1
+            WHERE user_id = $2 AND friend_id = $3
+            "#,
+            now_naive,
+            user_id.to_string(),
+            blocked_user_id.to_string()
+        )
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
+
+    // 解除拉黑
+    pub async fn unblock_user(&self, user_id: Uuid, blocked_user_id: Uuid) -> Result<bool> {
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+        let rows_affected = sqlx::query!(
+            r#"
+            UPDATE friend_relation
+            SET status = 1, updated_at = $1
+            WHERE user_id = $2 AND friend_id = $3
+            "#,
+            now_naive,
+            user_id.to_string(),
+            blocked_user_id.to_string()
+        )
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
+
+    // 检查用户是否被拉黑
+    pub async fn is_user_blocked(&self, user_id: Uuid, blocked_user_id: Uuid) -> Result<bool> {
+        let result = sqlx::query!(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM friend_relation
+                WHERE user_id = $1 AND friend_id = $2 AND status = 2
+            ) AS "exists!"
+            "#,
+            user_id.to_string(),
+            blocked_user_id.to_string()
+        )
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(result.exists)
     }
 }

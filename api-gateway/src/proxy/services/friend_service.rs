@@ -128,6 +128,7 @@ impl FriendServiceHandler {
                     1 => "ACCEPTED",
                     2 => "REJECTED",
                     3 => "BLOCKED",
+                    4 => "EXPIRED",
                     _ => "UNKNOWN"
                 };
 
@@ -139,6 +140,27 @@ impl FriendServiceHandler {
                     StatusCode::OK
                 ))
             }
+
+            // 拉黑用户
+            (&Method::POST, "block") => {
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let blocked_user_id = extract_string_param(&body, "blockedUserId", Some("blocked_user_id"))?;
+
+                let response = self.client.block_user(&user_id, &blocked_user_id).await?;
+
+                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+            }
+
+            // 解除拉黑
+            (&Method::POST, "unblock") => {
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let blocked_user_id = extract_string_param(&body, "blockedUserId", Some("blocked_user_id"))?;
+
+                let response = self.client.unblock_user(&user_id, &blocked_user_id).await?;
+
+                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+            }
+            
 
             // 其他未实现的方法
             _ => {
