@@ -160,7 +160,70 @@ impl FriendServiceHandler {
 
                 Ok(success_response(json!({"success": response.success}), StatusCode::OK))
             }
-            
+
+            // 创建或更新好友分组
+            (&Method::POST, "createOrUpdateGroup") => {
+                let id = extract_string_param(&body, "id", None)?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let group_name = extract_string_param(&body, "groupName", Some("group_name"))?;
+                let sort_order = body.get("sortOrder").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let friend_ids = body.get("friendIds")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| anyhow::anyhow!("friendIds 必须是数组"))?
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<String>>();
+
+                let response = self.client.create_or_update_friend_group(
+                    Some(&id),
+                    &user_id,
+                    &group_name,
+                    sort_order,
+                    friend_ids
+                ).await?;
+
+                let group = response.group.ok_or_else(|| anyhow::anyhow!("分组数据为空"))?;
+                let result = json!({
+                    "group": self.convert_friend_group_to_json(&group),
+                    "friendIds": response.friend_ids
+                });
+
+                Ok(success_response(result, StatusCode::OK))
+            }
+
+            // 删除好友分组
+            (&Method::POST, "deleteGroup") => {
+                let id = extract_string_param(&body, "id", Some("id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+
+                let response = self.client.delete_friend_group(&id, &user_id).await?;
+
+                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+            }
+
+            // 获取好友分组列表
+            (&Method::GET, "getGroups") => {
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+
+                let response = self.client.get_friend_groups(&user_id).await?;
+                let groups = response.groups.iter().map(|g| self.convert_friend_group_to_json(g)).collect::<Vec<_>>();
+
+                Ok(success_response(json!({"groups": groups}), StatusCode::OK))
+            }
+
+            // 获取分组好友列表
+            (&Method::GET, "getGroupFriends") => {
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+
+                let response = self.client.get_group_friends(&group_id, &user_id).await?;
+                let friends = response.friends.iter().map(|f| self.convert_friend_to_json(f)).collect::<Vec<_>>();
+
+                Ok(success_response(json!({
+                    "friends": friends,
+                    "total": response.total
+                }), StatusCode::OK))
+            }
 
             // 其他未实现的方法
             _ => {
@@ -205,6 +268,20 @@ impl FriendServiceHandler {
             "nickname": friend.nickname,
             "avatarUrl": friend.avatar_url,
             "friendshipCreatedAt": timestamp_to_datetime_string(&friend.friendship_created_at),
+            "remark": friend.remark,
+        })
+    }
+
+    /// 将好友分组消息转换为JSON
+    fn convert_friend_group_to_json(&self, group: &proto::friend::FriendGroup) -> Value {
+        json!({
+            "id": group.id,
+            "userId": group.user_id,
+            "groupName": group.group_name,
+            "sortOrder": group.sort_order,
+            "createdAt": timestamp_to_datetime_string(&group.created_at),
+            "updatedAt": timestamp_to_datetime_string(&group.updated_at),
+            "friendCount": group.friend_count,
         })
     }
 } 

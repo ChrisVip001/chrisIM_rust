@@ -5,6 +5,9 @@ use common::proto::friend::{
     GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse,
     RejectFriendRequestRequest, SendFriendRequestRequest,FriendshipStatus,
     UnblockUserRequest,BlockUserRequest,UnblockUserResponse,BlockUserResponse,
+    CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
+    DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
+    GetGroupFriendsRequest, GetGroupFriendsResponse,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -437,5 +440,145 @@ impl FriendService for FriendServiceImpl {
         }
     }
 
-  
+    // 创建或更新好友分组
+    async fn create_or_update_friend_group(
+        &self,
+        request: Request<CreateOrUpdateFriendGroupRequest>,
+    ) -> Result<Response<FriendGroupResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = Uuid::parse_str(&req.user_id)
+            .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+        // 检查用户是否存在
+        self.check_user_exists(user_id).await?;
+
+        // 解析并验证好友ID列表
+        let friend_ids: Vec<Uuid> = req.friend_ids
+            .into_iter()
+            .map(|id| Uuid::parse_str(&id))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Status::invalid_argument(format!("无效的好友ID: {}", e)))?;
+
+        // 检查所有好友是否存在
+        for friend_id in &friend_ids {
+            self.check_user_exists(*friend_id).await?;
+        }
+
+        // 创建或更新分组
+        let group = match req.id {
+            Some(id) => {
+                let group_id = Uuid::parse_str(&id)
+                    .map_err(|e| Status::invalid_argument(format!("无效的分组ID: {}", e)))?;
+                self.repository
+                    .update_friend_group(group_id, user_id, req.group_name, req.sort_order)
+                    .await
+                    .map_err(|e| {
+                        error!("更新好友分组失败: {}", e);
+                        Status::internal("更新好友分组失败")
+                    })?
+            }
+            None => {
+                self.repository
+                    .create_friend_group(user_id, req.group_name, req.sort_order)
+                    .await
+                    .map_err(|e| {
+                        error!("创建好友分组失败: {}", e);
+                        Status::internal("创建好友分组失败")
+                    })?
+            }
+        };
+
+        // 更新分组好友关系
+        let updated_friend_ids = self.repository
+            .update_group_friends(group.id, user_id, friend_ids)
+            .await
+            .map_err(|e| {
+                error!("更新分组好友关系失败: {}", e);
+                Status::internal("更新分组好友关系失败")
+            })?;
+
+        Ok(Response::new(FriendGroupResponse {
+            group: Some(group.to_proto()),
+            friend_ids: updated_friend_ids.into_iter().map(|id| id.to_string()).collect(),
+        }))
+    }
+
+    // 删除好友分组
+    async fn delete_friend_group(
+        &self,
+        request: Request<DeleteFriendGroupRequest>,
+    ) -> Result<Response<DeleteFriendGroupResponse>, Status> {
+        let req = request.into_inner();
+        let id = Uuid::parse_str(&req.id)
+            .map_err(|e| Status::invalid_argument(format!("无效的分组ID: {}", e)))?;
+        let user_id = Uuid::parse_str(&req.user_id)
+            .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+        self.check_user_exists(user_id).await?;
+
+        let success = self.repository
+            .delete_friend_group(id, user_id)
+            .await
+            .map_err(|e| {
+                error!("删除好友分组失败: {}", e);
+                Status::internal("删除好友分组失败")
+            })?;
+
+        Ok(Response::new(DeleteFriendGroupResponse { success }))
+    }
+
+    // 获取好友分组列表
+    async fn get_friend_groups(
+        &self,
+        request: Request<GetFriendGroupsRequest>,
+    ) -> Result<Response<GetFriendGroupsResponse>, Status> {
+        let user_id = Uuid::parse_str(&request.into_inner().user_id)
+            .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+        self.check_user_exists(user_id).await?;
+
+        let groups = self.repository
+            .get_friend_groups(user_id)
+            .await
+            .map_err(|e| {
+                error!("获取好友分组列表失败: {}", e);
+                Status::internal("获取好友分组列表失败")
+            })?;
+
+        Ok(Response::new(GetFriendGroupsResponse {
+            groups: groups.into_iter().map(|g| g.to_proto()).collect(),
+        }))
+    }
+
+    // 获取分组好友列表
+    async fn get_group_friends(
+        &self,
+        request: Request<GetGroupFriendsRequest>,
+    ) -> Result<Response<GetGroupFriendsResponse>, Status> {
+        let req = request.into_inner();
+        
+        let group_id = Uuid::parse_str(&req.group_id)
+            .map_err(|e| Status::invalid_argument(format!("无效的分组ID: {}", e)))?;
+            
+        let user_id = Uuid::parse_str(&req.user_id)
+            .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+        // 检查用户是否存在
+        self.check_user_exists(user_id).await?;
+
+        // 获取分组好友列表
+        let friends = self.repository
+            .get_group_friends(group_id, user_id)
+            .await
+            .map_err(|e| {
+                error!("获取分组好友列表失败: {}", e);
+                Status::internal("获取分组好友列表失败")
+            })?;
+
+        let total = friends.len() as i32;
+        Ok(Response::new(GetGroupFriendsResponse {
+            friends: friends.into_iter().map(|f| f.to_proto()).collect(),
+            total,
+        }))
+    }
 }

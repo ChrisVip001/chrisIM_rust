@@ -79,3 +79,41 @@ impl Friend {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct FriendGroup {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub group_name: String,
+    pub sort_order: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub friend_count: i32,
+}
+
+impl FriendGroup {
+    pub fn new(user_id: Uuid, group_name: String, sort_order: i32) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            user_id,
+            group_name,
+            sort_order,
+            created_at: now,
+            updated_at: now,
+            friend_count: 0,
+        }
+    }
+
+    pub fn to_proto(&self) -> common::proto::friend::FriendGroup {
+        common::proto::friend::FriendGroup {
+            id: self.id.to_string(),
+            user_id: self.user_id.to_string(),
+            group_name: self.group_name.clone(),
+            sort_order: self.sort_order,
+            created_at: Some(prost_types::Timestamp::from(SystemTime::from(self.created_at))),
+            updated_at: Some(prost_types::Timestamp::from(SystemTime::from(self.updated_at))),
+            friend_count: self.friend_count,
+        }
+    }
+}

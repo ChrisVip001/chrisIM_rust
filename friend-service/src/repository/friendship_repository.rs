@@ -4,7 +4,7 @@ use common::proto::friend::FriendshipStatus;
 use sqlx::{PgPool, Row, FromRow, types::chrono::NaiveDateTime};
 use uuid::Uuid;
 
-use crate::model::friendship::{Friend, Friendship};
+use crate::model::friendship::{Friend, Friendship, FriendGroup};
 
 pub struct FriendshipRepository {
     pool: PgPool,
@@ -564,4 +564,244 @@ impl FriendshipRepository {
             .await?;
         Ok(result.exists)
     }
+
+    // 更新分组好友关系
+    pub async fn update_group_friends(
+        &self,
+        group_id: Uuid,
+        user_id: Uuid,
+        friend_ids: Vec<Uuid>,
+    ) -> Result<Vec<Uuid>> {
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+
+        // 1. 删除该分组的所有现有好友关系
+        sqlx::query!(
+            r#"
+            DELETE FROM friend_group_relation
+            WHERE group_id = $1 AND user_id = $2
+            "#,
+            group_id.to_string(),
+            user_id.to_string()
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // 2. 添加新的好友关系
+        let mut success_friend_ids = Vec::new();
+        for friend_id in friend_ids {
+            // 检查好友关系
+            if let Ok(Some(status)) = self.check_friendship(user_id, friend_id).await {
+                if status == FriendshipStatus::Accepted {
+                    // 添加好友到分组
+                    if sqlx::query!(
+                        r#"
+                        INSERT INTO friend_group_relation (id, user_id, friend_id, group_id, created_at, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        "#,
+                        Uuid::new_v4().to_string(),
+                        user_id.to_string(),
+                        friend_id.to_string(),
+                        group_id.to_string(),
+                        now_naive,
+                        now_naive
+                    )
+                    .execute(&mut *tx)
+                    .await
+                    .is_ok()
+                    {
+                        success_friend_ids.push(friend_id);
+                    }
+                }
+            }
+        }
+
+        tx.commit().await?;
+        Ok(success_friend_ids)
+    }
+
+    // 创建好友分组
+    pub async fn create_friend_group(
+        &self,
+        user_id: Uuid,
+        group_name: String,
+        sort_order: i32,
+    ) -> Result<FriendGroup> {
+        let group = FriendGroup::new(user_id, group_name, sort_order);
+        let created_at_naive = group.created_at.naive_utc();
+        let updated_at_naive = group.updated_at.naive_utc();
+
+        let result = sqlx::query!(
+            r#"
+            INSERT INTO friend_group (id, user_id, group_name, sort_order, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, user_id, group_name, sort_order, created_at, updated_at
+            "#,
+            group.id.to_string(),
+            group.user_id.to_string(),
+            group.group_name,
+            group.sort_order,
+            created_at_naive,
+            updated_at_naive
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(FriendGroup {
+            id: Uuid::parse_str(&result.id)?,
+            user_id: Uuid::parse_str(&result.user_id)?,
+            group_name: result.group_name,
+            sort_order: result.sort_order.unwrap(),
+            created_at: Utc.from_utc_datetime(&result.created_at.unwrap()),
+            updated_at: Utc.from_utc_datetime(&result.updated_at.unwrap()),
+            friend_count: 0,
+        })
+    }
+
+    // 更新好友分组
+    pub async fn update_friend_group(
+        &self,
+        id: Uuid,
+        user_id: Uuid,
+        group_name: String,
+        sort_order: i32,
+    ) -> Result<FriendGroup> {
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+
+        let result = sqlx::query!(
+            r#"
+            UPDATE friend_group
+            SET group_name = $1, sort_order = $2, updated_at = $3
+            WHERE id = $4 AND user_id = $5
+            RETURNING id, user_id, group_name, sort_order, created_at, updated_at
+            "#,
+            group_name,
+            sort_order,
+            now_naive,
+            id.to_string(),
+            user_id.to_string()
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(FriendGroup {
+            id: Uuid::parse_str(&result.id).unwrap(),
+            user_id: Uuid::parse_str(&result.user_id).unwrap(),
+            group_name: result.group_name,
+            sort_order: result.sort_order.unwrap(),
+            created_at: Utc.from_utc_datetime(&result.created_at.unwrap()),
+            updated_at: Utc.from_utc_datetime(&result.updated_at.unwrap()),
+            friend_count: 0,
+        })
+    }
+
+    // 删除好友分组
+    pub async fn delete_friend_group(&self, id: Uuid, user_id: Uuid) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+
+        // 删除分组关系
+        sqlx::query!(
+            r#"
+            DELETE FROM friend_group_relation
+            WHERE group_id = $1 AND user_id = $2
+            "#,
+            id.to_string(),
+            user_id.to_string()
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // 删除分组
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM friend_group
+            WHERE id = $1 AND user_id = $2
+            "#,
+            id.to_string(),
+            user_id.to_string()
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    // 获取好友分组列表
+    pub async fn get_friend_groups(&self, user_id: Uuid) -> Result<Vec<FriendGroup>> {
+        let groups = sqlx::query!(
+            r#"
+            SELECT 
+                g.id, 
+                g.user_id, 
+                g.group_name, 
+                g.sort_order, 
+                g.created_at, 
+                g.updated_at,
+                COUNT(fgr.friend_id) as friend_count
+            FROM friend_group g
+            LEFT JOIN friend_group_relation fgr ON g.id = fgr.group_id AND g.user_id = fgr.user_id
+            WHERE g.user_id = $1
+            GROUP BY g.id, g.user_id, g.group_name, g.sort_order, g.created_at, g.updated_at
+            ORDER BY g.sort_order ASC
+            "#,
+            user_id.to_string()
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(groups
+            .into_iter()
+            .map(|g| FriendGroup {
+                id: Uuid::parse_str(&g.id).unwrap(),
+                user_id: Uuid::parse_str(&g.user_id).unwrap(),
+                group_name: g.group_name,
+                sort_order: g.sort_order.unwrap(),
+                created_at: Utc.from_utc_datetime(&g.created_at.unwrap()),
+                updated_at: Utc.from_utc_datetime(&g.updated_at.unwrap()),
+                friend_count: g.friend_count.unwrap_or(0) as i32,
+            })
+            .collect())
+    }
+
+    // 获取分组好友列表
+    pub async fn get_group_friends(&self, group_id: Uuid, user_id: Uuid) -> Result<Vec<Friend>> {
+        let friends = sqlx::query!(
+            r#"
+            SELECT 
+                u.id as friend_id,
+                u.username,
+                u.nickname,
+                u.avatar_url,
+                fr.remark,
+                fr.created_at as friendship_created_at
+            FROM friend_group_relation fgr
+            JOIN users u ON u.id = fgr.friend_id
+            JOIN friend_relation fr ON fr.user_id = fgr.user_id AND fr.friend_id = fgr.friend_id
+            WHERE fgr.group_id = $1 
+            AND fgr.user_id = $2 
+            AND fr.status = 1
+            ORDER BY fr.created_at DESC
+            "#,
+            group_id.to_string(),
+            user_id.to_string()
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(friends
+            .into_iter()
+            .map(|f| Friend {
+                id: Uuid::parse_str(&f.friend_id).unwrap(),
+                username: f.username,
+                nickname: f.nickname,
+                avatar_url: f.avatar_url,
+                friendship_created_at: Utc.from_utc_datetime(&f.friendship_created_at),
+                remark: f.remark,
+            })
+            .collect())
+    }
+    
 }

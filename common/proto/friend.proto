@@ -33,6 +33,17 @@ service FriendService {
   // 解除拉黑
   rpc UnblockUser (UnblockUserRequest) returns (UnblockUserResponse);
   
+  // 创建或更新好友分组
+  rpc CreateOrUpdateFriendGroup (CreateOrUpdateFriendGroupRequest) returns (FriendGroupResponse);
+  
+  // 删除好友分组
+  rpc DeleteFriendGroup (DeleteFriendGroupRequest) returns (DeleteFriendGroupResponse);
+  
+  // 获取好友分组列表
+  rpc GetFriendGroups (GetFriendGroupsRequest) returns (GetFriendGroupsResponse);
+  
+  // 获取分组好友列表
+  rpc GetGroupFriends (GetGroupFriendsRequest) returns (GetGroupFriendsResponse);
 }
 
 // 发送好友请求
@@ -163,4 +174,63 @@ message UnblockUserRequest {
 // 解除拉黑响应
 message UnblockUserResponse {
   bool success = 1;
+}
+
+// 好友分组
+message FriendGroup {
+  string id = 1;
+  string user_id = 2;
+  string group_name = 3;
+  int32 sort_order = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  int32 friend_count = 7;  // 分组内好友数量
+}
+
+// 创建或更新好友分组请求
+message CreateOrUpdateFriendGroupRequest {
+  optional string id = 1;        // 分组ID，如果为空则创建新分组
+  string user_id = 2;           // 用户ID
+  string group_name = 3;        // 分组名称
+  int32 sort_order = 4;         // 排序顺序
+  repeated string friend_ids = 5; // 分组中的好友ID列表
+}
+
+// 好友分组响应
+message FriendGroupResponse {
+  FriendGroup group = 1;
+  repeated string friend_ids = 2; // 分组中的好友ID列表
+}
+
+// 删除好友分组请求
+message DeleteFriendGroupRequest {
+  string id = 1;
+  string user_id = 2;
+}
+
+// 删除好友分组响应
+message DeleteFriendGroupResponse {
+  bool success = 1;
+}
+
+// 获取好友分组列表请求
+message GetFriendGroupsRequest {
+  string user_id = 1;
+}
+
+// 获取好友分组列表响应
+message GetFriendGroupsResponse {
+  repeated FriendGroup groups = 1;
+}
+
+// 获取分组好友列表请求
+message GetGroupFriendsRequest {
+  string group_id = 1;  // 分组ID
+  string user_id = 2;   // 用户ID
+}
+
+// 获取分组好友列表响应
+message GetGroupFriendsResponse {
+  repeated Friend friends = 1;  // 好友列表
+  int32 total = 2;             // 总数
 }

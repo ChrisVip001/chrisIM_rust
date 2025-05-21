@@ -7,6 +7,9 @@ use crate::proto::friend::{
     DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse,
     GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest,
     SendFriendRequestRequest, BlockUserRequest, BlockUserResponse, UnblockUserRequest, UnblockUserResponse,
+    CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
+    DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
+    GetGroupFriendsRequest, GetGroupFriendsResponse,
 };
 
 use crate::grpc_client::GrpcServiceClient;
@@ -186,5 +189,69 @@ impl FriendServiceGrpcClient {
         let response = client.unblock_user(request).await?;
         Ok(response.into_inner())
     }
-    
+
+    /// 创建或更新好友分组
+    pub async fn create_or_update_friend_group(
+        &self,
+        id: Option<&str>,
+        user_id: &str,
+        group_name: &str,
+        sort_order: i32,
+        friend_ids: Vec<String>,
+    ) -> Result<FriendGroupResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = FriendServiceClient::new(channel);
+
+        let request = Request::new(CreateOrUpdateFriendGroupRequest {
+            id: id.map(String::from),
+            user_id: user_id.to_string(),
+            group_name: group_name.to_string(),
+            sort_order,
+            friend_ids,
+        });
+
+        let response = client.create_or_update_friend_group(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 删除好友分组
+    pub async fn delete_friend_group(&self, id: &str, user_id: &str) -> Result<DeleteFriendGroupResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = FriendServiceClient::new(channel);
+
+        let request = Request::new(DeleteFriendGroupRequest {
+            id: id.to_string(),
+            user_id: user_id.to_string(),
+        });
+
+        let response = client.delete_friend_group(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 获取好友分组列表
+    pub async fn get_friend_groups(&self, user_id: &str) -> Result<GetFriendGroupsResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = FriendServiceClient::new(channel);
+
+        let request = Request::new(GetFriendGroupsRequest {
+            user_id: user_id.to_string(),
+        });
+
+        let response = client.get_friend_groups(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 获取分组好友列表
+    pub async fn get_group_friends(&self, group_id: &str, user_id: &str) -> Result<GetGroupFriendsResponse> {
+        let channel = self.service_client.get_channel().await?;
+        let mut client = FriendServiceClient::new(channel);
+
+        let request = Request::new(GetGroupFriendsRequest {
+            group_id: group_id.to_string(),
+            user_id: user_id.to_string(),
+        });
+
+        let response = client.get_group_friends(request).await?;
+        Ok(response.into_inner())
+    }
 } 
