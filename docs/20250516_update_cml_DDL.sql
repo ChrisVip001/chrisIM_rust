@@ -29,13 +29,14 @@ ALTER TABLE friendships
 -- 双向好友关系表 (每个关系存储两条记录)
 CREATE TABLE friend_relation
 (
-    id          VARCHAR(36) PRIMARY KEY,                       -- 关系记录ID (主键)
-    user_id     VARCHAR(36) NOT NULL,                          -- 用户ID
-    friend_id   VARCHAR(36) NOT NULL,                          -- 好友用户ID
-    group_id    VARCHAR(64),                                   -- 所属分组ID (可为空)
-    remark      VARCHAR(64)          DEFAULT '',               -- 好友备注名 (最多64字符)
-    status      SMALLINT    NOT NULL DEFAULT 1,                -- 关系状态: 1-正常 2-拉黑
-    create_time TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP -- 关系建立时间
+    id         VARCHAR(36) PRIMARY KEY,                       -- 关系记录ID (主键)
+    user_id    VARCHAR(36) NOT NULL,                          -- 用户ID
+    friend_id  VARCHAR(36) NOT NULL,                          -- 好友用户ID
+    group_id   VARCHAR(64),                                   -- 所属分组ID (可为空)
+    remark     VARCHAR(64)          DEFAULT '',               -- 好友备注名 (最多64字符)
+    status     SMALLINT    NOT NULL DEFAULT 1,                -- 关系状态: 1-正常 2-拉黑
+    created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP -- 关系建立时间
+    updated_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP -- 关系修改时间
 );
 
 -- 唯一约束: 防止重复添加同一好友
@@ -55,7 +56,8 @@ COMMENT ON COLUMN friend_relation.friend_id IS '被添加为好友的用户ID';
 COMMENT ON COLUMN friend_relation.group_id IS '好友所在分组的ID (关联friend_group表)';
 COMMENT ON COLUMN friend_relation.remark IS '用户为好友设置的备注名称';
 COMMENT ON COLUMN friend_relation.status IS '关系状态: 1-正常好友 2-已拉黑';
-COMMENT ON COLUMN friend_relation.create_time IS '好友关系的建立时间';
+COMMENT ON COLUMN friend_relation.created_at IS '好友关系的建立时间';
+COMMENT ON COLUMN friend_relation.updated_at IS '好友关系的修改时间';
 
 
 alter table friendships
