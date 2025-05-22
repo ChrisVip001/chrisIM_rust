@@ -180,69 +180,54 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
     // 获取服务注册中心
     let service_registry = service_register_center(config);
 
-    let (name, host, port, tags, health_check_path) = match com {
+    let (name, host, port, tags) = match com {
         Component::MessageServer => {
             let name = config.rpc.chat.name.clone();
             let host = config.rpc.chat.host.clone();
             let port = config.rpc.chat.port;
             let tags = config.rpc.chat.tags.clone();
-            let health_check_path = "/health";
-            (name, host, port, tags, health_check_path)
+            (name, host, port, tags)
         }
         Component::ApiGateway => {
             let name = config.rpc.api.name.clone();
             let host = config.rpc.api.host.clone();
             let port = config.rpc.api.port;
             let tags = config.rpc.api.tags.clone();
-            let health_check_path = "/health";
-            (name, host, port, tags, health_check_path)
+            (name, host, port, tags)
         }
         Component::MessageGateway => {
             let name = config.rpc.ws.name.clone();
             let host = config.rpc.ws.host.clone();
             let port = config.rpc.ws.port;
             let tags = config.rpc.ws.tags.clone();
-            let health_check_path = "/health";
-            (name, host, port, tags, health_check_path)
+            (name, host, port, tags)
         }
         Component::UserServer => {
             let name = config.rpc.user.name.clone();
             let host = config.rpc.user.host.clone();
             let port = config.rpc.user.port;
             let tags = config.rpc.user.tags.clone();
-            let health_check_path = "/health";
-            (name, host, port, tags, health_check_path)
+            (name, host, port, tags)
         }
         Component::FriendServer => {
             let name = config.rpc.friend.name.clone();
             let host = config.rpc.friend.host.clone();
             let port = config.rpc.friend.port;
             let tags = config.rpc.friend.tags.clone();
-            let health_check_path = "/health";
-            (name, host, port, tags, health_check_path)
+            (name, host, port, tags)
         }
         Component::GroupServer => {
             let name = config.rpc.group.name.clone();
             let host = config.rpc.group.host.clone();
             let port = config.rpc.group.port;
             let tags = config.rpc.group.tags.clone();
-            let health_check_path = "/health";
-            (name, host, port, tags, health_check_path)
+            (name, host, port, tags)
         }
         Component::All => {
             // TODO 要完善
             return Err(Error::Internal("不支持注册所有服务".to_string()));
         }
     };
-
-    // 创建健康检查配置
-    let check = Some(typos::HealthCheck {
-        name: format!("Service '{}' health check", name),
-        url: format!("http://{}:{}{}", host, port, health_check_path),
-        interval: "10s".to_string(),
-        timeout: "5s".to_string(),
-        deregister_after: "30s".to_string(),
-    });
 
     // 构建服务注册信息
     let registration = typos::Registration {
@@ -251,7 +236,7 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
         host,
         port,
         tags,
-        check,
+        check: None,
     };
 
     // 注册服务

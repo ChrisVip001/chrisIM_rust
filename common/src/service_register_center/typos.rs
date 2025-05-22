@@ -25,6 +25,8 @@ pub struct Registration {
 /// 定义服务注册中心如何检查服务的健康状态
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct HealthCheck {
+    /// 健康检查类型
+    pub health_type: String,
     /// 健康检查名称
     pub name: String,
     /// 健康检查的URL
@@ -35,6 +37,28 @@ pub struct HealthCheck {
     pub timeout: String,
     /// 服务不健康后多久取消注册
     pub deregister_after: String,
+}
+
+
+/// 服务类型枚举，用于确定健康检查方式
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum HealthType {
+    /// HTTP服务，使用HTTP健康检查
+    #[default]
+    Http,
+    /// gRPC服务，使用TTL健康检查
+    Grpc
+}
+
+impl HealthType {
+    /// 确定健康检查类型
+    pub fn determine_health_type(health_type: String) -> HealthType {
+        match health_type.to_lowercase().as_str() {
+            "http" => HealthType::Http,
+            "grpc" => HealthType::Grpc,
+            _ => HealthType::Http,
+        }
+    }
 }
 
 /// 已发现的服务实例信息

@@ -76,7 +76,6 @@ gateway:
           requests_per_second: 20
           burst_size: 30
           enabled: true
-
     # IP限流
     ip_rules: {}
 
@@ -196,11 +195,17 @@ websocket:
   name: websocket
   tags:
     - websocket
-    - grpc
+    - http
+  health_check:
+    health_type: "http",
+    name: "websocket",
+    url: "/health",
+    interval: 15,
+    timeout: 60,
+    deregister_after: 60,
 
 # RPC服务配置
 rpc:
-  health_check: false # 是否启用健康检查, dev环境默认为false，测试和生产环境默认为true
   api:
     protocol: http
     host: 127.0.0.1
@@ -209,9 +214,13 @@ rpc:
     tags:
       - api
       - grpc
-    grpc_health_check:
-      grpc_use_tls: false
-      interval: 30 # second
+    health_check:
+      health_type: "ttl",
+      name: "api",
+      url: "/health",
+      interval: 15,
+      timeout: 60,
+      deregister_after: 60,
   ws:
     protocol: http
     host: 127.0.0.1
@@ -220,9 +229,13 @@ rpc:
     tags:
       - ws
       - grpc
-    grpc_health_check:
-      grpc_use_tls: false
-      interval: 30 # second
+    health_check:
+      health_type: "ttl",
+      name: "ws",
+      url: "/health",
+      interval: 15,
+      timeout: 60,
+      deregister_after: 60,
   chat:
     protocol: http
     host: 127.0.0.1
@@ -231,9 +244,13 @@ rpc:
     tags:
       - chat
       - grpc
-    grpc_health_check:
-      grpc_use_tls: false
-      interval: 30000 # second
+    health_check:
+      health_type: "ttl",
+      name: "chat",
+      url: "/health",
+      interval: 15,
+      timeout: 60,
+      deregister_after: 60,
   pusher:
     protocol: http
     host: 127.0.0.1
@@ -242,9 +259,13 @@ rpc:
     tags:
       - pusher
       - grpc
-    grpc_health_check:
-      grpc_use_tls: false
-      interval: 30000 # second
+    health_check:
+      health_type: "ttl",
+      name: "pusher",
+      url: "/health",
+      interval: 15,
+      timeout: 60,
+      deregister_after: 60,
   user:
     protocol: http
     host: 127.0.0.1
@@ -253,9 +274,13 @@ rpc:
     tags:
       - user
       - grpc
-    grpc_health_check:
-      grpc_use_tls: false
-      interval: 30000 # second
+    health_check:
+      health_type: "ttl",
+      name: "user",
+      url: "/health",
+      interval: 15,
+      timeout: 60,
+      deregister_after: 60,
   friend:
     protocol: http
     host: 127.0.0.1
@@ -264,6 +289,13 @@ rpc:
     tags:
       - friend
       - grpc
+    health_check:
+      health_type: "ttl",
+      name: "friend",
+      url: "/health",
+      interval: 15,
+      timeout: 60,
+      deregister_after: 60,
   group:
     protocol: http
     host: 127.0.0.1
@@ -271,7 +303,14 @@ rpc:
     name: group
     tags:
       - group
-      - grpc    
+      - grpc
+    health_check:
+      health_type: "ttl",
+      name: "group",
+      url: "/health",
+      interval: 15,
+      timeout: 60,
+      deregister_after: 60,
 
 # Redis配置
 redis:
