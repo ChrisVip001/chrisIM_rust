@@ -10,7 +10,6 @@ use common::error::Error;
 use common::message::{GroupMemSeq, Msg, MsgRead, MsgType};
 use common::db::DbRepo;
 use common::message_box::MsgRecBoxRepo;
-use common::utils;
 
 use crate::pusher::{push_service, Pusher};
 

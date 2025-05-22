@@ -1,3 +1,122 @@
+# API网关基础配置
+# 路由配置
+gateway:
+  routes:
+    routes:
+      # 用户服务路由
+      - id: "user-service"
+        name: "用户服务"
+        path_prefix: "/api/users"
+        service_type: "User"
+        require_auth: false
+        methods: []
+        rewrite_headers: {}
+
+      # 好友服务路由
+      - id: "friend-service"
+        name: "好友服务"
+        path_prefix: "/api/friends"
+        service_type: "Friend"
+        require_auth: true
+        methods: []
+        rewrite_headers: {}
+
+      # 群组服务路由
+      - id: "group-service"
+        name: "群组服务"
+        path_prefix: "/api/groups"
+        service_type: "Group"
+        require_auth: true
+        methods: []
+        rewrite_headers: {}
+
+      # 聊天服务路由
+      - id: "chat-service"
+        name: "聊天服务"
+        path_prefix: "/api/chat"
+        service_type: "Chat"
+        require_auth: true
+        methods: []
+        rewrite_headers: {}
+
+  # 限流配置
+  rate_limit:
+    # 全局限流
+    global:
+      requests_per_second: 1000
+      burst_size: 50
+      enabled: true
+
+    # 按路径限流
+    path_rules:
+      # 登录接口限流
+      - path_prefix: "/api/user/login"
+        rule:
+          requests_per_second: 5
+          burst_size: 3
+          enabled: true
+
+      # 注册接口限流
+      - path_prefix: "/api/user/register"
+        rule:
+          requests_per_second: 2
+          burst_size: 5
+          enabled: true
+
+      # 用户接口限流
+      - path_prefix: "/api/users"
+        rule:
+          requests_per_second: 10
+          burst_size: 20
+          enabled: true
+
+      # 聊天接口限流
+      - path_prefix: "/api/chat"
+        rule:
+          requests_per_second: 20
+          burst_size: 30
+          enabled: true
+
+    # IP限流
+    ip_rules: {}
+
+  # 认证配置
+  auth:
+    # JWT配置
+    jwt:
+      enabled: true
+      secret: "change_this_to_a_secure_random_string"
+      issuer: "api-gateway"
+      expiry_seconds: 86400  # 24小时
+      refresh_expiry_seconds: 604800  # 7天
+      verify_issuer: false
+      allowed_issuers: []
+      header_name: "Authorization"
+      header_prefix: "Bearer "
+    # IP白名单
+    ip_whitelist:
+      - "127.0.0.1"
+      - "::1"
+    # 路径白名单
+    path_whitelist:
+      - "/api/health"
+      - "/api/user/login"
+      - "/metrics"
+
+  # Metrics暴露端点 指标配置
+  metrics_endpoint: "/metrics"
+
+  # 重试配置
+  retry:
+    max_retries: 3
+    retry_interval_ms: 200
+
+  # 熔断配置
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    half_open_timeout_secs: 30
+
 component: all # all, api, ws, rpc, db, pusher
 
 # 日志配置
@@ -61,12 +180,13 @@ server:
   ws_lb_strategy: RoundRobin # Random, RoundRobin
 
 
-# 服务中心配置
+# consul服务注册与发现配置
 service_center:
   host: 127.0.0.1   # "0.0.0.0" 在Docker中使用0.0.0.0绑定所有接口
   port: 8500
   timeout: 5000
   protocol: http
+  service_refresh_interval: 30
 
 # WebSocket配置
 websocket:
@@ -81,10 +201,21 @@ websocket:
 # RPC服务配置
 rpc:
   health_check: false # 是否启用健康检查, dev环境默认为false，测试和生产环境默认为true
+  api:
+    protocol: http
+    host: 127.0.0.1
+    port: 50000
+    name: api
+    tags:
+      - api
+      - grpc
+    grpc_health_check:
+      grpc_use_tls: false
+      interval: 30 # second
   ws:
     protocol: http
     host: 127.0.0.1
-    port: 50002
+    port: 50001
     name: ws
     tags:
       - ws
@@ -95,7 +226,7 @@ rpc:
   chat:
     protocol: http
     host: 127.0.0.1
-    port: 50003
+    port: 50002
     name: chat
     tags:
       - chat
@@ -103,21 +234,10 @@ rpc:
     grpc_health_check:
       grpc_use_tls: false
       interval: 30000 # second
-  db:
-    protocol: http
-    host: 127.0.0.1
-    port: 50004
-    name: db
-    tags:
-      - db
-      - grpc
-    grpc_health_check:
-      grpc_use_tls: false
-      interval: 30000 # second
   pusher:
     protocol: http
     host: 127.0.0.1
-    port: 50005
+    port: 50003
     name: pusher
     tags:
       - pusher
@@ -125,6 +245,33 @@ rpc:
     grpc_health_check:
       grpc_use_tls: false
       interval: 30000 # second
+  user:
+    protocol: http
+    host: 127.0.0.1
+    port: 50004
+    name: user
+    tags:
+      - user
+      - grpc
+    grpc_health_check:
+      grpc_use_tls: false
+      interval: 30000 # second
+  friend:
+    protocol: http
+    host: 127.0.0.1
+    port: 50005
+    name: friend
+    tags:
+      - friend
+      - grpc
+  group:
+    protocol: http
+    host: 127.0.0.1
+    port: 50005
+    name: group
+    tags:
+      - group
+      - grpc    
 
 # Redis配置
 redis:
@@ -150,12 +297,6 @@ kafka:
   consumer:
     auto_offset_reset: earliest # earliest, latest
     session_timeout: 20000
-
-
-# Consul配置
-consul:
-  url: "http://localhost:8500"
-  service_refresh_interval: 30
 
 # OSS配置
 oss:

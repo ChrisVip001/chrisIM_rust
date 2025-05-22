@@ -2,7 +2,7 @@ pub mod jwt;
 pub mod middleware;
 pub mod controller;
 
-use crate::config::CONFIG;
+use common::config::ConfigLoader;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -13,7 +13,7 @@ pub async fn authenticate(
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, Error> {
-    let config = CONFIG.read().await;
+    let config = &ConfigLoader::get_global().expect("Failed to get global config").gateway;
 
     // 检查路径是否在白名单中
     let path = request.uri().path().to_string();

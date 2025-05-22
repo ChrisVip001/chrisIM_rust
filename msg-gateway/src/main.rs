@@ -1,14 +1,17 @@
 use tracing::{info, Level};
 
-use common::config::AppConfig;
+use common::config::{AppConfig, ConfigLoader};
 use msg_gateway::ws_server::WsServer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 加载配置文件
-    // 从指定路径读取配置，如果失败则panic
-    let config = AppConfig::from_file(Some("./config/config.yaml")).unwrap();
-    
+    // 初始化全局配置
+    ConfigLoader::init_global().expect("初始化全局配置失败");
+
+    // 确保全局配置可以正常访问
+    let config = ConfigLoader::get_global().expect("获取全局配置失败");
+
     // 初始化日志和链路追踪系统
     // 根据配置判断是否启用分布式链路追踪
     if config.telemetry.enabled {

@@ -1,17 +1,17 @@
 use anyhow::Result;
 use tracing::{info, Level};
-use tracing_subscriber::{fmt, EnvFilter, prelude::*};
+use tracing_subscriber::{fmt, EnvFilter};
 use std::env;
 
 // 新增导入，用于链路追踪
 #[cfg(feature = "telemetry")]
 use opentelemetry::global;
 #[cfg(feature = "telemetry")]
-use tracing_opentelemetry::OpenTelemetryLayer;
-#[cfg(feature = "telemetry")]
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 #[cfg(feature = "telemetry")]
 use opentelemetry_otlp::WithExportConfig;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 // 日志输出格式类型
 #[derive(Debug, Clone, Copy)]

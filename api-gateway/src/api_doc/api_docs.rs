@@ -730,7 +730,7 @@ pub fn configure_docs(app: Router) -> Router {
     <script>
         window.onload = function() {
             const ui = SwaggerUIBundle({
-                url: "/api-doc/openapi.json",
+                pg_url: "/api-doc/openapi.json",
                 dom_id: '#swagger-ui',
                 deepLinking: true,
                 presets: [

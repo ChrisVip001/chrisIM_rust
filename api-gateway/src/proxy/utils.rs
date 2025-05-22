@@ -1,4 +1,4 @@
-use crate::config::routes_config::PathRewrite;
+use common::configs::routes_config::PathRewrite;
 use flate2::read::GzDecoder;
 use hyper::http::{self, header::HeaderValue};
 use regex::Regex;
@@ -142,7 +142,7 @@ pub fn process_request_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::routes_config::PathRewrite;
+    use common::configs::routes_config::PathRewrite;
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use std::io::Write;

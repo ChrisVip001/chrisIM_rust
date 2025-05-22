@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::ws::CloseFrame;
+use axum::extract::ws::{CloseFrame, Utf8Bytes};
 use axum::extract::{Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 use common::config::AppConfig;
 use common::error::Error;
 use common::message::{Msg, PlatformType};
-
+use common::service_register_center::{service_register_center, Registration};
 use crate::client::Client;
 use crate::manager::Manager;
 use crate::rpc::MsgRpcService;
@@ -60,30 +60,22 @@ pub struct WsServer;
 impl WsServer {
     /// 向服务注册中心注册WebSocket服务
     /// 使其他服务能够发现并调用此服务
-    async fn register_service(config: &AppConfig) -> Result<(), Error> {
-        // 构建服务注册中心地址
-        let addr = format!(
-            "{}://{}:{}",
-            config.service_center.protocol, config.service_center.host, config.service_center.port
-        );
-        let channel = Channel::from_shared(addr).unwrap().connect().await.unwrap();
-        let mut client = ServiceRegistryClient::new(channel);
-        // 创建服务实例信息
-        let service = ServiceInstance {
-            id: format!("{}-{}", utils::get_host_name()?, &config.websocket.name),
+    async fn register_service(config: &AppConfig) -> Result<String, Error> {
+        // 获取服务注册中心
+        let service_register = service_register_center(config);
+
+        // 构建服务注册信息
+        let registration = Registration {
+            id: format!("{}-{}-{}", &config.websocket.name, &config.websocket.host, &config.websocket.port),
             name: config.websocket.name.clone(),
-            address: config.websocket.host.clone(),
-            port: config.websocket.port as i32,
+            host: config.websocket.host.clone(),
+            port: config.websocket.port,
             tags: config.websocket.tags.clone(),
-            version: "".to_string(),
-            metadata: Default::default(),
-            health_check: None,
-            status: 0,
-            scheme: Scheme::from(config.rpc.db.protocol.as_str()) as i32,
+            check: None,
         };
-        // 注册服务到注册中心
-        client.register_service(service).await.unwrap();
-        Ok(())
+
+        // 注册服务
+        service_register.register(registration).await
     }
 
     /// 测试接口，用于获取当前连接状态
@@ -110,7 +102,7 @@ impl WsServer {
 
     /// 启动WebSocket服务器
     /// 初始化管理器、设置路由并启动服务
-    pub async fn start(config: AppConfig) {
+    pub async fn start(config: Arc<AppConfig>) {
         // 创建消息通道，用于Manager和客户端之间的通信
         let (tx, rx) = mpsc::channel(1024);
         // 初始化连接管理器
@@ -123,7 +115,7 @@ impl WsServer {
         // 创建应用状态
         let app_state = AppState {
             manager: hub.clone(),
-            jwt_secret: config.jwt.secret.clone(),
+            jwt_secret: config.gateway.auth.jwt.secret.clone(),
         };
 
         // 配置Axum路由
@@ -219,7 +211,7 @@ impl WsServer {
             if let Err(e) = ws_tx
                 .send(Message::Close(Some(CloseFrame {
                     code: UNAUTHORIZED_CODE,
-                    reason: Cow::Owned("未授权连接".to_string()),
+                    reason: Utf8Bytes::from("未授权连接"),
                 })))
                 .await
             {
@@ -253,7 +245,7 @@ impl WsServer {
                 if let Err(e) = cloned_tx
                     .write()
                     .await
-                    .send(Message::Ping(Vec::new()))
+                    .send(Message::Ping(Default::default()))
                     .await
                 {
                     error!("send ping error：{:?}", e);
@@ -275,7 +267,7 @@ impl WsServer {
                     .await
                     .send(Message::Close(Some(CloseFrame {
                         code: KNOCK_OFF_CODE,
-                        reason: Cow::Owned("knock off".to_string()),
+                        reason: Utf8Bytes::from("knock off"),
                     })))
                     .await
                 {
@@ -308,7 +300,7 @@ impl WsServer {
                         if let Err(e) = shared_tx
                             .write()
                             .await
-                            .send(Message::Pong(Vec::new()))
+                            .send(Message::Pong(Default::default()))
                             .await
                         {
                             error!("reply ping error : {:?}", e);

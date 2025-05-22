@@ -26,7 +26,7 @@ impl GroupServiceHandler {
 
     /// 处理群组服务请求
     pub async fn handle_request(
-        &self,
+        &mut self,
         method: &Method,
         path: &str,
         body: Value,

@@ -64,7 +64,7 @@ pub fn extract_token<B>(
 /// 验证JWT Token
 pub async fn verify_token(
     token: String,
-    jwt_config: &crate::config::auth_config::JwtConfig,
+    jwt_config: &common::configs::auth_config::JwtConfig,
 ) -> Result<UserInfo, Error> {
     // 解码并验证token
     let mut validation = Validation::new(Algorithm::HS256);
@@ -116,7 +116,7 @@ pub fn generate_token(
     tenant_id: i64,
     tenant_name: &str,
     extra: std::collections::HashMap<String, String>,
-    jwt_config: &crate::config::auth_config::JwtConfig,
+    jwt_config: &common::configs::auth_config::JwtConfig,
 ) -> Result<String, Error> {
     // 获取当前时间戳
     let now = SystemTime::now()
@@ -153,7 +153,7 @@ pub fn generate_refresh_token(
     username: &str,
     tenant_id: i64,
     tenant_name: &str,
-    jwt_config: &crate::config::auth_config::JwtConfig,
+    jwt_config: &common::configs::auth_config::JwtConfig,
 ) -> Result<String, Error> {
     // 获取当前时间戳
     let now = SystemTime::now()

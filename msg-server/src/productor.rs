@@ -7,14 +7,12 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
-use tonic::transport::Server;
 use tracing::{error, info};
 
 use common::config::{AppConfig, Component};
 use common::grpc::LoggingInterceptor;
 use common::message::chat_service_server::{ChatService, ChatServiceServer};
 use common::message::{MsgResponse, MsgType, SendMsgRequest};
-use tonic_health::server::{Health, HealthServer};
 
 /// 消息RPC服务实现
 /// 负责接收客户端消息并发送到Kafka消息队列
@@ -59,20 +57,17 @@ impl ChatRpcService {
             .expect("生产者创建失败");
 
         // 确保Kafka主题存在，如不存在则创建
-        Self::ensure_topic_exists(&config.kafka.topic, &broker, config.kafka.connect_timeout)
+        Self::ensure_topic_exists(&config.kafka.topic, &broker, config.kafka.connect_timeout as u16)
             .await
             .expect("主题创建失败");
 
         // 向服务注册中心注册消息服务
-        utils::register_service(config, Component::MessageServer)
+        common::grpc_client::base::register_service(config, Component::MessageServer)
             .await
             .expect("服务注册失败");
         info!("<chat> RPC服务已注册到服务注册中心");
 
-        // 创建健康检查服务
-        // 用于其他服务检查此服务是否在正常运行
-        let health_service = HealthServer::new(Health::default());
-        info!("<chat> RPC服务健康检查已启动");
+        // TODO 创建tonic健康检查服务
 
         // 创建日志拦截器
         // 用于记录和跟踪所有RPC请求
@@ -89,7 +84,6 @@ impl ChatRpcService {
 
         // 启动RPC服务器，添加健康检查和聊天服务
         Server::builder()
-            .add_service(health_service)
             .add_service(service)
             .serve(config.rpc.chat.rpc_server_url().parse().unwrap())
             .await

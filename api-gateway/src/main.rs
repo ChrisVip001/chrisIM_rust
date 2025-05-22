@@ -4,78 +4,60 @@ use axum::{
     Router,
 };
 use axum_server::{self, Handle};
-use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal;
+use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 // 直接使用tracing宏
-use tracing::{error, info, warn};
+use common::config::{Component, ConfigLoader};
+use common::grpc_client::base::register_service;
+use tracing::{error, info};
 
+mod api_doc;
+mod api_utils;
 mod auth;
 mod circuit_breaker;
-mod config;
 mod metrics;
 mod middleware;
 pub mod proxy;
 mod rate_limit;
 mod router;
-#[path = "tracing/mod.rs"]
-mod tracing_setup;
-mod api_doc;
 
-pub use common::grpc_client::user_client::UserServiceGrpcClient;
 pub use common::grpc_client::friend_client::FriendServiceGrpcClient;
 pub use common::grpc_client::group_client::GroupServiceGrpcClient;
-use common::service_registry::ServiceRegistry;
-use config::CONFIG;
-
-#[derive(Parser, Debug)]
-#[clap(name = "api-gateway", about = "API网关服务")]
-struct Args {
-    /// 配置文件路径
-    #[clap(short = 'f', long, default_value = "config/gateway.yaml")]
-    config_file: String,
-
-    /// 监听地址
-    #[clap(short = 'H', long)]
-    host: Option<String>,
-
-    /// 监听端口
-    #[clap(short, long)]
-    port: Option<u16>,
-}
+pub use common::grpc_client::user_client::UserServiceGrpcClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 初始化命令行参数
-    let args = Args::parse();
+    // 初始化rustls加密提供程序
+    common::service::init_rustls();
 
     // 加载配置
-    config::load_config(&args.config_file).await?;
+    info!("初始化全局配置单例");
+    ConfigLoader::init_global()?;
+
+    let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
 
     // 初始化日志和链路追踪
-    if let Err(e) = tracing_setup::init_tracer().await {
-        eprintln!("警告: 无法初始化链路追踪: {}", e);
+    // 根据配置判断是否启用链路追踪
+    if config.telemetry.enabled {
+        // 启动带有分布式链路追踪的日志系统
+        common::logging::init_telemetry(&config, "api-gateway")?;
+        info!(
+            "链路追踪功能已启用，追踪数据将发送到: {}",
+            config.telemetry.endpoint
+        );
+    } else {
+        // 只初始化日志系统
+        common::logging::init_from_config(&config)?;
+        info!("链路追踪功能未启用，仅初始化日志系统");
     }
 
     info!("正在启动API网关服务...");
-
-    // 获取服务地址和端口
-    let _ = CONFIG.read().await;
-    let host = args.host.unwrap_or_else(|| {
-        std::env::var("GATEWAY_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
-    });
-    let port = args.port.unwrap_or_else(|| {
-        std::env::var("GATEWAY_PORT")
-            .unwrap_or_else(|_| "8000".to_string())
-            .parse::<u16>()
-            .unwrap_or(8000)
-    });
 
     // 初始化Prometheus指标
     metrics::init_metrics();
@@ -89,59 +71,37 @@ async fn main() -> anyhow::Result<()> {
 
     // 创建路由器
     let router_builder = router::RouterBuilder::new(Arc::from(service_proxy.clone()));
-    let router = router_builder.build().await?;
+    let router = router_builder
+        .build(Arc::new(config.gateway.clone()))
+        .await?;
 
     // 配置中间件
-    let app = configure_middleware(router, service_proxy.clone()).await;
+    let app = configure_middleware(router).await;
 
     // 输出API服务信息
     info!("======================================================");
     info!("RustIM API服务启动");
     info!("======================================================");
-    
+
+    let (host, port) = (config.server.host.clone(), config.server.port);
     // 绑定地址
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("API网关服务监听: https://{}:{}", host, port);
-    
-    // 输出API文档地址
-    info!("API文档可通过以下地址访问:");
-    info!("- Swagger UI: https://{}:{}/swagger-ui", host, port);
-    info!("- OpenAPI JSON: https://{}:{}/api-doc/openapi.json", host, port);
-    info!("- 健康检查: https://{}:{}/health", host, port);
-    info!("- API文档健康检查: https://{}:{}/api-doc/health", host, port);
-    info!("======================================================");
 
     // 注册到 Consul
-    let service_registry = ServiceRegistry::from_env();
-    let service_id = service_registry
-        .register_service(
-            "api-gateway",
-            &host,
-            port as u32,
-            vec!["api", "gateway"]
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-            "/health",
-            "15s",
-        )
-        .await
-        .unwrap_or_else(|e| {
-            warn!("注册到 Consul 失败: {}, 服务发现功能可能不可用", e);
-            "api-gateway-unregistered".to_string()
-        });
+    let service_id = register_service(&config, Component::ApiGateway).await?;
 
-    info!("API网关已注册到Consul, 服务ID: {}", service_id);
+    info!("API网关已准备就绪, 服务ID: {}", service_id);
 
     // 创建服务器句柄
     let handle = Handle::new();
 
-    // 创建优雅关闭任务
-    let shutdown_handle = handle.clone();
-    let service_proxy_clone = service_proxy.clone();
-    let service_registry_clone = service_registry.clone();
-    tokio::spawn(async move {
-        shutdown_signal(shutdown_handle, service_proxy_clone, service_registry_clone).await;
+    // 设置关闭通道
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let config_clone = config.clone();
+    let service_id_clone = service_id.clone();
+    let shutdown_signal_task = tokio::spawn(async move {
+        common::service::shutdown_signal(shutdown_tx, service_id_clone, &config_clone).await
     });
 
     // 启动服务
@@ -150,33 +110,28 @@ async fn main() -> anyhow::Result<()> {
         .serve(app.into_make_service())
         .await
     {
+        let _ = shutdown_rx.await;
         error!("服务器错误: {}", err);
     }
 
-    info!("API网关服务已关闭");
-    
+    // 等待关闭信号处理完成
+    let _ = shutdown_signal_task.await?;
     // 关闭链路追踪，确保所有数据都被发送
     info!("正在关闭链路追踪...");
+
     common::logging::shutdown_telemetry();
-    
+    info!("API网关服务已关闭");
+
     Ok(())
 }
 
 /// 配置中间件
-async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) -> Router {
-    // 创建用户服务客户端
-    let service_client = common::grpc_client::GrpcServiceClient::from_env("user-service");
-    let user_client = Arc::new(UserServiceGrpcClient::new(service_client));
-    info!("创建并注册用户服务客户端扩展");
-
+async fn configure_middleware(app: Router) -> Router {
     // 添加链路追踪中间件
     let app = app.layer(TraceLayer::new_for_http());
-    
+
     // 添加请求路径日志中间件
     let app = app.layer(middleware::RequestLoggerLayer);
-
-    // 添加用户服务客户端扩展
-    let app = app.layer(axum::Extension(user_client));
 
     // 添加指标中间件
     let app = app.layer(metrics::MetricsLayer);
@@ -211,47 +166,4 @@ async fn configure_middleware(app: Router, _service_proxy: proxy::ServiceProxy) 
     app.layer(cors)
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
-}
-
-/// 优雅关闭信号处理
-async fn shutdown_signal(
-    handle: Handle,
-    service_proxy: proxy::ServiceProxy,
-    service_registry: ServiceRegistry,
-) {
-    let ctrl_c = async {
-        signal::ctrl_c().await.expect("无法安装Ctrl+C处理器");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("无法安装SIGTERM处理器")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-
-    info!("接收到关闭信号，准备优雅关闭...");
-
-    // 从 Consul 注销服务
-    match service_registry.deregister_service().await {
-        Ok(_) => info!("已从Consul注销服务"),
-        Err(e) => error!("从Consul注销服务失败: {}", e),
-    }
-
-    // 清理资源
-    service_proxy.shutdown().await;
-
-    // 发送优雅关闭信号，设置30秒超时
-    handle.graceful_shutdown(Some(Duration::from_secs(30)));
-
-    info!("服务关闭准备完成");
 }

@@ -1,12 +1,15 @@
 use crate::auth::jwt;
-use crate::config::CONFIG;
-use crate::UserServiceGrpcClient;
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::extract::Extension;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use common::config::ConfigLoader;
 use common::error::Error;
 use common::proto::user::VerifyPasswordRequest;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, error, info};
+use common::grpc_client::UserServiceGrpcClient;
 
 /// 登录请求
 #[derive(Debug, Deserialize)]
@@ -60,23 +63,30 @@ pub struct UserInfoResponse {
     pub avatar_url: Option<String>,
 }
 
+/// 用户服务共享实例
+#[derive(Clone)]
+pub struct SharedUserService(Arc<UserServiceGrpcClient>);
+
+impl SharedUserService {
+    /// 创建新的共享用户服务
+    pub fn new(client: Arc<UserServiceGrpcClient>) -> Self {
+        Self(client)
+    }
+
+    /// 验证密码
+    pub async fn verify_password(&self, request: VerifyPasswordRequest) -> Result<common::proto::user::VerifyPasswordResponse, anyhow::Error> {
+        // 克隆基础客户端
+        let mut client = (*self.0).clone();
+        client.verify_password(request).await.map_err(Into::into)
+    }
+}
+
 /// 处理登录请求
 pub async fn login(
-    user_client: Option<axum::extract::Extension<Arc<UserServiceGrpcClient>>>,
+    Extension(user_service): Extension<SharedUserService>,
     Json(login_req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, Error> {
     debug!("登录请求：用户 {}", login_req.username);
-
-    // 需要UserServiceGrpcClient扩展
-    let client = match user_client {
-        Some(axum::extract::Extension(client)) => client,
-        None => {
-            error!("未找到UserServiceGrpcClient扩展");
-            return Err(Error::Internal(
-                "未找到UserServiceGrpcClient扩展".to_string(),
-            ));
-        }
-    };
 
     // 创建验证密码请求
     let verify_request = VerifyPasswordRequest {
@@ -85,7 +95,7 @@ pub async fn login(
     };
 
     // 调用用户服务验证密码
-    let response = client.verify_password(verify_request).await.map_err(|e| {
+    let response = user_service.verify_password(verify_request).await.map_err(|e| {
         error!("调用用户服务验证密码失败: {}", e);
         Error::Internal(format!("验证密码服务错误: {}", e))
     })?;
@@ -99,8 +109,9 @@ pub async fn login(
     let user = response.user.unwrap();
 
     // 读取JWT配置
-    let config = CONFIG.read().await;
-    let jwt_config = &config.auth.jwt;
+    let config = ConfigLoader::get_global().expect("Failed to get global config");
+    
+    let jwt_config = &config.gateway.auth.jwt;
 
     // 构建额外信息
     let mut extra = std::collections::HashMap::new();
@@ -173,8 +184,9 @@ pub async fn refresh_token(
     debug!("刷新令牌请求");
 
     // 读取JWT配置
-    let config = CONFIG.read().await;
-    let jwt_config = &config.auth.jwt;
+    let config = ConfigLoader::get_global().expect("Failed to get global config");
+
+    let jwt_config = &config.gateway.auth.jwt;
 
     // 验证刷新令牌
     let user_info = jwt::verify_token(refresh_req.refresh_token, jwt_config).await?;

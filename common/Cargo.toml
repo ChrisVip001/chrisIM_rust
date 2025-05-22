@@ -23,14 +23,18 @@ thiserror = { workspace = true }
 jsonwebtoken = { workspace = true }
 dotenv = { workspace = true }
 async-trait = { workspace = true }
-config = { workspace = true, features = ["yaml", "toml", "json"] }
 reqwest = { workspace = true, features = ["json"] }
 bcrypt = { workspace = true }
 aws-sdk-s3 = {workspace = true }
 rand = { workspace = true }
+argon2 = "0.5.3"
 # 配置监听
+config = { workspace = true, features = ["yaml", "toml", "json"] }
 notify = { version = "8.0.0", optional = true }
 mongodb = "2.8.2"
+# 添加rustls依赖
+rustls = "0.23.26"
+rustls-pemfile = "2.1.0"
 
 # 链路追踪和日志
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -41,6 +45,11 @@ tracing-opentelemetry = "0.20"
 tower = "0.4.13"
 # 正则表达式
 regex = "1.11.1"
+once_cell = "1.21.3"
+# Consul
+rs-consul = "0.11.0"  # 使用最新版本
+hostname = "0.4"  # 用于获取主机名
+http = "0.2.12"
 
 [features]
 default = []

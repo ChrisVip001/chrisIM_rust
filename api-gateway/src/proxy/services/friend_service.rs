@@ -2,11 +2,10 @@ use axum::{
     body::Body,
     http::{Method, Response, StatusCode},
 };
-use common::grpc_client::FriendServiceGrpcClient;
-use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
-
+use common::grpc_client::FriendServiceGrpcClient;
+use common::proto;
 use super::common::{success_response, extract_string_param, timestamp_to_datetime_string, get_i64_param};
 
 /// 好友服务处理器
@@ -23,7 +22,7 @@ impl FriendServiceHandler {
 
     /// 处理好友服务请求
     pub async fn handle_request(
-        &self,
+        &mut self,
         method: &Method,
         path: &str,
         body: Value,

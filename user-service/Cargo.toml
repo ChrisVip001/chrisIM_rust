@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-common = { path = "../common" }
+common = { path = "../common", features = ["dynamic-config"]}
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true }
@@ -13,11 +13,6 @@ sqlx = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-dotenv = { workspace = true }
 anyhow = { workspace = true }
-clap = { workspace = true }
-axum = { workspace = true }
 async-trait = { workspace = true }
-axum-server = {workspace = true}
 prost-types = { workspace = true }
