@@ -7,6 +7,7 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
+use tonic::transport::Server;
 use tracing::{error, info};
 
 use common::config::{AppConfig, Component};

@@ -13,7 +13,7 @@ use super::Pusher;
 use common::config::AppConfig;
 use common::message::msg_service_client::MsgServiceClient;
 use common::message::{GroupMemSeq, Msg, SendGroupMsgRequest, SendMsgRequest};
-use common::{service_register_center, ServiceRegister};
+use common::service_register_center::{service_register_center, ServiceRegister};
 
 /// 消息推送服务的具体实现
 /// 负责与多个WebSocket网关通信，将消息推送给在线客户端
