@@ -91,7 +91,7 @@ impl UserService for UserServiceImpl {
         request: Request<ForgetPasswordRequest>,
     ) -> std::result::Result<Response<UserResponse>, Status> {
         let req = request.into_inner();
-        debug!("用户忘记密码修改密码，手机号||用户名: {}||{}", req.phone, req.username);
+        debug!("用户忘记密码修改密码，手机号||账号: {}||{}", req.username, req.username);
         // 转换请求数据
         let forget_data = ForgetPasswordData::from(req);
         // 短信验证码校验 todo
@@ -191,13 +191,14 @@ impl UserService for UserServiceImpl {
         request: Request<UpdateUserRequest>,
     ) -> std::result::Result<Response<UserResponse>, Status> {
         let req = request.into_inner();
-        debug!("更新用户请求，用户ID: {}", req.user_id);
+        let user_id = req.user_id.clone().unwrap_or_default();
+        debug!("更新用户请求，用户ID: {}", user_id);
 
         // 转换请求数据
         let update_data = UpdateUserData::from(req.clone());
 
         // 更新用户
-        let user = match self.repository.update_user(&req.user_id, update_data).await {
+        let user = match self.repository.update_user(&user_id, update_data).await {
             Ok(user) => user,
             Err(err) => {
                 error!("更新用户失败: {}", err);

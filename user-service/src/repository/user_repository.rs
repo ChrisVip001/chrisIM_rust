@@ -1,6 +1,6 @@
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData, User};
 use chrono::{TimeZone, Utc};
-use common::utils::{hash_password, verify_password};
+use common::utils::{generate_user_id, hash_password, verify_password};
 use common::{Error, Result};
 use sqlx::{PgPool, QueryBuilder, Row};
 use tracing::{debug, error};
@@ -38,17 +38,20 @@ impl UserRepository {
             }
         }
         // 生成密码哈希
-        let password_hash = hash_password(&data.password)?;
+        let mut password_hash = hash_password("A123456")?;
+        if !data.password.clone().is_empty(){
+            password_hash = hash_password(&data.password)?;
+        }
         // 生成用户ID
-        let id = Uuid::new_v4().simple();
+        // let id = Uuid::new_v4().simple();
+        let id = generate_user_id();
         // 插入用户数据
         let row = sqlx::query!(
             r#"
             INSERT INTO users (id, username, password, phone, tenant_id)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             "#,
             id.to_string(),
             data.username,
@@ -72,7 +75,7 @@ impl UserRepository {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            phone: row.phone.unwrap_or_default(),
+            phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
@@ -80,7 +83,6 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
-            user_idx: row.user_idx,
         };
         debug!("用户注册成功: {}", user.id);
         Ok(user)
@@ -93,8 +95,8 @@ impl UserRepository {
             return Err(Error::BadRequest("企业号不能为空".to_string()));
         }
         // 用户名或者手机号
-        if data.username.is_empty() && data.phone.is_empty() {
-            return Err(Error::BadRequest("用户名或者手机号不能为空".to_string()));
+        if data.username.is_empty() {
+            return Err(Error::BadRequest("账号或者手机号不能为空".to_string()));
         }
         // 生成密码哈希
         let password_hash = hash_password(&data.password)?;
@@ -103,14 +105,13 @@ impl UserRepository {
             r#"
             UPDATE users
             SET password = COALESCE($1, password)
-            WHERE username = $2 or phone = $3
+            WHERE id = $2 or phone = $3
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             "#,
             password_hash,
             data.username,
-            data.phone
+            data.username
         )
         .fetch_one(&self.pool)
         .await
@@ -128,7 +129,7 @@ impl UserRepository {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            phone: row.phone.unwrap_or_default(),
+            phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
@@ -136,7 +137,6 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
-            user_idx: row.user_idx,
         };
         debug!("修改密码成功: {}", user.username);
         Ok(user)
@@ -158,19 +158,20 @@ impl UserRepository {
         }
 
         // 生成密码哈希
-        let password_hash = hash_password(&data.password)?;
-
+        let mut password_hash = hash_password("A123456")?;
+        if !data.password.clone().is_empty(){
+            password_hash = hash_password(&data.password)?;
+        }
         // 生成用户ID
-        let id = Uuid::new_v4().simple();
-
+        // let id = Uuid::new_v4().simple();
+        let id = generate_user_id();
         // 插入用户数据
         let row = sqlx::query!(
             r#"
             INSERT INTO users (id, username, email, password, nickname, avatar_url)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             "#,
             id.to_string(),
             data.username,
@@ -195,7 +196,7 @@ impl UserRepository {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            phone: row.phone.unwrap_or_default(),
+            phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
@@ -203,7 +204,6 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
-            user_idx: row.user_idx,
         };
 
         debug!("用户创建成功: {}", user.id);
@@ -215,8 +215,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             FROM users
             WHERE id = $1
             "#,
@@ -242,7 +241,7 @@ impl UserRepository {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            phone: row.phone.unwrap_or_default(),
+            phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
@@ -250,7 +249,6 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
-            user_idx: row.user_idx,
         };
 
         Ok(user)
@@ -261,8 +259,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             FROM users
             WHERE username = $1
             "#,
@@ -288,7 +285,7 @@ impl UserRepository {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            phone: row.phone.unwrap_or_default(),
+            phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
@@ -296,7 +293,6 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
-            user_idx: row.user_idx,
         };
 
         Ok(user)
@@ -307,8 +303,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             FROM users
             WHERE email = $1
             "#,
@@ -334,7 +329,7 @@ impl UserRepository {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            phone: row.phone.unwrap_or_default(),
+            phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
@@ -342,7 +337,6 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.updated_at,
-            user_idx: row.user_idx,
         };
 
         Ok(user)
@@ -353,8 +347,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             FROM users
             WHERE phone = $1
             "#,
@@ -379,7 +372,7 @@ impl UserRepository {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            phone: row.phone.unwrap_or_default(),
+            phone: row.phone,
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
@@ -387,7 +380,6 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
-            user_idx: row.user_idx,
         };
         Ok(user)
     }
@@ -401,6 +393,16 @@ impl UserRepository {
         // 动态构建SET子句
         let mut builder = QueryBuilder::new(" UPDATE users SET ");
         let mut first = true;
+        if let Some(username) = data.username {
+            if !first { builder.push(","); }
+            builder.push(" username = COALESCE(" ).push_bind(username).push(", username) ");
+            first = false;
+        }
+        if let Some(user_id) = data.user_id {
+            if !first { builder.push(","); }
+            builder.push(" id = COALESCE(" ).push_bind(user_id).push(", id) ");
+            first = false;
+        }
         if let Some(email) = data.email {
             if !first { builder.push(","); }
             builder.push(" email = COALESCE(" ).push_bind(email).push(", email) ");
@@ -434,9 +436,9 @@ impl UserRepository {
 
         if !first { builder.push(","); }
         builder.push(" updated_at = ").push_bind(Utc::now());
-        builder.push(" WHERE id = ").push_bind(&data.user_id);
+        builder.push(" WHERE id = ").push_bind(id);
         builder.push(" RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, user_idx "
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time "
         );
         // 生成最终SQL
         let query = builder.build_query_as::<User>();
@@ -459,7 +461,6 @@ impl UserRepository {
             user_stat: row.user_stat,
             tenant_id: row.tenant_id,
             last_login_time: row.last_login_time,
-            user_idx: row.user_idx,
         };
 
         debug!("用户更新成功: {}", updated_user.id);
@@ -498,8 +499,7 @@ impl UserRepository {
         let rows = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time,
-            user_idx
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
             FROM users
             WHERE username ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1
             ORDER BY username
@@ -527,7 +527,7 @@ impl UserRepository {
                 avatar_url: row.avatar_url,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
-                phone: row.phone.unwrap_or_default(),
+                phone: row.phone,
                 address: row.address,
                 head_image: row.head_image,
                 head_image_thumb: row.head_image_thumb,
@@ -535,7 +535,6 @@ impl UserRepository {
                 user_stat: row.user_stat.unwrap_or_default() as i32,
                 tenant_id: row.tenant_id.unwrap_or_default(),
                 last_login_time: row.last_login_time,
-                user_idx: row.user_idx
             })
             .collect();
 

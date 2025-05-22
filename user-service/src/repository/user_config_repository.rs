@@ -1,11 +1,6 @@
-use chrono::{TimeZone, Utc};
+use chrono::{Utc};
 use sqlx::{PgPool, QueryBuilder};
-use common::{Error, Result};
-use tracing::{debug, error};
-use tracing::log::info;
-use uuid::Uuid;
-use common::utils::hash_password;
-use crate::model::user::User;
+use common::{Result};
 use crate::model::user_config::{UserConfig, UserConfigData};
 
 /// 用户设置仓库实现
@@ -54,7 +49,7 @@ impl UserConfigRepository {
             None => {
                 // 如果没有找到记录，返回默认配置
                 Ok(UserConfig {
-                    id: "".to_string(),
+                    id: 0, // 使用默认值 0 作为占位符
                     user_id: id.to_string(),
                     allow_phone_search: Option::from(2),  // 设置默认值
                     allow_id_search: Option::from(2),     // 设置默认值
@@ -73,7 +68,7 @@ impl UserConfigRepository {
 
         // 检查用户设置是否存在
         let user_conifg_existed = self.get_user_config(&data.user_id).await;
-        if !user_conifg_existed?.id.is_empty() {
+        if user_conifg_existed?.id != 0 { // 检查 id 是否为默认值 0
             // 设置已存在则进行修改
             // 动态构建SET子句
             let mut builder = QueryBuilder::new(" UPDATE user_config SET ");
@@ -128,13 +123,12 @@ impl UserConfigRepository {
             // 不存在则进行新增
             let row = sqlx::query!(
                 r#"
-                INSERT INTO user_config (id, user_id, allow_phone_search, allow_id_search, auto_load_video, 
+                INSERT INTO user_config (user_id, allow_phone_search, allow_id_search, auto_load_video, 
                                          auto_load_pic,msg_read_flag)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id, user_id, allow_phone_search, allow_id_search, auto_load_video, auto_load_pic, msg_read_flag,
                 create_time,update_time
                 "#,
-                Uuid::new_v4().simple().to_string(),
                 data.user_id,
                 data.allow_phone_search,
                 data.allow_id_search,
