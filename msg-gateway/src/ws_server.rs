@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +13,6 @@ use futures::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
-use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
 use common::config::AppConfig;
@@ -121,7 +119,7 @@ impl WsServer {
         // 配置Axum路由
         let router = Router::new()
             .route(
-                "/ws/:user_id/conn/:pointer_id/:platform/:token",
+                "/ws/{user_id}/conn/{pointer_id}/{platform}/{token}",
                 get(Self::websocket_handler),
             )
             .route("/test", get(Self::test))
@@ -145,7 +143,7 @@ impl WsServer {
         // 在独立任务中启动RPC服务
         let mut rpc = tokio::spawn(async move {
             // 启动RPC服务器，用于接收来自msg-server的消息
-            MsgRpcService::start(hub, &config).await.unwrap();
+            MsgRpcService::start(hub, &config).await.expect("RPC server start error");
         });
         
         // 等待任一任务完成，并中止另一个任务

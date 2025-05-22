@@ -1,11 +1,13 @@
-use tracing::{info, Level};
+use tracing::info;
 
-use common::config::{AppConfig, ConfigLoader};
+use common::config::ConfigLoader;
 use msg_gateway::ws_server::WsServer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 加载配置文件
+    // 初始化rustls加密提供程序
+    common::service::init_rustls();
+
     // 初始化全局配置
     ConfigLoader::init_global().expect("初始化全局配置失败");
 

@@ -183,7 +183,7 @@ server:
 service_center:
   host: 127.0.0.1   # "0.0.0.0" 在Docker中使用0.0.0.0绑定所有接口
   port: 8500
-  timeout: 5000
+  timeout: 8080
   protocol: http
   service_refresh_interval: 30
 
@@ -191,7 +191,7 @@ service_center:
 websocket:
   protocol: ws
   host: 127.0.0.1
-  port: 50000
+  port: 8085
   name: websocket
   tags:
     - websocket

@@ -47,8 +47,8 @@ async fn main() -> Result<()> {
     info!("正在启动用户服务...");
 
     // 使用已加载的配置
-    let host = &config.server.host;
-    let port = config.server.port;
+    let host = &config.rpc.user.host;
+    let port = config.rpc.user.port;
     let addr = format!("{}:{}", host, port).parse::<SocketAddr>()?;
 
     // 初始化数据库连接池

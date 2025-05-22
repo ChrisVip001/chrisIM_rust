@@ -104,6 +104,6 @@ pub trait Cache: Sync + Send + Debug {
 ///
 /// # 返回
 /// * 实现了Cache特征的实例，被Arc包裹以便共享
-pub fn cache(config: &AppConfig) -> Arc<dyn Cache> {
-    Arc::new(redis::RedisCache::from_config(config))
+pub async fn cache(config: &AppConfig) -> Arc<dyn Cache> {
+    Arc::new(redis::RedisCache::from_config(config).await)
 }

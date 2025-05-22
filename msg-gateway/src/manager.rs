@@ -30,7 +30,7 @@ pub struct Manager {
 #[allow(dead_code)]
 impl Manager {
     pub async fn new(tx: mpsc::Sender<Msg>, config: &AppConfig) -> Self {
-        let cache = cache::cache(config);
+        let cache = cache::cache(config).await;
         let chat_rpc = common::grpc_client::base::get_rpc_client(config, config.rpc.chat.name.clone())
             .await
             .expect("chat rpc can't open");
