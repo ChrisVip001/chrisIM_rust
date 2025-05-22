@@ -142,7 +142,6 @@ impl RpcServiceConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RpcConfig {
-    pub health_check: bool,
     pub api: RpcServiceConfig,
     pub ws: RpcServiceConfig,
     pub chat: RpcServiceConfig,

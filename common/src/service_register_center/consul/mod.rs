@@ -184,9 +184,9 @@ impl ServiceRegister for Consul {
                 let check_json = json!({
                     "Name": check.name,
                     "HTTP": check.url,
-                    "Interval": check.interval,
-                    "Timeout": check.timeout,
-                    "DeregisterCriticalServiceAfter": check.deregister_after
+                    "Interval": check.interval.clone() + "s",
+                    "Timeout": check.timeout.clone() + "s",
+                    "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
                 });
                 payload["Check"] = check_json;
                 info!("Using HTTP health check for service: {}", registration.name);
@@ -195,8 +195,8 @@ impl ServiceRegister for Consul {
                 let check_json = json!({
                     "Name": check.name,
                     "Notes": "TTL health check for gRPC service",
-                    "TTL": check.interval, // 15秒TTL
-                    "DeregisterCriticalServiceAfter": check.deregister_after
+                    "TTL": check.interval.clone() + "s", // 15秒TTL
+                    "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
                 });
                 payload["Check"] = check_json;
                 info!("Using TTL health check for service: {}", registration.name);
@@ -207,8 +207,8 @@ impl ServiceRegister for Consul {
             let check_json = json!({
                 "Name": format!("{} TTL Check", registration.name),
                 "Notes": "Automatically managed TTL health check",
-                "TTL": "15",
-                "DeregisterCriticalServiceAfter": "60"
+                "TTL": "15s",
+                "DeregisterCriticalServiceAfter": "60s"
             });
             payload["Check"] = check_json;
             info!("Using auto-configured TTL health check for service: {}", registration.name);

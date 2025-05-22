@@ -23,23 +23,23 @@ use tracing::info;
 /// 路由构建器
 pub struct RouterBuilder {
     service_proxy: Arc<ServiceProxy>,
+    /// 用户服务,  用于处理用户登录认证
     user_service: SharedUserService,
     router: Router,
 }
 
 impl RouterBuilder {
     /// 创建新的路由构建器
-    pub fn new(service_proxy: Arc<ServiceProxy>) -> Self {
+    pub async fn new(service_proxy: Arc<ServiceProxy>) -> Self {
         // 创建用户服务客户端
         let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
-        let service_client = tokio::runtime::Handle::current().block_on(async {
-            get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
-                &config,
-                "user-service".to_string(),
-            )
-            .await
-            .expect("无法连接用户服务")
-        });
+        let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
+            &config,
+            "user-service".to_string(),
+        )
+        .await
+        .expect("无法连接用户服务");
+
         let user_client = Arc::new(CommonUserServiceClient::new(service_client));
         let user_service = SharedUserService::new(user_client);
 

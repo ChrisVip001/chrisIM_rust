@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
     info!("初始化 gRPC 客户端工厂完成，支持 HTTP 到 gRPC 的请求转发");
 
     // 创建路由器
-    let router_builder = router::RouterBuilder::new(Arc::from(service_proxy.clone()));
+    let router_builder = router::RouterBuilder::new(Arc::from(service_proxy.clone())).await;
     let router = router_builder
         .build(Arc::new(config.gateway.clone()))
         .await?;

@@ -197,12 +197,12 @@ websocket:
     - websocket
     - http
   health_check:
-    health_type: "http",
-    name: "websocket",
-    url: "/health",
-    interval: 15,
-    timeout: 60,
-    deregister_after: 60,
+    health_type: "http"
+    name: "websocket"
+    url: "/health"
+    interval: 15
+    timeout: 60
+    deregister_after: 60
 
 # RPC服务配置
 rpc:
@@ -215,12 +215,12 @@ rpc:
       - api
       - grpc
     health_check:
-      health_type: "ttl",
-      name: "api",
-      url: "/health",
-      interval: 15,
-      timeout: 60,
-      deregister_after: 60,
+      health_type: "ttl"
+      name: "api"
+      url: "/health"
+      interval: 15
+      timeout: 60
+      deregister_after: 60
   ws:
     protocol: http
     host: 127.0.0.1
@@ -230,12 +230,12 @@ rpc:
       - ws
       - grpc
     health_check:
-      health_type: "ttl",
-      name: "ws",
-      url: "/health",
-      interval: 15,
-      timeout: 60,
-      deregister_after: 60,
+      health_type: "ttl"
+      name: "ws"
+      url: "/health"
+      interval: 15
+      timeout: 60
+      deregister_after: 60
   chat:
     protocol: http
     host: 127.0.0.1
@@ -245,12 +245,12 @@ rpc:
       - chat
       - grpc
     health_check:
-      health_type: "ttl",
-      name: "chat",
-      url: "/health",
-      interval: 15,
-      timeout: 60,
-      deregister_after: 60,
+      health_type: "ttl"
+      name: "chat"
+      url: "/health"
+      interval: 15
+      timeout: 60
+      deregister_after: 60
   pusher:
     protocol: http
     host: 127.0.0.1
@@ -260,12 +260,12 @@ rpc:
       - pusher
       - grpc
     health_check:
-      health_type: "ttl",
-      name: "pusher",
-      url: "/health",
-      interval: 15,
-      timeout: 60,
-      deregister_after: 60,
+      health_type: "ttl"
+      name: "pusher"
+      url: "/health"
+      interval: 15
+      timeout: 60
+      deregister_after: 60
   user:
     protocol: http
     host: 127.0.0.1
@@ -275,12 +275,12 @@ rpc:
       - user
       - grpc
     health_check:
-      health_type: "ttl",
-      name: "user",
-      url: "/health",
-      interval: 15,
-      timeout: 60,
-      deregister_after: 60,
+      health_type: "ttl"
+      name: "user"
+      url: "/health"
+      interval: 15
+      timeout: 60
+      deregister_after: 60
   friend:
     protocol: http
     host: 127.0.0.1
@@ -290,12 +290,12 @@ rpc:
       - friend
       - grpc
     health_check:
-      health_type: "ttl",
-      name: "friend",
-      url: "/health",
-      interval: 15,
-      timeout: 60,
-      deregister_after: 60,
+      health_type: "ttl"
+      name: "friend"
+      url: "/health"
+      interval: 15
+      timeout: 60
+      deregister_after: 60
   group:
     protocol: http
     host: 127.0.0.1
@@ -305,12 +305,12 @@ rpc:
       - group
       - grpc
     health_check:
-      health_type: "ttl",
-      name: "group",
-      url: "/health",
-      interval: 15,
-      timeout: 60,
-      deregister_after: 60,
+      health_type: "ttl"
+      name: "group"
+      url: "/health"
+      interval: 15
+      timeout: 60
+      deregister_after: 60
 
 # Redis配置
 redis:
