@@ -451,7 +451,15 @@ impl FriendService for FriendServiceImpl {
 
         // 检查用户是否存在
         self.check_user_exists(user_id).await?;
-
+        
+        // 检查分组名称是否重复
+        let exclude_group_id = req.id.as_ref().map(|id| Uuid::parse_str(id).unwrap());
+        if self.repository.check_group_name_exists(user_id, &req.group_name, exclude_group_id).await.map_err(|e| {
+            error!("检查分组名称是否重复失败: {}", e);
+            Status::internal("检查分组名称是否重复失败")
+        })? {
+            return Err(Status::already_exists("分组名称已存在"));
+        }
         // 解析并验证好友ID列表
         let friend_ids: Vec<Uuid> = req.friend_ids
             .into_iter()
@@ -496,9 +504,10 @@ impl FriendService for FriendServiceImpl {
                 error!("更新分组好友关系失败: {}", e);
                 Status::internal("更新分组好友关系失败")
             })?;
-
+        let mut friend_group = group.to_proto();
+        friend_group.friend_count = updated_friend_ids.len() as i32;
         Ok(Response::new(FriendGroupResponse {
-            group: Some(group.to_proto()),
+            group: Some(friend_group),
             friend_ids: updated_friend_ids.into_iter().map(|id| id.to_string()).collect(),
         }))
     }

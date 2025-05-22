@@ -193,7 +193,7 @@ impl FriendServiceGrpcClient {
     /// 创建或更新好友分组
     pub async fn create_or_update_friend_group(
         &self,
-        id: Option<&str>,
+        id: Option<String>,
         user_id: &str,
         group_name: &str,
         sort_order: i32,

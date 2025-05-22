@@ -804,4 +804,41 @@ impl FriendshipRepository {
             .collect())
     }
     
+    // 检查分组名称是否重复
+    pub async fn check_group_name_exists(&self, user_id: Uuid, group_name: &str, exclude_group_id: Option<Uuid>) -> Result<bool> {
+        let exists = if let Some(id) = exclude_group_id {
+            // 更新分组时，排除当前分组
+            sqlx::query!(
+                r#"
+                SELECT COUNT(*) > 0 as exists
+                FROM friend_group
+                WHERE user_id = $1 
+                AND group_name = $2
+                AND id != $3
+                "#,
+                user_id.to_string(),
+                group_name,
+                id.to_string()
+            )
+            .fetch_one(&self.pool)
+            .await?
+            .exists
+        } else {
+            // 创建新分组时，检查所有分组
+            sqlx::query!(
+                r#"
+                SELECT COUNT(*) > 0 as exists
+                FROM friend_group
+                WHERE user_id = $1 
+                AND group_name = $2
+                "#,
+                user_id.to_string(),
+                group_name
+            )
+            .fetch_one(&self.pool)
+            .await?
+            .exists
+        };
+        Ok(exists.unwrap())
+    }
 }
