@@ -299,7 +299,7 @@ rpc:
   group:
     protocol: http
     host: 127.0.0.1
-    port: 50005
+    port: 50006
     name: group
     tags:
       - group

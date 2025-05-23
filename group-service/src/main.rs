@@ -1,6 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
-use common::config::{AppConfig, Component, ConfigLoader};
+use common::config::{Component, ConfigLoader};
 use common::grpc::LoggingInterceptor;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
@@ -21,6 +20,9 @@ const FILE_DESCRIPTOR_SET: &[u8] = common::proto::group::FILE_DESCRIPTOR_SET;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 初始化rustls加密提供程序
+    common::service::init_rustls();
+    
     // 初始化全局配置
     ConfigLoader::init_global().expect("初始化全局配置失败");
 
@@ -41,8 +43,8 @@ async fn main() -> Result<()> {
     info!("正在启动群组服务...");
 
     // 使用已加载的配置
-    let host = &config.server.host;
-    let port = config.server.port;
+    let host = &config.rpc.group.host;
+    let port = config.rpc.group.port;
     let addr = format!("{}:{}", host, port).parse::<SocketAddr>()?;
 
     // 初始化数据库连接池
