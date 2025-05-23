@@ -52,12 +52,12 @@ impl ConsumerService {
             .set("enable.auto.commit", "true")
             .set("auto.offset.reset", &config.kafka.consumer.auto_offset_reset)
             .create()
-            .expect("消费者创建失败");
+            .map_err(|e| Error::Internal(format!("消费者创建失败: {}", e)))?;
 
         // 订阅指定的Kafka主题
         consumer
             .subscribe(&[&config.kafka.topic])
-            .expect("无法订阅指定的主题");
+            .map_err(|e| Error::Internal(format!("无法订阅指定的主题: {}", e)))?;
 
         // 初始化推送服务
         let pusher = push_service(config).await?;
@@ -69,7 +69,7 @@ impl ConsumerService {
 
         // 初始化缓存和消息盒子仓库
         let cache = cache::cache(config).await;
-        let msg_box = msg_rec_box_repo(config).await;
+        let msg_box = msg_rec_box_repo(config).await?;
 
         Ok(Self {
             consumer,

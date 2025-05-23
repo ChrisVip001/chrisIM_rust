@@ -44,13 +44,25 @@ impl DatabaseConfig {
         )
     }
     pub fn mongo_url(&self) -> String {
-        format!(
-            "mongodb://{:?}:{:?}@{}:{}/{}",
-            self.mongodb.user,
-            self.mongodb.password,
-            self.mongodb.host,
-            self.mongodb.port,
-            self.mongodb.database
-        )
+        match (&self.mongodb.user, &self.mongodb.password) {
+            (Some(user), Some(password)) => {
+                format!(
+                    "mongodb://{}:{}@{}:{}/{}",
+                    user,
+                    password,
+                    self.mongodb.host,
+                    self.mongodb.port,
+                    self.mongodb.database
+                )
+            }
+            _ => {
+                format!(
+                    "mongodb://{}:{}/{}",
+                    self.mongodb.host,
+                    self.mongodb.port,
+                    self.mongodb.database
+                )
+            }
+        }
     }
 }

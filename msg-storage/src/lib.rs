@@ -1,7 +1,7 @@
 use seq::SeqRepo;
 use tracing::info;
 
-use common::{config::AppConfig, message::MsgType};
+use common::{config::AppConfig, message::MsgType, error::Error};
 
 mod mongodb;
 mod postgres;
@@ -36,15 +36,17 @@ impl DbRepo {
     }
 }
 
-pub async fn msg_rec_box_repo(config: &AppConfig) -> Arc<dyn MsgRecBoxRepo> {
-    Arc::new(mongodb::MsgBox::from_config(config).await)
+pub async fn msg_rec_box_repo(config: &AppConfig) -> Result<Arc<dyn MsgRecBoxRepo>, Error> {
+    let msg_box = mongodb::MsgBox::from_config(config).await?;
+    Ok(Arc::new(msg_box))
 }
 
-pub async fn msg_rec_box_cleaner(config: &AppConfig) -> Arc<dyn MsgRecBoxCleaner> {
-    Arc::new(mongodb::MsgBox::from_config(config).await)
+pub async fn msg_rec_box_cleaner(config: &AppConfig) -> Result<Arc<dyn MsgRecBoxCleaner>, Error> {
+    let msg_box = mongodb::MsgBox::from_config(config).await?;
+    Ok(Arc::new(msg_box))
 }
 
-pub async fn clean_receive_box(config: &AppConfig) {
+pub async fn clean_receive_box(config: &AppConfig) -> Result<(), Error> {
     let types: Vec<i32> = config
         .database
         .mongodb
@@ -56,10 +58,11 @@ pub async fn clean_receive_box(config: &AppConfig) {
         .collect();
     let period = config.database.mongodb.clean.period;
 
-    let msg_box = msg_rec_box_cleaner(config).await;
+    let msg_box = msg_rec_box_cleaner(config).await?;
     info!(
         "clean receive box task started, and the period is {period}s; the except types is {:?}",
         types
     );
     msg_box.clean_receive_box(period, types);
+    Ok(())
 }

@@ -8,7 +8,7 @@ use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
 use tonic::transport::Server;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use common::config::{AppConfig, Component};
 use common::grpc::LoggingInterceptor;
@@ -58,9 +58,10 @@ impl ChatRpcService {
             .expect("生产者创建失败");
 
         // 确保Kafka主题存在，如不存在则创建
-        Self::ensure_topic_exists(&config.kafka.topic, &broker, config.kafka.connect_timeout as u16)
-            .await
-            .expect("主题创建失败");
+        if let Err(e) = Self::ensure_topic_exists(&config.kafka.topic, &broker, config.kafka.connect_timeout as u16).await {
+            error!("主题创建失败: {}，但服务将继续运行", e);
+            warn!("Kafka 服务可能未启动，请检查 Kafka 服务状态");
+        }
 
         // 向服务注册中心注册消息服务
         common::grpc_client::base::register_service(config, Component::MessageServer)

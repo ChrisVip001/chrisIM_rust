@@ -8,7 +8,7 @@ use mongodb::{
 };
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::StreamExt;
-use tracing::log::debug;
+use tracing::log::{debug, warn};
 
 use common::config::AppConfig;
 use common::error::Error;
@@ -36,11 +36,12 @@ impl MsgBox {
         let mb = db.collection(COLL_SINGLE_BOX);
         Self { mb }
     }
-    pub async fn from_config(config: &AppConfig) -> Self {
-        let db = Client::with_uri_str(config.database.mongo_url())
+    pub async fn from_config(config: &AppConfig) -> Result<Self, Error> {
+        let client = Client::with_uri_str(config.database.mongo_url())
             .await
-            .unwrap()
-            .database(&config.database.mongodb.database);
+            .map_err(|e| Error::Internal(format!("MongoDB 连接失败: {}", e)))?;
+        
+        let db = client.database(&config.database.mongodb.database);
         let mb = db.collection(COLL_SINGLE_BOX);
 
         // create server_id index
@@ -48,17 +49,25 @@ impl MsgBox {
             .keys(doc! {"receiver_id": 1, "seq":1})
             .options(IndexOptions::builder().unique(false).build())
             .build();
-        mb.create_index(index_model, None).await.unwrap();
-        debug!("create [receiver_id, seq] index for message box");
+        
+        if let Err(e) = mb.create_index(index_model, None).await {
+            warn!("创建 [receiver_id, seq] 索引失败: {}", e);
+        } else {
+            debug!("create [receiver_id, seq] index for message box");
+        }
 
         let index_model = IndexModel::builder()
             .keys(doc! {"send_id": 1, "send_seq":1})
             .options(IndexOptions::builder().unique(false).build())
             .build();
-        mb.create_index(index_model, None).await.unwrap();
-        debug!("create [send_id, send_seq] index for message box");
+        
+        if let Err(e) = mb.create_index(index_model, None).await {
+            warn!("创建 [send_id, send_seq] 索引失败: {}", e);
+        } else {
+            debug!("create [send_id, send_seq] index for message box");
+        }
 
-        Self { mb }
+        Ok(Self { mb })
     }
 }
 
@@ -289,7 +298,7 @@ mod tests {
     use std::ops::Deref;
 
     use common::message::{MsgType, PlatformType};
-    use crate::mongodb::MongoDbTester;
+    use super::super::test::MongoDbTester;
 
     use super::*;
 
@@ -311,8 +320,8 @@ mod tests {
             let tdb = MongoDbTester::new(
                 &config.database.mongodb.host,
                 config.database.mongodb.port,
-                &config.database.mongodb.user,
-                &config.database.mongodb.password,
+                config.database.mongodb.user.as_deref().unwrap_or(""),
+                config.database.mongodb.password.as_deref().unwrap_or(""),
             )
             .await;
             let msg_box = MsgBox::new(tdb.database().await).await;
