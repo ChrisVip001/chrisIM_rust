@@ -20,7 +20,7 @@ impl MemberRepository {
         &self,
         group_id: Uuid,
         user_id: Uuid,
-        username: String,
+        username: Option<String>,
         nickname: Option<String>,
         avatar_url: Option<String>,
         role: MemberRole,

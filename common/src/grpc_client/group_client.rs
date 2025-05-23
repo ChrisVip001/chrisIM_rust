@@ -30,12 +30,14 @@ impl GroupServiceGrpcClient {
         description: &str,
         owner_id: &str,
         avatar_url: &str,
+        members: Vec<String>,
     ) -> Result<GroupResponse> {
         let request = Request::new(CreateGroupRequest {
             name: name.to_string(),
             description: description.to_string(),
             owner_id: owner_id.to_string(),
             avatar_url: avatar_url.to_string(),
+            members,
         });
 
         let response = self.service_client.create_group(request).await?;

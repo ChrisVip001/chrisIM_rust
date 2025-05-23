@@ -9,7 +9,7 @@ use tracing::{error, debug};
 
 use super::common::{
     success_response, extract_string_param, get_optional_string, 
-    get_i64_param, timestamp_to_rfc3339
+    get_i64_param, timestamp_to_datetime_string,
 };
 
 /// 群组服务处理器
@@ -51,11 +51,22 @@ impl GroupServiceHandler {
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
 
+                // 处理初始成员列表
+                let mut members = Vec::new();
+                if let Some(member_ids) = body.get("members").and_then(|v| v.as_array()) {
+                    for member_id in member_ids {
+                        if let Some(user_id) = member_id.as_str() {
+                            members.push(user_id.to_string());
+                        }
+                    }
+                }
+
                 let response = self.client.create_group(
                     &name,
                     description,
                     &owner_id,
-                    avatar_url
+                    avatar_url,
+                    members
                 ).await?;
 
                 let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
@@ -225,8 +236,8 @@ impl GroupServiceHandler {
             "avatarUrl": group.avatar_url,
             "ownerId": group.owner_id,
             "memberCount": group.member_count,
-            "createdAt": timestamp_to_rfc3339(&group.created_at),
-            "updatedAt": timestamp_to_rfc3339(&group.updated_at),
+            "createdAt": timestamp_to_datetime_string(&group.created_at),
+            "updatedAt": timestamp_to_datetime_string(&group.updated_at),
         })
     }
 
@@ -248,7 +259,7 @@ impl GroupServiceHandler {
             "avatarUrl": member.avatar_url,
             "role": member.role,
             "roleText": role_text,
-            "joinedAt": timestamp_to_rfc3339(&member.joined_at),
+            "joinedAt": timestamp_to_datetime_string(&member.joined_at),
         })
     }
 
@@ -268,7 +279,7 @@ impl GroupServiceHandler {
             "memberCount": user_group.member_count,
             "role": user_group.role,
             "roleText": role_text,
-            "joinedAt": timestamp_to_rfc3339(&user_group.joined_at),
+            "joinedAt": timestamp_to_datetime_string(&user_group.joined_at),
         })
     }
 } 

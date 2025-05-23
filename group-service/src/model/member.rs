@@ -10,7 +10,7 @@ pub struct Member {
     pub id: Uuid,
     pub group_id: Uuid,
     pub user_id: Uuid,
-    pub username: String,
+    pub username: Option<String>,
     pub nickname: Option<String>,
     pub avatar_url: Option<String>,
     pub role: i32,
@@ -21,7 +21,7 @@ impl Member {
     pub fn new(
         group_id: Uuid,
         user_id: Uuid,
-        username: String,
+        username: Option<String>,
         nickname: Option<String>,
         avatar_url: Option<String>,
         role: MemberRole,
