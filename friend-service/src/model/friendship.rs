@@ -58,7 +58,7 @@ impl Friendship {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Friend {
     pub id: Uuid,
-    pub username: String,
+    pub username: Option<String>,
     pub nickname: Option<String>,
     pub avatar_url: Option<String>,
     pub friendship_created_at: DateTime<Utc>,
