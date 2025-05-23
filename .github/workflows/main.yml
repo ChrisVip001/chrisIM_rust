@@ -1,6 +1,7 @@
 name: RustIM CI/CD Pipeline
 
 on:
+  workflow_dispatch:
   push:
     branches: [ release, develop ]
     tags: [ 'v*' ]
