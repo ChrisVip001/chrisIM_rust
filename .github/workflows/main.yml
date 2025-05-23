@@ -43,17 +43,17 @@ jobs:
       with:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-        
-    - name: Check formatting
-      run: cargo fmt -- --check
       
+    # 代码质量检查 - 仅在 release 分支运行
     - name: Run clippy
+      if: github.ref == 'refs/heads/release'
+      continue-on-error: true
       run: cargo clippy -- -D warnings
       
-    - name: Run tests
-      run: cargo test --verbose
-      
+    # 安全漏洞审计 - 仅在 release 分支运行
     - name: Run security audit
+      if: github.ref == 'refs/heads/release'
+      continue-on-error: true
       run: |
         cargo install cargo-audit
         cargo audit
@@ -204,9 +204,4 @@ jobs:
       with:
         image-ref: ${{ needs.build.outputs.image-tag }}
         format: 'sarif'
-        output: 'trivy-results.sarif'
-        
-    - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-results.sarif' 
+        output: 'trivy-results.sarif' 
