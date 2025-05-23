@@ -21,7 +21,7 @@ pub struct MongodbConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MongodbCleanConfig {
-    pub period: u64,
+    pub period: i64,
     pub except_types: Vec<String>,
 }
 

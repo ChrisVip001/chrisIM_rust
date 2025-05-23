@@ -40,6 +40,9 @@ pub enum Error {
 
     #[error("数据库错误: {0}")]
     Database(#[from] sqlx::Error),
+    
+    #[error("mongodb错误: {0}")]
+    MongoDB(#[from] mongodb::error::Error),
 
     #[error("Redis错误: {0}")]
     Redis(#[from] redis::RedisError),
@@ -49,7 +52,13 @@ pub enum Error {
 
     #[error("JSON错误: {0}")]
     Json(#[from] serde_json::Error),
-
+    
+    #[error("BinCodeDecode错误: {0}")]
+    BinCodeDecode(#[from] bincode::error::DecodeError),
+    
+    #[error("BinCodeEncode错误: {0}")]
+    BinCodeEncode(#[from] bincode::error::EncodeError),
+    
     #[error("JWT错误: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
 

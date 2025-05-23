@@ -8,9 +8,8 @@ use cache::Cache;
 use common::config::AppConfig;
 use common::error::Error;
 use common::message::{GroupMemSeq, Msg, MsgRead, MsgType};
-use common::db::DbRepo;
-use common::message_box::MsgRecBoxRepo;
-
+use msg_storage::{msg_rec_box_repo, DbRepo};
+use msg_storage::message::MsgRecBoxRepo;
 use crate::pusher::{push_service, Pusher};
 
 /// 消息类型的简化枚举
@@ -41,39 +40,27 @@ pub struct ConsumerService {
 }
 
 impl ConsumerService {
-    /// 创建一个新的消费者服务实例
-    /// 初始化Kafka消费者和各种依赖组件
-    pub async fn new(config: &AppConfig) -> Self {
-        info!("启动Kafka消费者:\t{:?}", config.kafka);
-        // 初始化Kafka消费者
+    /// 创建新的消费者服务实例
+    /// 初始化Kafka消费者、数据库连接、缓存等组件
+    pub async fn new(config: &AppConfig) -> Result<Self, Error> {
+        // 创建Kafka消费者配置
         let consumer: StreamConsumer = ClientConfig::new()
             .set("group.id", &config.kafka.group)
             .set("bootstrap.servers", config.kafka.hosts.join(","))
-            .set("enable.auto.commit", "false") // 禁用自动提交，使用手动提交确保消息处理
-            .set(
-                "session.timeout.ms",
-                config.kafka.consumer.session_timeout.to_string(),
-            )
-            .set(
-                "socket.timeout.ms",
-                config.kafka.connect_timeout.to_string(),
-            )
-            .set("enable.partition.eof", "false") // 禁用分区结束标记
-            .set(
-                "auto.offset.reset",
-                config.kafka.consumer.auto_offset_reset.clone(),
-            )
+            .set("enable.partition.eof", "false")
+            .set("session.timeout.ms", config.kafka.consumer.session_timeout.to_string())
+            .set("enable.auto.commit", "true")
+            .set("auto.offset.reset", &config.kafka.consumer.auto_offset_reset)
             .create()
             .expect("消费者创建失败");
 
-        // TODO: 向服务注册中心注册服务以监控服务状态
-        // 订阅Kafka主题
+        // 订阅指定的Kafka主题
         consumer
             .subscribe(&[&config.kafka.topic])
             .expect("无法订阅指定的主题");
 
         // 初始化推送服务
-        let pusher = push_service(config).await;
+        let pusher = push_service(config).await?;
         // 初始化数据库仓库
         let db = Arc::new(DbRepo::new(config).await);
 
@@ -81,17 +68,17 @@ impl ConsumerService {
         let seq_step = config.redis.seq_step;
 
         // 初始化缓存和消息盒子仓库
-        let cache = cache::cache(config);
+        let cache = cache::cache(config).await;
         let msg_box = msg_rec_box_repo(config).await;
 
-        Self {
+        Ok(Self {
             consumer,
             db,
             msg_box,
             pusher,
             cache,
             seq_step,
-        }
+        })
     }
 
     /// 启动消息消费循环
@@ -304,7 +291,7 @@ impl ConsumerService {
     }
 
     async fn handle_msg_read(&self, msg: Msg) -> Result<(), Error> {
-        let data: MsgRead = bincode::deserialize(&msg.content)?;
+        let data: MsgRead = bincode::deserialize(&msg.content).map_err(|_| Error::Internal("failed to deserialize MsgRead".to_string()))?;
 
         self.msg_box.msg_read(&data.user_id, &data.msg_seq).await?;
         Ok(())
@@ -389,7 +376,9 @@ impl ConsumerService {
     /// query members id from database
     /// and set it to cache
     async fn query_group_members_id_from_db(&self, group_id: &str) -> Result<Vec<String>, Error> {
-        let members_id = self.db.group.query_group_members_id(group_id).await?;
+        /// TODO query members id from database
+        // let members_id = self.db.group.query_group_members_id(group_id).await?;
+        let members_id = Vec::new();
 
         // save it to cache
         if let Err(e) = self

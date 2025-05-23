@@ -1,8 +1,9 @@
 use tracing::info;
 
-use common::config::{AppConfig, ConfigLoader};
+use common::config::{ConfigLoader};
 
 use msg_server::productor::ChatRpcService;
+use msg_server::consumer::ConsumerService;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,10 +29,35 @@ async fn main() -> anyhow::Result<()> {
     
     info!("正在启动消息服务...");
     
-    // 启动消息RPC服务
-    // 这是消息服务的核心组件，负责接收客户端消息并处理
-    // 包括消息生产者功能、消息存储和转发等
-    ChatRpcService::start(&config).await;
+    // 创建消费者服务实例
+    let mut consumer_service = ConsumerService::new(&config).await?;
+    info!("消费者服务已初始化");
+    
+    // 克隆配置以便在异步任务中使用
+    let config_clone = config.clone();
+    
+    // 同时启动生产者和消费者服务
+    let producer_task = tokio::spawn(async move {
+        ChatRpcService::start(&config_clone).await;
+    });
+    
+    let consumer_task = tokio::spawn(async move {
+        if let Err(e) = consumer_service.consume().await {
+            tracing::error!("消费者服务运行失败: {:?}", e);
+        }
+    });
+    
+    info!("生产者和消费者服务已启动");
+    
+    // 等待任一服务结束（通常不会结束，除非出错）
+    tokio::select! {
+        _ = producer_task => {
+            info!("生产者服务已结束");
+        }
+        _ = consumer_task => {
+            info!("消费者服务已结束");
+        }
+    }
     
     // 在程序结束前关闭链路追踪，确保所有数据都被发送
     if config.telemetry.enabled {

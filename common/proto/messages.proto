@@ -1,0 +1,478 @@
+syntax = "proto3";
+package messages;
+
+/// user platform which login the system
+enum PlatformType {
+  Desktop = 0;
+  Mobile = 1;
+}
+
+/// message content type
+enum ContentType {
+  Default = 0;
+  Text = 1;
+  Image = 2;
+  Video = 3;
+  Audio = 4;
+  File = 5;
+  Emoji = 6;
+  VideoCall = 7;
+  AudioCall = 8;
+  Error = 9;
+}
+
+/// friendship status
+enum FriendshipStatus {
+  Pending = 0;
+  Accepted = 1;
+  Rejected = 2;
+  /// blacklist
+  Blacked = 3;
+  Deleted = 4;
+}
+
+enum MsgType {
+  MsgTypeSingleMsg = 0;
+
+  MsgTypeGroupMsg = 1;
+
+  /// group operation
+  MsgTypeGroupInvitation = 2;
+  MsgTypeGroupInviteNew = 3;
+  MsgTypeGroupMemberExit = 4;
+  MsgTypeGroupRemoveMember = 5;
+  MsgTypeGroupDismiss = 6;
+  MsgTypeGroupDismissOrExitReceived = 7;
+  MsgTypeGroupInvitationReceived = 8;
+  MsgTypeGroupUpdate = 9;
+
+  /// friend operation
+  MsgTypeFriendApplyReq = 10;
+  MsgTypeFriendApplyResp = 11;
+  MsgTypeFriendBlack = 12;
+  MsgTypeFriendDelete = 13;
+
+  /// single call operation
+  MsgTypeSingleCallInvite = 14;
+  MsgTypeRejectSingleCall = 15;
+  MsgTypeAgreeSingleCall = 16;
+  MsgTypeSingleCallInviteNotAnswer = 17;
+  MsgTypeSingleCallInviteCancel = 18;
+  MsgTypeSingleCallOffer = 19;
+  MsgTypeHangup = 20;
+  MsgTypeConnectSingleCall = 21;
+  MsgTypeCandidate = 22;
+
+  MsgTypeRead = 23;
+  MsgTypeMsgRecResp = 24;
+  MsgTypeNotification = 25;
+  MsgTypeService = 26;
+  MsgTypeFriendshipReceived = 27;
+}
+
+/// decode message content by content type
+/// the content is candidate, when message type is Candidate
+/// the content is sustain, when message type is Hangup
+/// the content is String::to_vec(), when message type is SingleMsg/GroupMsg
+/// other message type, the content is bincode::serialize(&T)
+message Msg {
+  // must have
+  string send_id = 1;
+  // must have
+  string receiver_id = 2;
+  // must have
+  string local_id = 3;
+  string server_id = 4;
+  // timestamp
+  int64 create_time = 5;
+  int64 send_time = 6;
+
+  // receiver sequence
+  int64 seq = 7;
+  // is there necessary to cary the user's avatar and nickname?
+  MsgType msg_type = 8;
+  ContentType content_type = 9;
+  bytes content = 10;
+  bool is_read = 11;
+  // it is unnecessary to put those out of content
+  // optional string sdp = 12;
+  // optional string sdp_mid = 13;
+  // optional int32 sdp_m_index = 14;
+
+  string group_id = 15;
+
+  // platform of the sender
+  PlatformType platform = 16;
+
+  // user avatar
+  string avatar = 17;
+  // user nickname
+  string nickname = 18;
+
+  // related message id
+  optional string related_msg_id = 19;
+
+  /// send sequence
+  int64 send_seq = 20;
+}
+
+message MsgRead {
+  repeated int64 msg_seq = 1;
+  string user_id = 2;
+}
+
+message MsgReadReq { MsgRead msg_read = 1; }
+
+message MsgReadResp {}
+
+message Candidate {
+  string candidate = 1;
+  optional string sdp_mid = 2;
+  optional int32 sdp_m_index = 3;
+}
+
+enum SingleCallInviteType {
+  SingleAudio = 0;
+  SingleVideo = 1;
+}
+
+message AgreeSingleCall { string sdp = 1; }
+
+message SingleCallInvite { SingleCallInviteType invite_type = 1; }
+
+message SingleCallInviteAnswer {
+  bool agree = 1;
+  SingleCallInviteType invite_type = 2;
+}
+
+message SingleCallInviteNotAnswer { SingleCallInviteType invite_type = 1; }
+
+message SingleCallInviteCancel { SingleCallInviteType invite_type = 2; }
+
+message SingleCallOffer { string sdp = 1; }
+
+message Hangup {
+  SingleCallInviteType invite_type = 1;
+  int64 sustain = 2;
+}
+
+/// use to send single message or group message;
+/// message ws is used to connect the client by websocket;
+/// and it receive message from clients; then send message to mq;
+/// so only provide the send message function for other rpc service;
+message Single {
+  // message content
+  string content = 2;
+  // message type
+  ContentType content_type = 3;
+}
+
+/// user and group id
+message UserAndGroupID {
+  string user_id = 1;
+  string group_id = 2;
+}
+
+/// group invitation include group information and group member information
+message GroupInvitation {
+  GroupInfo info = 1;
+  repeated GroupMember members = 2;
+}
+
+/// group information also related to database
+message GroupInfo {
+  string id = 1;
+  string owner = 2;
+  string name = 3;
+  string avatar = 4;
+  string description = 5;
+  string announcement = 6;
+  int64 create_time = 7;
+  int64 update_time = 8;
+}
+
+enum GroupMemberRole {
+  GroupMemberRoleOwner = 0;
+  GroupMemberRoleAdmin = 1;
+  GroupMemberRoleMember = 2;
+}
+
+// fixme add account field
+/// group member information also related to database table group_members
+message GroupMember {
+  int32 age = 1;
+  string group_id = 2;
+  string user_id = 3;
+  string group_name = 4;
+  string avatar = 5;
+  int64 joined_at = 6;
+  optional string region = 7;
+  string gender = 8;
+  optional string remark = 9;
+  string signature = 10;
+  GroupMemberRole role = 11;
+}
+
+/// create group object
+message GroupCreate {
+  string id = 1;
+  string owner = 2;
+  string avatar = 3;
+  string group_name = 4;
+  repeated string members_id = 5;
+}
+
+message GroupInviteNew {
+  string user_id = 1;
+  string group_id = 2;
+  repeated string members = 3;
+}
+
+message GroupUpdate {
+  string id = 1;
+  string name = 2;
+  string avatar = 3;
+  string description = 4;
+  string announcement = 5;
+  int64 update_time = 6;
+}
+
+message User {
+  string id = 1;
+  string name = 2;
+  string account = 3;
+  string password = 4;
+  string avatar = 5;
+  string gender = 6;
+  int32 age = 7;
+  optional string phone = 8;
+  optional string email = 9;
+  optional string address = 10;
+  optional string region = 11;
+  optional int64 birthday = 12;
+  int64 create_time = 13;
+  int64 update_time = 14;
+  string salt = 15;
+  string signature = 16;
+}
+
+message UserUpdate {
+  string id = 1;
+  string name = 2;
+  string avatar = 3;
+  string gender = 4;
+  optional string phone = 5;
+  optional string email = 6;
+  optional string address = 7;
+  optional string region = 8;
+  optional int64 birthday = 9;
+  optional string signature = 10;
+}
+
+message UserWithMatchType {
+  string id = 1;
+  string name = 2;
+  string account = 3;
+  string avatar = 4;
+  string gender = 5;
+  int32 age = 6;
+  optional string email = 7;
+  optional string region = 8;
+  optional int64 birthday = 9;
+  optional string match_type = 10;
+  string signature = 11;
+  bool is_friend = 12;
+}
+
+message Friendship {
+  string id = 1;
+  string user_id = 2;
+  string friend_id = 3;
+  FriendshipStatus status = 4;
+  optional string apply_msg = 5;
+  optional string req_remark = 6;
+  optional string resp_msg = 7;
+  optional string resp_remark = 8;
+  string source = 9;
+  int64 create_time = 10;
+  int64 update_time = 11;
+}
+
+message FriendshipWithUser {
+  string fs_id = 1;
+  string user_id = 2;
+  string name = 3;
+  string avatar = 4;
+  string gender = 5;
+  int32 age = 6;
+  optional string region = 7;
+  FriendshipStatus status = 8;
+  optional string apply_msg = 9;
+  string source = 10;
+  int64 create_time = 11;
+  string account = 12;
+  optional string remark = 13;
+  optional string email = 14;
+}
+
+message FriendDb {
+  int64 id = 1;
+  string fs_id = 2;
+  string user_id = 3;
+  string friend_id = 4;
+  FriendshipStatus status = 5;
+  optional string remark = 6;
+  string source = 7;
+  int64 create_time = 8;
+  int64 update_time = 9;
+}
+
+message Friend {
+  string fs_id = 1;
+  string friend_id = 2;
+  string account = 3;
+  string name = 4;
+  string avatar = 5;
+  string gender = 6;
+  int32 age = 7;
+  optional string region = 8;
+  FriendshipStatus status = 9;
+  optional string remark = 10;
+  optional string email = 11;
+  string source = 12;
+  string signature = 13;
+  int64 create_time = 14;
+  int64 update_time = 15;
+}
+
+message FriendInfo {
+  string id = 1;
+  string name = 2;
+  string avatar = 3;
+  string gender = 4;
+  int32 age = 5;
+  optional string region = 6;
+  string account = 7;
+  string signature = 8;
+  optional string email = 9;
+}
+
+message FsCreate {
+  string user_id = 1;
+  string friend_id = 2;
+  optional string apply_msg = 3;
+  optional string req_remark = 4;
+  string source = 5;
+}
+
+message UpdateRemarkRequest {
+  string user_id = 1;
+  string friend_id = 2;
+  string remark = 3;
+}
+
+message DeleteFriendRequest {
+  string user_id = 1;
+  string friend_id = 2;
+  string fs_id = 3;
+}
+
+message AgreeReply {
+  string fs_id = 1;
+  optional string resp_msg = 2;
+  optional string resp_remark = 3;
+}
+
+/// only for update friend apply request
+message FsUpdate {
+  string id = 1;
+  string apply_msg = 2;
+  string req_remark = 3;
+}
+
+message RemoveMemberRequest {
+  string user_id = 1;
+  string group_id = 2;
+  repeated string mem_id = 3;
+}
+
+message GroupMembersIdRequest { string group_id = 1; }
+
+message SendMsgRequest { Msg message = 1; }
+
+message SendGroupMsgRequest {
+  Msg message = 1;
+  repeated GroupMemSeq members = 2;
+}
+
+message SendMsgResponse {}
+
+message MsgResponse {
+  string local_id = 1;
+  string server_id = 2;
+  int64 send_time = 3;
+  string err = 4;
+}
+
+message SaveMessageRequest {
+  Msg message = 1;
+  bool need_to_history = 2;
+}
+
+message SaveGroupMsgRequest {
+  Msg message = 1;
+  bool need_to_history = 2;
+  repeated GroupMemSeq members = 3;
+}
+
+message GroupMemSeq {
+  string mem_id = 1;
+  int64 cur_seq = 2;
+  int64 max_seq = 3;
+  bool need_update = 4;
+}
+
+message GetDbMsgRequest {
+  string user_id = 1;
+  int64 start = 2;
+  int64 end = 3;
+}
+
+message GetDbMessagesRequest {
+  string user_id = 1;
+  int64 send_start = 2;
+  int64 send_end = 3;
+  int64 start = 4;
+  int64 end = 5;
+}
+
+message DelMsgRequest {
+  string user_id = 1;
+  repeated int64 msg_id = 2;
+}
+
+message GetMemberReq {
+  string user_id = 1;
+  string group_id = 2;
+  repeated string mem_ids = 3;
+}
+
+message GetGroupAndMembersResp {
+  GroupInfo group = 1;
+  repeated GroupMember members = 2;
+}
+
+message SaveMaxSeqRequest { string user_id = 1; }
+
+service MsgService {
+  // send message through rpc
+  rpc SendMessage(SendMsgRequest) returns (SendMsgResponse);
+  // send single message to user by websocket
+  rpc SendMsgToUser(SendMsgRequest) returns (SendMsgResponse);
+  // send group message to user by websocket
+  rpc SendGroupMsgToUser(SendGroupMsgRequest) returns (SendMsgResponse);
+}
+
+/// chat service, receive message then generate message id and send message to
+/// mq; response operation result;
+service ChatService { rpc SendMsg(SendMsgRequest) returns (MsgResponse); }

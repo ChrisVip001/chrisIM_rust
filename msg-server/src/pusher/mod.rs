@@ -15,6 +15,7 @@ pub trait Pusher: Send + Sync + Debug {
     async fn push_group_msg(&self, msg: Msg, members: Vec<GroupMemSeq>) -> Result<(), Error>;
 }
 
-pub async fn push_service(config: &AppConfig) -> Arc<dyn Pusher> {
-    Arc::new(service::PusherService::new(config).await)
+pub async fn push_service(config: &AppConfig) -> Result<Arc<dyn Pusher>, Error> {
+    let service = service::PusherService::new(config).await?;
+    Ok(Arc::new(service))
 }

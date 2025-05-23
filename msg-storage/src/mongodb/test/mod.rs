@@ -1,6 +1,7 @@
 use std::thread;
 
 use mongodb::Database;
+use sqlx::types::uuid;
 use tokio::runtime::Runtime;
 
 pub struct MongoDbTester {

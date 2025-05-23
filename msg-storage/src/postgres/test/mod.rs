@@ -1,6 +1,7 @@
 use std::{path::Path, thread};
 
 use sqlx::PgPool;
+use sqlx::types::uuid;
 use tokio::runtime::Runtime;
 
 /// create a struct which has ability to create database automatically and drop it automatically when it is dropped.
