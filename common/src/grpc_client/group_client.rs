@@ -36,6 +36,7 @@ impl GroupServiceGrpcClient {
         description: &str,
         owner_id: &str,
         avatar_url: &str,
+        members: Vec<String>,
     ) -> Result<GroupResponse> {
         let channel = self.service_client.get_channel().await?;
         let mut client = GroupServiceClient::new(channel);
@@ -45,6 +46,7 @@ impl GroupServiceGrpcClient {
             description: description.to_string(),
             owner_id: owner_id.to_string(),
             avatar_url: avatar_url.to_string(),
+            members,
         });
 
         let response = client.create_group(request).await?;

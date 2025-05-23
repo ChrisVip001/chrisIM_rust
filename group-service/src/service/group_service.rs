@@ -48,31 +48,72 @@ impl GroupService for GroupServiceImpl {
             .await
         {
             Ok(group) => {
-                // 将创建者添加为群主
+                let mut members = Vec::new();
+                let mut member_count = 0;
+
+                // 添加群主
                 match self
                     .member_repository
                     .add_member(
                         group.id,
                         owner_id,
-                        "PLACEHOLDER".to_string(), // 实际应用中应该从user-service获取
+                        None, // 实际应用中应该从user-service获取
                         None,
                         None,
                         MemberRole::Owner,
                     )
                     .await
                 {
-                    Ok(_) => {
-                        let member_count = 1; // 刚创建时只有群主一人
-                        info!("创建群组成功: {:?}", group);
-                        Ok(Response::new(GroupResponse {
-                            group: Some(group.to_proto(member_count)),
-                        }))
+                    Ok(member) => {
+                        members.push(member);
+                        member_count += 1;
                     }
                     Err(e) => {
                         error!("添加群主失败: {}", e);
-                        Err(Status::internal("创建群组后添加群主失败"))
+                        return Err(Status::internal("创建群组后添加群主失败"));
                     }
                 }
+
+                // 添加其他初始成员
+                for user_id_str in req.members {
+                    let user_id = user_id_str
+                        .parse::<Uuid>()
+                        .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+                    // 跳过群主，因为已经添加过了
+                    if user_id == owner_id {
+                        continue;
+                    }
+
+                    match self
+                        .member_repository
+                        .add_member(
+                            group.id,
+                            user_id,
+                            None,
+                            None,
+                            None,
+                            MemberRole::Member, // 默认使用普通成员角色
+                        )
+                        .await
+                    {
+                        Ok(member) => {
+                            members.push(member);
+                            member_count += 1;
+                        }
+                        Err(e) => {
+                            error!("添加初始成员失败: {}", e);
+                            // 继续添加其他成员，不中断整个过程
+                        }
+                    }
+                }
+
+                info!("创建群组成功: {:?}, 初始成员数: {}", group, member_count);
+                
+              
+                Ok(Response::new(GroupResponse {
+                    group: Some( group.to_proto(member_count)),
+                }))
             }
             Err(e) => {
                 error!("创建群组失败: {}", e);
@@ -246,7 +287,7 @@ impl GroupService for GroupServiceImpl {
             .add_member(
                 group_id,
                 user_id,
-                "PLACEHOLDER".to_string(), // 实际应用中应该从user-service获取
+                None, // 实际应用中应该从user-service获取
                 None,
                 None,
                 req.role(),

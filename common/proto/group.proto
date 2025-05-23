@@ -43,6 +43,7 @@ message CreateGroupRequest {
   string description = 2;
   string owner_id = 3;
   string avatar_url = 4;
+  repeated string members = 5;  // 初始群组成员ID列表
 }
 
 // 获取群组请求
@@ -156,7 +157,7 @@ message Member {
   string id = 1;
   string group_id = 2;
   string user_id = 3;
-  string username = 4;
+  optional string username = 4;
   optional string nickname = 5;
   optional string avatar_url = 6;
   MemberRole role = 7;
