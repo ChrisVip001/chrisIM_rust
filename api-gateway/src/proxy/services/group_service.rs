@@ -85,7 +85,7 @@ impl GroupServiceHandler {
             }
 
             // 更新群组信息
-            (&Method::PUT, "update") => {
+            (&Method::POST, "update") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
                 
                 let name = get_optional_string(&body, "name", None);
