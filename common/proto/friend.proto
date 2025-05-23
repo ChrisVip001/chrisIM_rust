@@ -26,6 +26,24 @@ service FriendService {
   
   // 检查好友关系
   rpc CheckFriendship (CheckFriendshipRequest) returns (CheckFriendshipResponse);
+  
+  // 拉黑用户
+  rpc BlockUser (BlockUserRequest) returns (BlockUserResponse);
+  
+  // 解除拉黑
+  rpc UnblockUser (UnblockUserRequest) returns (UnblockUserResponse);
+  
+  // 创建或更新好友分组
+  rpc CreateOrUpdateFriendGroup (CreateOrUpdateFriendGroupRequest) returns (FriendGroupResponse);
+  
+  // 删除好友分组
+  rpc DeleteFriendGroup (DeleteFriendGroupRequest) returns (DeleteFriendGroupResponse);
+  
+  // 获取好友分组列表
+  rpc GetFriendGroups (GetFriendGroupsRequest) returns (GetFriendGroupsResponse);
+  
+  // 获取分组好友列表
+  rpc GetGroupFriends (GetGroupFriendsRequest) returns (GetGroupFriendsResponse);
 }
 
 // 发送好友请求
@@ -45,26 +63,34 @@ message AcceptFriendRequestRequest {
 message RejectFriendRequestRequest {
   string user_id = 1;
   string friend_id = 2;
+  string reason = 3;
 }
 
 // 获取好友列表请求
 message GetFriendListRequest {
   string user_id = 1;
+  int64 page = 2;         // 页码，从1开始，0表示使用默认值
+  int64 page_size = 3;    // 每页数量，0表示使用默认值
+  string sort_by = 4;     // 排序方式: username_asc, username_desc, created_at_asc, created_at_desc
 }
 
 // 获取好友列表响应
 message GetFriendListResponse {
   repeated Friend friends = 1;
+  int64 total = 2;        // 总条数
 }
 
 // 获取好友请求列表请求
 message GetFriendRequestsRequest {
   string user_id = 1;
+  int64 page = 2;         // 页码，从1开始，0表示默认
+  int64 page_size = 3;    // 每页数量，0表示默认
 }
 
 // 获取好友请求列表响应
 message GetFriendRequestsResponse {
   repeated Friendship requests = 1;
+  int64 total = 2;        // 总条数
 }
 
 // 删除好友请求
@@ -103,6 +129,10 @@ message Friendship {
   FriendshipStatus status = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
+  optional string reject_reason = 8;
+  optional string friend_username = 9;    // 好友用户名
+  optional string friend_nickname = 10;   // 好友昵称
+  optional string friend_avatar_url = 11; // 好友头像
 }
 
 // 好友
@@ -112,6 +142,7 @@ message Friend {
   optional string nickname = 3;
   optional string avatar_url = 4;
   google.protobuf.Timestamp friendship_created_at = 5;
+  optional string remark = 6;   // 好友备注名称
 }
 
 // 好友关系状态
@@ -120,4 +151,86 @@ enum FriendshipStatus {
   ACCEPTED = 1;
   REJECTED = 2;
   BLOCKED = 3;
-} 
+  EXPIRED = 4;  // 过期状态
+}
+
+// 拉黑用户请求
+message BlockUserRequest {
+  string user_id = 1;        // 操作用户ID
+  string blocked_user_id = 2; // 被拉黑用户ID
+}
+
+// 拉黑用户响应
+message BlockUserResponse {
+  bool success = 1;
+}
+
+// 解除拉黑请求
+message UnblockUserRequest {
+  string user_id = 1;        // 操作用户ID
+  string blocked_user_id = 2; // 被解除拉黑的用户ID
+}
+
+// 解除拉黑响应
+message UnblockUserResponse {
+  bool success = 1;
+}
+
+// 好友分组
+message FriendGroup {
+  string id = 1;
+  string user_id = 2;
+  string group_name = 3;
+  int32 sort_order = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  int32 friend_count = 7;  // 分组内好友数量
+}
+
+// 创建或更新好友分组请求
+message CreateOrUpdateFriendGroupRequest {
+  optional string id = 1;        // 分组ID，如果为空则创建新分组
+  string user_id = 2;           // 用户ID
+  string group_name = 3;        // 分组名称
+  int32 sort_order = 4;         // 排序顺序
+  repeated string friend_ids = 5; // 分组中的好友ID列表
+}
+
+// 好友分组响应
+message FriendGroupResponse {
+  FriendGroup group = 1;
+  repeated string friend_ids = 2; // 分组中的好友ID列表
+}
+
+// 删除好友分组请求
+message DeleteFriendGroupRequest {
+  string id = 1;
+  string user_id = 2;
+}
+
+// 删除好友分组响应
+message DeleteFriendGroupResponse {
+  bool success = 1;
+}
+
+// 获取好友分组列表请求
+message GetFriendGroupsRequest {
+  string user_id = 1;
+}
+
+// 获取好友分组列表响应
+message GetFriendGroupsResponse {
+  repeated FriendGroup groups = 1;
+}
+
+// 获取分组好友列表请求
+message GetGroupFriendsRequest {
+  string group_id = 1;  // 分组ID
+  string user_id = 2;   // 用户ID
+}
+
+// 获取分组好友列表响应
+message GetGroupFriendsResponse {
+  repeated Friend friends = 1;  // 好友列表
+  int32 total = 2;             // 总数
+}

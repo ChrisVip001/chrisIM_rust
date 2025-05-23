@@ -15,8 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "user.proto",
         "friend.proto",
         "group.proto",
-        "private_message.proto",
-        "group_message.proto",
+        "messages.proto",
         "message_gateway.proto",
     ];
 

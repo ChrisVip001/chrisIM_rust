@@ -7,7 +7,7 @@ use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug, info};
 
-use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, timestamp_to_rfc3339, format_timestamp};
+use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
 
 /// 用户服务处理器
 #[derive(Clone)]
@@ -23,7 +23,7 @@ impl UserServiceHandler {
 
     /// 处理用户服务请求
     pub async fn handle_request(
-        &self,
+        &mut self,
         method: &Method,
         path: &str,
         body: Value,
@@ -97,7 +97,7 @@ impl UserServiceHandler {
                 let email = get_optional_string(&body, "email", None);
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
                 let password = get_optional_string(&body, "password", None);
-                let address = get_optional_string(&body, "address", None);
+                let address = get_optional_string(&body, "host", None);
                 let head_image = get_optional_string(&body, "head_image", None);
                 let head_image_thumb = get_optional_string(&body, "head_image_thumb", None);
                 let sex = get_optional_string(&body, "sex", None)
@@ -365,7 +365,7 @@ impl UserServiceHandler {
             "createdAt": format_timestamp(user.created_at.clone()),
             "updatedAt": format_timestamp(user.updated_at.clone()),
             "phone" : user.phone,
-            "address" : user.address,
+            "host" : user.address,
             "head_image" : user.head_image,
             "head_image_thumb" : user.head_image_thumb,
             "sex" : user.sex,

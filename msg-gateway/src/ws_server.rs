@@ -1,8 +1,7 @@
-use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::ws::CloseFrame;
+use axum::extract::ws::{CloseFrame, Utf8Bytes};
 use axum::extract::{Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -14,64 +13,75 @@ use futures::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
-use tonic::transport::Channel;
 use tracing::{error, info, warn};
 
 use common::config::AppConfig;
 use common::error::Error;
 use common::message::{Msg, PlatformType};
-
+use common::service_register_center::{service_register_center, Registration};
 use crate::client::Client;
 use crate::manager::Manager;
 use crate::rpc::MsgRpcService;
 
+// 心跳检测间隔时间，单位为秒
+// 用于定期向客户端发送ping消息，确认连接是否活跃
 pub const HEART_BEAT_INTERVAL: u64 = 30;
+// 被踢下线的WebSocket关闭代码
 pub const KNOCK_OFF_CODE: u16 = 4001;
+// 未授权的WebSocket关闭代码
 pub const UNAUTHORIZED_CODE: u16 = 4002;
 
+/// WebSocket服务的应用状态
+/// 包含连接管理器和JWT密钥
 #[derive(Clone)]
 pub struct AppState {
+    // 连接管理器，负责管理所有客户端连接
     manager: Manager,
+    // JWT密钥，用于验证客户端token
     jwt_secret: String,
 }
 
+/// JWT令牌的声明结构
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
+    // 用户标识
     pub sub: String,
+    // 过期时间
     pub exp: u64,
+    // 颁发时间
     pub iat: u64,
 }
 
+/// WebSocket服务器实现
 pub struct WsServer;
 
 impl WsServer {
-    async fn register_service(config: &AppConfig) -> Result<(), Error> {
-        // register service to service register center
-        let addr = format!(
-            "{}://{}:{}",
-            config.service_center.protocol, config.service_center.host, config.service_center.port
-        );
-        let channel = Channel::from_shared(addr).unwrap().connect().await.unwrap();
-        let mut client = ServiceRegistryClient::new(channel);
-        let service = ServiceInstance {
-            id: format!("{}-{}", utils::get_host_name()?, &config.websocket.name),
+    /// 向服务注册中心注册WebSocket服务
+    /// 使其他服务能够发现并调用此服务
+    async fn register_service(config: &AppConfig) -> Result<String, Error> {
+        // 获取服务注册中心
+        let service_register = service_register_center(config);
+
+        // 构建服务注册信息
+        let registration = Registration {
+            id: format!("{}-{}-{}", &config.websocket.name, &config.websocket.host, &config.websocket.port),
             name: config.websocket.name.clone(),
-            address: config.websocket.host.clone(),
-            port: config.websocket.port as i32,
+            host: config.websocket.host.clone(),
+            port: config.websocket.port,
             tags: config.websocket.tags.clone(),
-            version: "".to_string(),
-            metadata: Default::default(),
-            health_check: None,
-            status: 0,
-            scheme: Scheme::from(config.rpc.db.protocol.as_str()) as i32,
+            check: None,
         };
-        client.register_service(service).await.unwrap();
-        Ok(())
+
+        // 注册服务
+        service_register.register(registration).await
     }
 
+    /// 测试接口，用于获取当前连接状态
+    /// 返回所有已连接用户和平台的描述信息
     async fn test(State(state): State<AppState>) -> Result<String, Error> {
         let mut description = String::new();
 
+        // 遍历所有连接，生成描述信息
         state.manager.hub.iter().for_each(|entry| {
             let user_id = entry.key();
             let platforms = entry.value();
@@ -88,48 +98,63 @@ impl WsServer {
         Ok(description)
     }
 
-    pub async fn start(config: AppConfig) {
+    /// 启动WebSocket服务器
+    /// 初始化管理器、设置路由并启动服务
+    pub async fn start(config: Arc<AppConfig>) {
+        // 创建消息通道，用于Manager和客户端之间的通信
         let (tx, rx) = mpsc::channel(1024);
+        // 初始化连接管理器
         let hub = Manager::new(tx, &config).await;
         let mut cloned_hub = hub.clone();
+        // 在单独的任务中运行连接管理器
         tokio::spawn(async move {
             cloned_hub.run(rx).await;
         });
+        // 创建应用状态
         let app_state = AppState {
             manager: hub.clone(),
-            jwt_secret: config.jwt.secret.clone(),
+            jwt_secret: config.gateway.auth.jwt.secret.clone(),
         };
 
-        // run axum server
+        // 配置Axum路由
         let router = Router::new()
             .route(
-                "/ws/:user_id/conn/:pointer_id/:platform/:token",
+                "/ws/{user_id}/conn/{pointer_id}/{platform}/{token}",
                 get(Self::websocket_handler),
             )
             .route("/test", get(Self::test))
             .with_state(app_state);
+        // 构建监听地址
         let addr = format!("{}:{}", config.websocket.host, config.websocket.port);
 
+        // 启动TCP监听器
         let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+        // 在独立任务中启动WebSocket服务器
         let mut ws = tokio::spawn(async move {
             info!("start websocket server on {}", addr);
             axum::serve(listener, router).await.unwrap();
         });
 
-        // register websocket service to consul
+        // 向服务注册中心注册WebSocket服务
         Self::register_service(&config).await.unwrap();
 
+        // 克隆配置用于RPC服务
         let config = config.clone();
+        // 在独立任务中启动RPC服务
         let mut rpc = tokio::spawn(async move {
-            // start rpc server
-            MsgRpcService::start(hub, &config).await.unwrap();
+            // 启动RPC服务器，用于接收来自msg-server的消息
+            MsgRpcService::start(hub, &config).await.expect("RPC server start error");
         });
+        
+        // 等待任一任务完成，并中止另一个任务
         tokio::select! {
             _ = (&mut ws) => ws.abort(),
             _ = (&mut rpc) => rpc.abort(),
         }
     }
 
+    /// 验证JWT令牌
+    /// 确保连接请求是授权的
     fn verify_token(token: String, jwt_secret: &String) -> Result<(), Error> {
         if let Err(err) = decode::<Claims>(
             &token,
@@ -144,17 +169,23 @@ impl WsServer {
         Ok(())
     }
 
+    /// WebSocket连接处理器
+    /// 从URL路径中提取参数并处理连接升级
     pub async fn websocket_handler(
         Path((user_id, pointer_id, platform, token)): Path<(String, String, i32, String)>,
         ws: WebSocketUpgrade,
         State(state): State<AppState>,
     ) -> impl IntoResponse {
+        // 将平台类型转换为枚举值
         let platform = PlatformType::try_from(platform).unwrap_or_default();
+        // 处理WebSocket连接升级
         ws.on_upgrade(move |socket| {
             Self::websocket(user_id, pointer_id, token, platform, socket, state)
         })
     }
 
+    /// 处理WebSocket连接
+    /// 建立连接后的主要逻辑处理
     pub async fn websocket(
         user_id: String,
         pointer_id: String,
@@ -164,28 +195,36 @@ impl WsServer {
         app_state: AppState,
     ) {
         tracing::info!(
-            "client {} connected, user id : {}",
+            "客户端 {} 已连接，用户ID: {}",
             user_id.clone(),
             pointer_id.clone()
         );
+        // 将WebSocket分为发送和接收两部分
         let (mut ws_tx, mut ws_rx) = ws.split();
-        // validate token
+        
+        // 验证令牌
         if let Err(err) = Self::verify_token(token, &app_state.jwt_secret) {
-            warn!("verify token error: {:?}", err);
+            warn!("验证令牌错误: {:?}", err);
+            // 如果验证失败，发送关闭消息
             if let Err(e) = ws_tx
                 .send(Message::Close(Some(CloseFrame {
                     code: UNAUTHORIZED_CODE,
-                    reason: Cow::Owned("knock off".to_string()),
+                    reason: Utf8Bytes::from("未授权连接"),
                 })))
                 .await
             {
-                error!("send verify failed to client error: {}", e);
+                error!("发送验证失败消息给客户端时出错: {}", e);
             }
             return;
         }
+        
+        // 创建共享的发送通道
         let shared_tx = Arc::new(RwLock::new(ws_tx));
+        // 创建通知通道，用于关闭连接
         let (notify_sender, mut notify_receiver) = tokio::sync::mpsc::channel(1);
         let mut hub = app_state.manager.clone();
+        
+        // 创建客户端对象
         let client = Client {
             user_id: user_id.clone(),
             platform_id: pointer_id.clone(),
@@ -193,16 +232,18 @@ impl WsServer {
             platform,
             notify_sender,
         };
+        
+        // 向连接管理器注册客户端
         hub.register(user_id.clone(), client).await;
 
-        // send ping message to client
+        // 发送心跳消息给客户端的任务
         let cloned_tx = shared_tx.clone();
         let mut ping_task = tokio::spawn(async move {
             loop {
                 if let Err(e) = cloned_tx
                     .write()
                     .await
-                    .send(Message::Ping(Vec::new()))
+                    .send(Message::Ping(Default::default()))
                     .await
                 {
                     error!("send ping error：{:?}", e);
@@ -224,7 +265,7 @@ impl WsServer {
                     .await
                     .send(Message::Close(Some(CloseFrame {
                         code: KNOCK_OFF_CODE,
-                        reason: Cow::Owned("knock off".to_string()),
+                        reason: Utf8Bytes::from("knock off"),
                     })))
                     .await
                 {
@@ -257,7 +298,7 @@ impl WsServer {
                         if let Err(e) = shared_tx
                             .write()
                             .await
-                            .send(Message::Pong(Vec::new()))
+                            .send(Message::Pong(Default::default()))
                             .await
                         {
                             error!("reply ping error : {:?}", e);

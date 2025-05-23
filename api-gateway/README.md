@@ -61,7 +61,7 @@ API网关服务是一个高性能、高可用的API网关，为IM系统的微服
 - Prometheus (用于监控指标)
 
 ### 配置文件
-网关服务使用YAML格式的配置文件。默认配置文件位于`config/gateway.yaml`。以下是配置文件的主要部分：
+网关服务使用YAML格式的配置文件。默认配置文件位于`config/config.yaml`。以下是配置文件的主要部分：
 
 ```yaml
 # 路由配置
@@ -102,11 +102,11 @@ cargo build --release
 
 #### 运行
 ```bash
-./target/release/api-gateway -c config/gateway.yaml
+./target/release/api-gateway -c config/config.yaml
 ```
 
 ### 命令行参数
-- `-c, --config-file <FILE>`: 指定配置文件路径，默认为`config/gateway.yaml`
+- `-c, --config-file <FILE>`: 指定配置文件路径，默认为`config/config.yaml`
 - `-h, --host <HOST>`: 指定监听地址，默认为环境变量`GATEWAY_HOST`或`127.0.0.1`
 - `-p, --port <PORT>`: 指定监听端口，默认为环境变量`GATEWAY_PORT`或`8000`
 - `--config <ENV_FILE>`: 指定环境变量文件，默认为`.env`

@@ -3,11 +3,16 @@ use axum::{
     http::{Method, Request, Response, StatusCode},
 };
 use futures::future::BoxFuture;
-use serde_json::{json, Value};
-use tonic::transport::Channel;
+use serde_json::Value;
 use tracing::{debug, error};
+use common::proto::user::user_service_client::UserServiceClient;
+use common::proto::friend::friend_service_client::FriendServiceClient;
+use common::proto::group::group_service_client::GroupServiceClient;
 use common::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
-use common::service_registry::ServiceRegistry;
+use common::config::{AppConfig, ConfigLoader};
+use common::service_discovery::LbWithServiceDiscovery;
+use common::grpc_client::base::{service_register_center, get_rpc_client};
+use std::sync::{Arc, RwLock};
 
 use crate::proxy::services::{
     UserServiceHandler, FriendServiceHandler, GroupServiceHandler,
@@ -27,84 +32,113 @@ pub trait GrpcClientFactory: Send + Sync {
     fn check_health(&self) -> BoxFuture<'static, bool>;
 }
 
-/// gRPC客户端配置
-#[derive(Debug, Clone)]
-pub struct GrpcClientConfig {
-    /// 连接超时（秒）
-    pub connect_timeout_secs: u64,
-    /// 请求超时（秒）
-    pub timeout_secs: u64,
-    /// 并发限制
-    pub concurrency_limit: usize,
-    /// 是否启用负载均衡
-    pub enable_load_balancing: bool,
+/// 用于服务处理器初始化的函数类型
+type ServiceInitializer<T> = Arc<dyn Fn() -> T + Send + Sync>;
+
+/// 延迟初始化的服务处理器包装
+struct LazyServiceHandler<T> {
+    inner: RwLock<Option<T>>,
+    initializer: ServiceInitializer<T>,
 }
 
-impl Default for GrpcClientConfig {
-    fn default() -> Self {
+impl<T: Clone> LazyServiceHandler<T> {
+    /// 创建新的延迟初始化包装器
+    fn new<F>(initializer: F) -> Self 
+    where
+        F: Fn() -> T + Send + Sync + 'static,
+    {
         Self {
-            connect_timeout_secs: 5,
-            timeout_secs: 30,
-            concurrency_limit: 100,
-            enable_load_balancing: true,
+            inner: RwLock::new(None),
+            initializer: Arc::new(initializer),
         }
     }
-}
 
-/// 基础gRPC客户端
-pub struct BaseGrpcClient {
-    channel: Channel,
-}
+    /// 获取或初始化服务处理器
+    fn get(&self) -> T {
+        // 先尝试读取
+        if let Some(handler) = self.inner.read().unwrap().clone() {
+            return handler;
+        }
 
-impl BaseGrpcClient {
-    /// 创建新的gRPC客户端
-    pub async fn new(
-        target_url: &str,
-        config: GrpcClientConfig,
-    ) -> Result<Self, tonic::transport::Error> {
-        let endpoint = tonic::transport::Endpoint::new(target_url.to_string())?
-            .connect_timeout(std::time::Duration::from_secs(config.connect_timeout_secs))
-            .timeout(std::time::Duration::from_secs(config.timeout_secs))
-            .concurrency_limit(config.concurrency_limit);
-
-        let channel = endpoint.connect().await?;
-
-        Ok(Self { channel })
+        // 如果不存在，获取写锁并初始化
+        let mut write_guard = self.inner.write().unwrap();
+        if write_guard.is_none() {
+            *write_guard = Some((self.initializer)());
+        }
+        
+        write_guard.clone().unwrap()
     }
+}
 
-    /// 获取共享通道
-    pub fn channel(&self) -> Channel {
-        self.channel.clone()
+impl<T: Clone> Clone for LazyServiceHandler<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: RwLock::new(self.inner.read().unwrap().clone()),
+            initializer: self.initializer.clone(),
+        }
     }
 }
 
 /// 通用gRPC客户端工厂
 pub struct GrpcClientFactoryImpl {
-    // 服务注册表
-    service_registry: ServiceRegistry,
-    // 各服务处理器
-    user_service: UserServiceHandler,
-    friend_service: FriendServiceHandler,
-    group_service: GroupServiceHandler,
+    // 应用配置
+    config: Arc<AppConfig>,
+    // 服务注册中心
+    service_register: Arc<dyn common::service_register_center::ServiceRegister>,
+    // 各服务处理器（延迟初始化）
+    user_service: LazyServiceHandler<UserServiceHandler>,
+    friend_service: LazyServiceHandler<FriendServiceHandler>,
+    group_service: LazyServiceHandler<GroupServiceHandler>,
 }
 
 impl GrpcClientFactoryImpl {
     /// 创建新的通用gRPC客户端工厂
     pub fn new() -> Self {
-        let service_registry = ServiceRegistry::from_env();
+        // 加载配置
+        let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
         
-        // 创建各服务客户端
-        let user_client = UserServiceGrpcClient::from_env();
-        let friend_client = FriendServiceGrpcClient::from_env();
-        let group_client = GroupServiceGrpcClient::from_env();
+        // 创建服务注册中心
+        let service_register = service_register_center(&config);
+
+        // 创建用户服务的延迟初始化处理器
+        let config_clone1 = config.clone();
+        let user_service = LazyServiceHandler::new(move || {
+            let rt = tokio::runtime::Handle::current();
+            let config_clone = config_clone1.clone();
+            let client = rt.block_on(async {
+                get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config_clone, "user-service".to_string()).await
+            }).map(|client| UserServiceGrpcClient::new(client)).expect("无法连接用户服务");
+            
+            UserServiceHandler::new(client)
+        });
         
-        // 创建各服务处理器
-        let user_service = UserServiceHandler::new(user_client);
-        let friend_service = FriendServiceHandler::new(friend_client);
-        let group_service = GroupServiceHandler::new(group_client);
+        // 创建好友服务的延迟初始化处理器
+        let config_clone2 = config.clone();
+        let friend_service = LazyServiceHandler::new(move || {
+            let rt = tokio::runtime::Handle::current();
+            let config_clone = config_clone2.clone();
+            let client = rt.block_on(async {
+                get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&config_clone, "friend-service".to_string()).await
+            }).map(|client| FriendServiceGrpcClient::new(client)).expect("无法连接好友服务");
+            
+            FriendServiceHandler::new(client)
+        });
+        
+        // 创建群组服务的延迟初始化处理器
+        let config_clone3 = config.clone();
+        let group_service = LazyServiceHandler::new(move || {
+            let rt = tokio::runtime::Handle::current();
+            let config_clone = config_clone3.clone();
+            let client = rt.block_on(async {
+                get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&config_clone, "group-service".to_string()).await
+            }).map(|client| GroupServiceGrpcClient::new(client)).expect("无法连接群组服务");
+            
+            GroupServiceHandler::new(client)
+        });
 
         Self {
-            service_registry,
+            config,
+            service_register,
             user_service,
             friend_service,
             group_service,
@@ -187,21 +221,33 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
 
             // 根据服务类型调用对应的处理方法
             match service_name.as_str() {
-                "users" => self_clone.user_service.handle_request(&method, &path, body).await
-                    .unwrap_or_else(|err| {
-                        error!("处理用户服务请求失败: {}", err);
-                        error_response(&format!("处理用户服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
-                    }),
-                "friends" => self_clone.friend_service.handle_request(&method, &path, body).await
-                    .unwrap_or_else(|err| {
-                        error!("处理好友服务请求失败: {}", err);
-                        error_response(&format!("处理好友服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
-                    }),
-                "groups" => self_clone.group_service.handle_request(&method, &path, body).await
-                    .unwrap_or_else(|err| {
-                        error!("处理群组服务请求失败: {}", err);
-                        error_response(&format!("处理群组服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
-                    }),
+                "users" => {
+                    // 延迟初始化获取用户服务处理器
+                    let mut user_service = self_clone.user_service.get();
+                    user_service.handle_request(&method, &path, body).await
+                        .unwrap_or_else(|err| {
+                            error!("处理用户服务请求失败: {}", err);
+                            error_response(&format!("处理用户服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                        })
+                },
+                "friends" => {
+                    // 延迟初始化获取好友服务处理器
+                    let mut friend_service = self_clone.friend_service.get();
+                    friend_service.handle_request(&method, &path, body).await
+                        .unwrap_or_else(|err| {
+                            error!("处理好友服务请求失败: {}", err);
+                            error_response(&format!("处理好友服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                        })
+                },
+                "groups" => {
+                    // 延迟初始化获取群组服务处理器
+                    let mut group_service = self_clone.group_service.get();
+                    group_service.handle_request(&method, &path, body).await
+                        .unwrap_or_else(|err| {
+                            error!("处理群组服务请求失败: {}", err);
+                            error_response(&format!("处理群组服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                        })
+                },
                 // 将来可以添加其他服务的处理分支
                 _ => {
                     error!("不支持的服务类型: {}", service_name);
@@ -216,12 +262,13 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
 
     fn check_health(&self) -> BoxFuture<'static, bool> {
         // 克隆必要的数据以避免生命周期问题
-        let service_registry = self.service_registry.clone();
+        let service_register = self.service_register.clone();
+        let service_name = "user-service".to_string();
 
         Box::pin(async move {
-            // 简单的健康检查：尝试连接用户服务
-            match service_registry.discover_service("user-service").await {
-                Ok(_) => true,
+            // 简单的健康检查：尝试从服务注册中心查询用户服务
+            match service_register.find_by_name(&service_name).await {
+                Ok(services) => !services.is_empty(),
                 Err(_) => false,
             }
         })
@@ -232,20 +279,11 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
 impl Clone for GrpcClientFactoryImpl {
     fn clone(&self) -> Self {
         Self {
-            service_registry: self.service_registry.clone(),
+            config: self.config.clone(),
+            service_register: self.service_register.clone(),
             user_service: self.user_service.clone(),
             friend_service: self.friend_service.clone(),
             group_service: self.group_service.clone(),
         }
     }
-}
-
-/// 创建gRPC通道
-pub async fn create_grpc_channel(target_url: &str) -> Result<Channel, tonic::transport::Error> {
-    let endpoint = tonic::transport::Endpoint::new(target_url.to_string())?
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(30))
-        .concurrency_limit(100);
-
-    endpoint.connect().await
 }

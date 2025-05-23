@@ -1,8 +1,8 @@
-use crate::auth::middleware::auth_middleware;
-use crate::config::CONFIG;
-use crate::proxy::service_proxy::ServiceProxy;
-use crate::{auth::controller, UserServiceGrpcClient};
 use crate::api_doc::api_docs;
+use crate::auth::controller;
+use crate::auth::controller::SharedUserService;
+use crate::auth::middleware::auth_middleware;
+use crate::proxy::service_proxy::ServiceProxy;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware;
@@ -10,7 +10,12 @@ use axum::response::IntoResponse;
 use axum::routing::{any, get, post};
 use axum::Json;
 use axum::Router;
-use common::grpc_client::GrpcServiceClient;
+use common::config::ConfigLoader;
+use common::configs::GatewayConfig;
+use common::grpc_client::base::get_rpc_client;
+use common::grpc_client::UserServiceGrpcClient as CommonUserServiceClient;
+use common::proto::user::user_service_client::UserServiceClient;
+use common::service_discovery::LbWithServiceDiscovery;
 use serde_json::json;
 use std::sync::Arc;
 use tracing::info;
@@ -18,36 +23,44 @@ use tracing::info;
 /// 路由构建器
 pub struct RouterBuilder {
     service_proxy: Arc<ServiceProxy>,
-    user_client: Arc<UserServiceGrpcClient>,
+    /// 用户服务,  用于处理用户登录认证
+    user_service: SharedUserService,
     router: Router,
 }
 
 impl RouterBuilder {
     /// 创建新的路由构建器
-    pub fn new(service_proxy: Arc<ServiceProxy>) -> Self {
+    pub async fn new(service_proxy: Arc<ServiceProxy>) -> Self {
         // 创建用户服务客户端
-        let service_client = GrpcServiceClient::from_env("user-service");
-        let user_client = Arc::new(UserServiceGrpcClient::new(service_client));
-        
+        let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
+        let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
+            &config,
+            "user-service".to_string(),
+        )
+        .await
+        .expect("无法连接用户服务");
+
+        let user_client = Arc::new(CommonUserServiceClient::new(service_client));
+        let user_service = SharedUserService::new(user_client);
+
         // 创建基础路由器
         let router = Router::new();
-        
+
         Self {
             service_proxy,
-            user_client,
+            user_service,
             router,
         }
     }
 
     /// 构建动态路由
-    pub async fn build(self) -> anyhow::Result<Router> {
+    pub async fn build(self, config: Arc<GatewayConfig>) -> anyhow::Result<Router> {
         // 读取配置
-        let config = CONFIG.read().await;
         let routes_config = &config.routes;
 
         // 添加所有路由
         let mut router = self.router;
-        
+
         // 添加认证相关路由
         router = Self::add_auth_routes(router);
 
@@ -94,34 +107,26 @@ impl RouterBuilder {
         }
 
         // 添加健康检查和指标端点
-        router = router
-            .route("/health", get(health_check))
-            .route(
-                &config.metrics_endpoint,
-                get(crate::metrics::get_metrics_handler),
-            );
+        router = router.route("/health", get(health_check)).route(
+            &config.metrics_endpoint,
+            get(crate::metrics::get_metrics_handler),
+        );
 
         // 最后添加全局中间件
-        let user_client = self.user_client.clone();
-        router = router.layer(axum::Extension(user_client));
-        
+        let user_service = self.user_service.clone();
+        router = router.layer(axum::Extension(user_service));
+
         Ok(router)
     }
 
     /// 添加认证相关路由
     fn add_auth_routes(router: Router) -> Router {
         info!("添加认证相关路由");
-        
+
         // 添加登录路由
         router
-            .route(
-                "/api/user/login",
-                post(controller::login),
-            )
-            .route(
-                "/api/user/refresh",
-                post(controller::refresh_token),
-            )
+            .route("/api/user/login", post(controller::login))
+            .route("/api/user/refresh", post(controller::refresh_token))
     }
 
     /// 添加API文档相关路由
@@ -136,13 +141,16 @@ impl RouterBuilder {
 
 /// 健康检查处理函数
 async fn health_check() -> impl IntoResponse {
-    (StatusCode::OK, Json(json!({
-        "status": "ok",
-        "service": "api-gateway",
-        "version": env!("CARGO_PKG_VERSION"),
-        "api_documentation": {
-            "swagger_ui": "/swagger-ui",
-            "openapi_json": "/api-doc/openapi.json"
-        }
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "service": "api-gateway",
+            "version": env!("CARGO_PKG_VERSION"),
+            "api_documentation": {
+                "swagger_ui": "/swagger-ui",
+                "openapi_json": "/api-doc/openapi.json"
+            }
+        })),
+    )
 }

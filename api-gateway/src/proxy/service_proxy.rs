@@ -1,150 +1,39 @@
 use crate::auth::jwt::UserInfo;
-use crate::config::routes_config::ServiceType;
-use crate::config::CONFIG;
-use crate::proxy::grpc_client::GrpcClientFactory;
+use crate::proxy::grpc_client::{GrpcClientFactory, GrpcClientFactoryImpl};
 use axum::{
     body::Body,
     http::{Request, Response, StatusCode},
     response::IntoResponse,
 };
-use rand::Rng;
+use common::configs::routes_config::ServiceType;
 use reqwest::Client;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
-
-/// 服务发现接口
-pub struct ServiceDiscovery {
-    // 服务地址缓存
-    services: RwLock<HashMap<String, Vec<String>>>,
-    // Consul客户端
-    consul_client: Client,
-    // Consul URL
-    consul_url: String,
-}
-
-impl ServiceDiscovery {
-    /// 创建新的服务发现实例
-    pub fn new(consul_url: &str) -> Self {
-        Self {
-            services: RwLock::new(HashMap::new()),
-            consul_client: Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap_or_default(),
-            consul_url: consul_url.to_string(),
-        }
-    }
-
-    /// 发现服务地址
-    pub async fn discover_service(&self, service_name: &str) -> Result<Vec<String>, String> {
-        // 首先尝试从缓存获取
-        {
-            let services = self.services.read().await;
-            if let Some(addresses) = services.get(service_name) {
-                if !addresses.is_empty() {
-                    return Ok(addresses.clone());
-                }
-            }
-        }
-
-        // 缓存中不存在，从Consul获取
-        let consul_url = format!("{}/v1/catalog/service/{}", self.consul_url, service_name);
-
-        match self.consul_client.get(&consul_url).send().await {
-            Ok(response) => {
-                if response.status().is_success() {
-                    match response.json::<Vec<serde_json::Value>>().await {
-                        Ok(services) => {
-                            let mut addresses = Vec::new();
-
-                            for service in services {
-                                if let (Some(address), Some(port)) = (
-                                    service.get("ServiceAddress").and_then(|a| a.as_str()),
-                                    service.get("ServicePort").and_then(|p| p.as_u64()),
-                                ) {
-                                    // 构建服务地址
-                                    let addr = if address.is_empty() {
-                                        // 如果ServiceAddress为空，使用Address
-                                        if let Some(addr) =
-                                            service.get("Address").and_then(|a| a.as_str())
-                                        {
-                                            format!("https://{}:{}", addr, port)
-                                        } else {
-                                            continue;
-                                        }
-                                    } else {
-                                        format!("https://{}:{}", address, port)
-                                    };
-
-                                    addresses.push(addr);
-                                }
-                            }
-
-                            if addresses.is_empty() {
-                                return Err(format!("无法找到服务: {}", service_name));
-                            }
-
-                            // 更新缓存
-                            {
-                                let mut services = self.services.write().await;
-                                services.insert(service_name.to_string(), addresses.clone());
-                            }
-
-                            Ok(addresses)
-                        }
-                        Err(e) => Err(format!("解析服务发现响应失败: {}", e)),
-                    }
-                } else {
-                    Err(format!("服务发现请求失败: HTTP {}", response.status()))
-                }
-            }
-            Err(e) => Err(format!("服务发现请求错误: {}", e)),
-        }
-    }
-
-    /// 获取服务地址（使用简单的负载均衡）
-    pub async fn get_service_url(&self, service_name: &str) -> Result<String, String> {
-        let addresses = self.discover_service(service_name).await?;
-
-        // 简单的轮询负载均衡
-        let idx = rand::rng().random_range(0..addresses.len());
-        Ok(addresses[idx].clone())
-    }
-
-    /// 刷新服务缓存
-    pub async fn refresh_services(&self) {
-        let services = {
-            let services = self.services.read().await;
-            services.keys().cloned().collect::<Vec<_>>()
-        };
-
-        for service_name in services {
-            match self.discover_service(&service_name).await {
-                Ok(_) => debug!("服务 {} 缓存已更新", service_name),
-                Err(e) => warn!("刷新服务 {} 缓存失败: {}", service_name, e),
-            }
-        }
-    }
-}
+use tracing::{debug, error};
+use common::config::{AppConfig, ConfigLoader};
+use common::service_register_center::{service_register_center, ServiceRegister};
+use common::Error;
 
 /// 服务代理 - 负责转发请求到后端服务
 pub struct ServiceProxy {
-    // 服务发现
-    service_discovery: Arc<ServiceDiscovery>,
+    // 服务注册中心
+    service_register: Arc<dyn ServiceRegister>,
+    // 应用配置
+    config: Arc<AppConfig>,
     // HTTP 客户端
     http_client: Client,
+    // gRPC 客户端工厂
+    grpc_client_factory: GrpcClientFactoryImpl,
 }
 
 impl ServiceProxy {
     /// 创建新的服务代理
     pub async fn new() -> Self {
-        let config = CONFIG.read().await;
-
-        // 创建服务发现
-        let service_discovery = Arc::new(ServiceDiscovery::new(&config.consul_url));
+        // 加载配置
+        let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
+        
+        // 创建服务注册中心
+        let service_register = service_register_center(&config);
 
         // 创建HTTP客户端
         let http_client = Client::builder()
@@ -153,9 +42,14 @@ impl ServiceProxy {
             .build()
             .unwrap_or_default();
 
+        // 创建gRPC客户端工厂
+        let grpc_client_factory = GrpcClientFactoryImpl::new();
+
         Self {
-            service_discovery,
+            service_register,
+            config,
             http_client,
+            grpc_client_factory,
         }
     }
 
@@ -169,7 +63,7 @@ impl ServiceProxy {
         let service_name = self.get_service_name(service_type);
 
         // 获取目标服务地址
-        match self.service_discovery.get_service_url(&service_name).await {
+        match self.get_service_url(&service_name).await {
             Ok(service_url) => {
                 debug!("转发请求到服务: {}", service_url);
 
@@ -204,6 +98,25 @@ impl ServiceProxy {
             }
         }
     }
+    
+    /// 从服务注册中心获取服务URL
+    async fn get_service_url(&self, service_name: &str) -> Result<String, Error> {
+        // 从服务注册中心获取服务信息
+        let services = self.service_register.find_by_name(service_name).await?;
+        
+        if services.is_empty() {
+            return Err(Error::NotFound(format!("服务不可用: {}", service_name)));
+        }
+        
+        // 简单的负载均衡：随机选择一个服务实例
+        let service = services.values().next().unwrap();
+        
+        // 构建服务URL
+        let protocol = &self.config.service_center.protocol;
+        let url = format!("{}://{}:{}", protocol, service.host, service.port);
+        
+        Ok(url)
+    }
 
     /// 从服务类型获取服务名称
     fn get_service_name(&self, service_type: &ServiceType) -> String {
@@ -220,9 +133,6 @@ impl ServiceProxy {
 
     /// 转发HTTP请求
     async fn forward_http_request(&self, req: Request<Body>, service_url: &str) -> Response<Body> {
-        // 获取配置
-        let config = CONFIG.read().await;
-
         // 获取路径
         let path = req.uri().path().to_string();
         let path_query = req
@@ -231,23 +141,8 @@ impl ServiceProxy {
             .map(|v| v.as_str())
             .unwrap_or(&path);
 
-        // 查找匹配的路由规则
-        let route_rule = config
-            .routes
-            .routes
-            .iter()
-            .find(|r| path.starts_with(&r.path_prefix));
-
-        // 应用路径重写
-        let target_path = if let Some(rule) = route_rule {
-            if let Some(rewrite) = &rule.path_rewrite {
-                crate::proxy::utils::apply_path_rewrite(path_query, &rule.path_prefix, rewrite)
-            } else {
-                path_query.to_string()
-            }
-        } else {
-            path_query.to_string()
-        };
+        // 简化路由匹配逻辑，直接使用原始路径
+        let target_path = path_query.to_string();
 
         // 构建目标URL
         let target_url = format!("{}{}", service_url, target_path);
@@ -393,29 +288,8 @@ impl ServiceProxy {
 
     /// 转发gRPC请求
     async fn forward_grpc_request(&self, req: Request<Body>, service_url: &str) -> Response<Body> {
-        // 使用新实现的 GrpcClientFactoryImpl 处理 gRPC 请求
-        let factory = crate::proxy::grpc_client::GrpcClientFactoryImpl::new();
-        factory.forward_request(req, service_url.to_string()).await
-    }
-
-    /// 启动服务刷新任务
-    pub fn start_service_refresh(&self) {
-        let service_discovery = self.service_discovery.clone();
-
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
-
-            loop {
-                interval.tick().await;
-                service_discovery.refresh_services().await;
-            }
-        });
-    }
-
-    /// 添加shutdown方法
-    pub async fn shutdown(&self) {
-        info!("准备关闭服务代理...");
-        // 清理资源或关闭连接的代码
+        // 使用已创建的 GrpcClientFactoryImpl 实例处理 gRPC 请求
+        self.grpc_client_factory.forward_request(req, service_url.to_string()).await
     }
 }
 
@@ -423,8 +297,10 @@ impl ServiceProxy {
 impl Clone for ServiceProxy {
     fn clone(&self) -> Self {
         Self {
-            service_discovery: self.service_discovery.clone(),
+            service_register: self.service_register.clone(),
+            config: self.config.clone(),
             http_client: self.http_client.clone(),
+            grpc_client_factory: self.grpc_client_factory.clone(),
         }
     }
 }

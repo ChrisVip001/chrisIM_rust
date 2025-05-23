@@ -7,11 +7,11 @@ use tracing::{debug, info};
 use crate::manager::Manager;
 use common::config::{AppConfig, Component};
 use common::error::Error;
+use common::grpc::LoggingInterceptor;
 use common::message::msg_service_server::MsgServiceServer;
 use common::message::{
     msg_service_server::MsgService, SendGroupMsgRequest, SendMsgRequest, SendMsgResponse,
 };
-use common::service_registry::ServiceRegistry;
 
 pub struct MsgRpcService {
     manager: Manager,
@@ -23,39 +23,30 @@ impl MsgRpcService {
     }
 
     pub async fn start(manager: Manager, config: &AppConfig) -> Result<(), Error> {
-        // register service to service register center
         // 创建并注册到Consul
-        let service_registry = ServiceRegistry::from_env();
-        let service_id = service_registry
-            .register_service(
-                "msg-gateway",
-                &config.server.host,
-                config.server.port as u32, // 显式转换为u32类型
-                vec!["auth".to_string(), "api".to_string()],
-                "/health",
-                "15s",
-            )
+        common::grpc_client::base::register_service(config, Component::MessageGateway)
             .await
-            .map_err(|e| Error::Internal(e.to_string()))?;
+            .expect("服务注册失败");
+
         info!("<ws> rpc service register to service register center");
 
-        // open health check
-        let health_service = HealthServer::new(HealthService::new());
+        // TODO open health check
         info!("<ws> rpc service health check started");
 
+        // 创建日志拦截器
+        let logging_interceptor = LoggingInterceptor::new();
+
         let service = Self::new(manager);
-        let svc = MsgServiceServer::new(service);
+        let svc = MsgServiceServer::with_interceptor(service, logging_interceptor);
         info!(
             "<ws> rpc service started at {}",
             config.rpc.ws.rpc_server_url()
         );
 
         Server::builder()
-            .add_service(health_service)
             .add_service(svc)
             .serve(config.rpc.ws.rpc_server_url().parse().unwrap())
-            .await
-            .unwrap();
+            .await?;
         Ok(())
     }
 }

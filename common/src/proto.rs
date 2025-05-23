@@ -1,10 +1,4 @@
 // 导入生成的gRPC服务代码
-pub mod auth {
-    tonic::include_proto!("auth");
-
-    // 生成用于反射的文件描述符集
-    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("auth_descriptor");
-}
 
 pub mod user {
     tonic::include_proto!("user");
@@ -27,18 +21,12 @@ pub mod friend {
     pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("friend_descriptor");
 }
 
-pub mod private_message {
-    tonic::include_proto!("private_message");
-
-    // 生成用于反射的文件描述符集
-    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("private_message_descriptor");
-}
 
 pub mod group_message {
-    tonic::include_proto!("group_message");
+    tonic::include_proto!("messages");
 
     // 生成用于反射的文件描述符集
-    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("group_message_descriptor");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("messages_descriptor");
 }
 
 pub mod message_gateway {

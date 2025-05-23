@@ -9,7 +9,8 @@ members = [
     "oss",
     "msg-server",
     "msg-gateway",
-    "api-gateway"
+    "api-gateway",
+    "msg-storage",
 ]
 
 [workspace.dependencies]

@@ -1,51 +1,30 @@
-use crate::{models::Claims, Error, Result};
-use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use std::env;
+use crate::{Error, Result};
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHasher};
 use rand::distr::Alphanumeric;
 use rand::Rng;
 use uuid::Uuid;
 use regex::Regex;
 
-// JWT工具函数
-pub fn generate_jwt(user_id: &Uuid, username: &str) -> Result<String> {
-    let expiration = Utc::now()
-        .checked_add_signed(Duration::seconds(
-            env::var("JWT_EXPIRATION")
-                .unwrap_or_else(|_| "86400".to_string())
-                .parse()
-                .unwrap_or(86400),
-        ))
-        .expect("有效的时间戳")
-        .timestamp() as usize;
-
-    let claims = Claims {
-        sub: user_id.to_string(),
-        username: username.to_string(),
-        exp: expiration,
-        iat: Utc::now().timestamp() as usize,
-    };
-
-    let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "default_jwt_secret".to_string());
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )?;
-
-    Ok(token)
+/// 生成随机盐值用于密码哈希
+pub fn generate_salt() -> String {
+    SaltString::generate(&mut OsRng).to_string()
 }
 
-pub fn validate_jwt(token: &str) -> Result<Claims> {
-    let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "default_jwt_secret".to_string());
-    let validation = Validation::default();
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    )?;
+/// 使用Argon2算法对密码进行哈希处理
+pub fn argon2_hash_password(password: &[u8], salt: &str) -> std::result::Result<String, Error> {
+    // 使用默认的Argon2配置
+    // 这个配置可以更改为适合您具体安全需求和性能要求的设置
 
-    Ok(token_data.claims)
+    // 使用默认参数的Argon2 (Argon2id v19)
+    let argon2 = Argon2::default();
+
+    // 将密码哈希为PHC字符串 ($argon2id$v=19$...)
+    Ok(argon2
+        .hash_password(password, &SaltString::from_b64(salt).unwrap())
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .to_string())
 }
 
 // 密码哈希工具
@@ -62,7 +41,53 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 }
 
 pub fn validate_phone(phone: &str) -> bool {
-    Regex::new(r"^1[3-9]\d{9}$").expect("手机号正则表达式编译失败").is_match(phone)
+    Regex::new(r"^1[3-9]\d{9}$")
+        .expect("手机号正则表达式编译失败")
+        .is_match(phone)
+}
+
+pub fn url(https: bool, host: &str, port: u16) -> String {
+    if https {
+        format!("https://{}:{}", host, port)
+    } else {
+        format!("http://{}:{}", host, port)
+    }
+}
+
+pub fn wss_url(wss: bool, host: &str, port: u16) -> String {
+    if wss {
+        format!("wss://{}:{}", host, port)
+    } else {
+        format!("ws://{}:{}", host, port)
+    }
+}
+
+/// 获取主机名
+///
+/// 返回当前机器的主机名，如果获取失败则返回错误
+pub fn get_host_name() -> Result<String> {
+    hostname::get()
+        .map(|h| h.to_string_lossy().into_owned())
+        .map_err(|_| Error::Internal("获取主机名失败".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use argon2::{PasswordHash, PasswordVerifier};
+    use rs_consul::{Config, Consul, GetServiceNodesRequest};
+
+    /// 测试密码哈希功能
+    #[test]
+    fn test_hash_password() {
+        let salt = generate_salt();
+        let password = "123456";
+        let hash = argon2_hash_password(password.as_bytes(), &salt).unwrap();
+        let parsed_hash = PasswordHash::new(&hash).unwrap();
+        assert!(Argon2::default()
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok());
+    }
 }
 
 
