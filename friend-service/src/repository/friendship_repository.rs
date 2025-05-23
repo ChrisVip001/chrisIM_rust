@@ -224,7 +224,7 @@ impl FriendshipRepository {
         #[derive(sqlx::FromRow)]
         struct FriendRow {
             id: String,
-            username: String,
+            username: Option<String>,
             nickname: Option<String>,
             avatar_url: Option<String>,
             friendship_created_at: NaiveDateTime,
@@ -356,8 +356,8 @@ impl FriendshipRepository {
                     status,
                     created_at: Utc.from_utc_datetime(&r.created_at),
                     updated_at: Utc.from_utc_datetime(&r.updated_at),
-                    reject_reason: Some(r.reject_reason.unwrap_or_default()),
-                    friend_username: Some(r.friend_username),
+                    reject_reason: r.reject_reason,
+                    friend_username: r.friend_username,
                     friend_nickname: r.friend_nickname,
                     friend_avatar_url: r.friend_avatar_url,
                 }

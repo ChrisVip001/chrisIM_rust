@@ -138,7 +138,7 @@ message Friendship {
 // 好友
 message Friend {
   string id = 1;
-  string username = 2;
+  optional string username = 2;
   optional string nickname = 3;
   optional string avatar_url = 4;
   google.protobuf.Timestamp friendship_created_at = 5;
