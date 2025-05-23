@@ -2,11 +2,13 @@ use axum::{
     body::Body,
     http::{Method, Response, StatusCode},
 };
-use serde_json::{json, Value};
-use tracing::{error, debug};
 use common::grpc_client::FriendServiceGrpcClient;
 use common::proto;
-use super::common::{success_response, extract_string_param, timestamp_to_datetime_string, get_i64_param};
+use serde_json::{json, Value};
+use tracing::{error, debug};
+
+use super::common::{success_response, extract_string_param, timestamp_to_datetime_string,
+                    get_i64_param, get_optional_string};
 
 /// 好友服务处理器
 #[derive(Clone)]
@@ -147,7 +149,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.block_user(&user_id, &blocked_user_id).await?;
 
-                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+                Ok(success_response(json!(response.success), StatusCode::OK))
             }
 
             // 解除拉黑
@@ -157,12 +159,12 @@ impl FriendServiceHandler {
 
                 let response = self.client.unblock_user(&user_id, &blocked_user_id).await?;
 
-                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+                Ok(success_response(json!(response.success), StatusCode::OK))
             }
 
             // 创建或更新好友分组
             (&Method::POST, "createOrUpdateGroup") => {
-                let id = extract_string_param(&body, "id", None)?;
+                let id = get_optional_string(&body, "id",None);
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let group_name = extract_string_param(&body, "groupName", Some("group_name"))?;
                 let sort_order = body.get("sortOrder").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -174,7 +176,7 @@ impl FriendServiceHandler {
                     .collect::<Vec<String>>();
 
                 let response = self.client.create_or_update_friend_group(
-                    Some(&id),
+                    id,
                     &user_id,
                     &group_name,
                     sort_order,
@@ -197,7 +199,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.delete_friend_group(&id, &user_id).await?;
 
-                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+                Ok(success_response(json!(response.success), StatusCode::OK))
             }
 
             // 获取好友分组列表
@@ -211,7 +213,7 @@ impl FriendServiceHandler {
             }
 
             // 获取分组好友列表
-            (&Method::GET, "getGroupFriends") => {
+            (&Method::POST, "getGroupFriends") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
