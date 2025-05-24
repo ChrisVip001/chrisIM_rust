@@ -587,8 +587,15 @@ check_cargo_lock() {
             # 检查是否安装了 Cargo
             if command -v cargo &> /dev/null; then
                 log_info "使用本地 Cargo 生成 Cargo.lock..."
+                
+                # 检查本地 Cargo 版本
+                local cargo_version=$(cargo --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+                log_info "本地 Cargo 版本: $cargo_version"
+                
+                # 生成 Cargo.lock
                 if cargo generate-lockfile; then
                     log_success "Cargo.lock 生成成功"
+                    
                     # 从缺失文件列表中移除 Cargo.lock
                     missing_files=($(printf '%s\n' "${missing_files[@]}" | grep -v "Cargo.lock"))
                 else
@@ -605,7 +612,31 @@ check_cargo_lock() {
             exit 1
         fi
     else
+        log_info "检查现有 Cargo.lock 文件..."
+        
+        # 检查 Cargo.lock 版本
+        if [[ -f "Cargo.lock" ]]; then
+            # 验证 Cargo.lock 文件完整性
+            local lock_size=$(wc -l < Cargo.lock)
+            if [[ $lock_size -lt 10 ]]; then
+                log_warning "Cargo.lock 文件似乎不完整 (只有 $lock_size 行)，将重新生成"
+                rm -f Cargo.lock
+                if command -v cargo &> /dev/null; then
+                    cargo generate-lockfile
+                    log_success "重新生成 Cargo.lock 完成"
+                fi
+            else
+                log_info "Cargo.lock 文件大小: $lock_size 行"
+            fi
+        fi
+        
         log_success "Cargo 文件检查通过"
+    fi
+    
+    # 显示最终状态
+    if [[ -f "Cargo.lock" ]]; then
+        local final_lock_size=$(wc -l < Cargo.lock)
+        log_info "最终 Cargo.lock 状态: $final_lock_size 行"
     fi
 }
 
