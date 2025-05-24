@@ -164,7 +164,7 @@ impl UserServiceHandler {
                     nickname: nickname.to_string(),
                     tenant_id: tenant_id.to_string(),
                     phone: phone.to_string(),
-                    msg_code: msg_code.to_string(),
+                    verify_code: msg_code.to_string(),
                 };
 
                 match self.client.register_by_username(request).await {
@@ -222,7 +222,7 @@ impl UserServiceHandler {
                     nickname: nickname.to_string(),
                     tenant_id: tenant_id.to_string(),
                     phone: phone.to_string(),
-                    msg_code: msg_code.to_string(),
+                    verify_code: msg_code.to_string(),
                 };
 
                 match self.client.register_by_phone(request).await {
@@ -268,11 +268,24 @@ impl UserServiceHandler {
                     .or_else(|| body.get("tenant_id"))
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
+                
+                let phone = body
+                    .get("phone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                
+                let verify_code = body
+                    .get("verify_code")
+                    .or_else(|| body.get("msg_code")) // 兼容旧字段名
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
 
                 let request = proto::user::ForgetPasswordRequest {
                     username: username.to_string(),
                     password: password.to_string(),
                     tenant_id: tenant_id.to_string(),
+                    phone: phone.to_string(),
+                    verify_code: verify_code.to_string(),
                 };
 
                 match self.client.forget_password(request).await {
@@ -344,6 +357,92 @@ impl UserServiceHandler {
                 let response = self.client.save_user_config(request).await?;
                 let user_config = response.user_config.unwrap_or_default();
                 Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+            }
+            
+            // 发送手机验证码
+            (&Method::POST, "sendVerificationCode") => {
+                let phone = body
+                    .get("phone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                
+                if phone.is_empty() {
+                    return Ok(error_response("手机号不能为空", StatusCode::BAD_REQUEST));
+                }
+                
+                let action = body
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("register");
+                
+                let request = proto::user::PhoneVerificationRequest {
+                    phone: phone.to_string(),
+                    action: action.to_string(),
+                };
+                
+                match self.client.send_phone_verification_code(request).await {
+                    Ok(response) => {
+                        if response.success {
+                            Ok(success_with_message(
+                                json!({}),
+                                &response.message,
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("发送验证码失败: {}", err);
+                        Ok(error_response(&format!("发送验证码失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
+            }
+            
+            // 验证手机验证码
+            (&Method::POST, "verifyPhoneCode") => {
+                let phone = body
+                    .get("phone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                
+                if phone.is_empty() {
+                    return Ok(error_response("手机号不能为空", StatusCode::BAD_REQUEST));
+                }
+                
+                let code = body
+                    .get("code")
+                    .or_else(|| body.get("verify_code"))
+                    .or_else(|| body.get("msg_code"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                
+                if code.is_empty() {
+                    return Ok(error_response("验证码不能为空", StatusCode::BAD_REQUEST));
+                }
+                
+                let request = proto::user::VerifyPhoneCodeRequest {
+                    phone: phone.to_string(),
+                    code: code.to_string(),
+                };
+                
+                match self.client.verify_phone_code(request).await {
+                    Ok(response) => {
+                        if response.valid {
+                            Ok(success_with_message(
+                                json!({"valid": true}),
+                                &response.message,
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("验证码验证失败: {}", err);
+                        Ok(error_response(&format!("验证码验证失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
             }
 
             // 其他未知方法

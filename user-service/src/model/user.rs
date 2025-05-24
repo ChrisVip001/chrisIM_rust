@@ -128,7 +128,7 @@ pub struct RegisterUserData {
     pub nickname: Option<String>,
     pub tenant_id : String,
     pub phone: String,
-    pub msg_code: String,
+    pub verify_code: String,
 }
 
 impl From<user::RegisterRequest> for RegisterUserData {
@@ -139,7 +139,7 @@ impl From<user::RegisterRequest> for RegisterUserData {
             nickname: if req.nickname.is_empty() { None } else { Some(req.nickname) },
             tenant_id: req.tenant_id,
             phone: req.phone,
-            msg_code: req.msg_code,
+            verify_code: req.verify_code,
         }
     }
 }
@@ -150,6 +150,8 @@ pub struct ForgetPasswordData {
     pub username: String,
     pub password: String,
     pub tenant_id : String,
+    pub phone: String,
+    pub verify_code: String,
 }
 
 impl From<user::ForgetPasswordRequest> for ForgetPasswordData {
@@ -158,6 +160,8 @@ impl From<user::ForgetPasswordRequest> for ForgetPasswordData {
             username: req.username,
             password: req.password,
             tenant_id: req.tenant_id,
+            phone: req.phone,
+            verify_code: req.verify_code,
         }
     }
 }

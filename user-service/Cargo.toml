@@ -16,3 +16,4 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 prost-types = { workspace = true }
+redis = { workspace = true }

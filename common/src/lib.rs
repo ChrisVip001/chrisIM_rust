@@ -1,16 +1,16 @@
-pub mod config;
+pub mod proto;
 pub mod configs;
+pub mod config;
 pub mod error;
+pub mod message;
+pub mod utils;
+pub mod service;
+pub mod logging;
 pub mod grpc;
 pub mod grpc_client;
-pub mod logging;
-pub mod message;
-pub mod proto;
-pub mod service;
+pub mod types;
 pub mod service_discovery;
 pub mod service_register_center;
-pub mod types;
-pub mod utils;
+pub mod sms;
 
-pub use error::Error;
-pub type Result<T> = std::result::Result<T, Error>;
+pub use error::{Error, Result};

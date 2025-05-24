@@ -2,7 +2,7 @@ use anyhow::Result;
 use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
-use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse};
+use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse};
 use crate::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务gRPC客户端
@@ -112,6 +112,18 @@ impl UserServiceGrpcClient {
     // 保存用户设置
     pub async fn save_user_config(&mut self, request: UserConfigRequest) -> Result<UserConfigResponse> {
         let response = self.service_client.save_user_config(request).await?;
+        Ok(response.into_inner())
+    }
+    
+    /// 发送手机验证码
+    pub async fn send_phone_verification_code(&mut self, request: PhoneVerificationRequest) -> Result<PhoneVerificationResponse> {
+        let response = self.service_client.send_phone_verification_code(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+    
+    /// 验证手机验证码
+    pub async fn verify_phone_code(&mut self, request: VerifyPhoneCodeRequest) -> Result<VerifyPhoneCodeResponse> {
+        let response = self.service_client.verify_phone_code(Request::new(request)).await?;
         Ok(response.into_inner())
     }
 }

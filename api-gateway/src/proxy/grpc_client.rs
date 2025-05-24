@@ -103,10 +103,12 @@ impl GrpcClientFactoryImpl {
         // 创建用户服务的延迟初始化处理器
         let config_clone1 = config.clone();
         let user_service = LazyServiceHandler::new(move || {
-            let rt = tokio::runtime::Handle::current();
             let config_clone = config_clone1.clone();
-            let client = rt.block_on(async {
-                get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config_clone, "user-service".to_string()).await
+            // 使用已存在的运行时，但避免block_on
+            let client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config_clone, "user".to_string()).await
+                })
             }).map(|client| UserServiceGrpcClient::new(client)).expect("无法连接用户服务");
             
             UserServiceHandler::new(client)
@@ -115,10 +117,12 @@ impl GrpcClientFactoryImpl {
         // 创建好友服务的延迟初始化处理器
         let config_clone2 = config.clone();
         let friend_service = LazyServiceHandler::new(move || {
-            let rt = tokio::runtime::Handle::current();
             let config_clone = config_clone2.clone();
-            let client = rt.block_on(async {
-                get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&config_clone, "friend-service".to_string()).await
+            // 使用已存在的运行时，但避免block_on
+            let client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&config_clone, "friend".to_string()).await
+                })
             }).map(|client| FriendServiceGrpcClient::new(client)).expect("无法连接好友服务");
             
             FriendServiceHandler::new(client)
@@ -127,10 +131,12 @@ impl GrpcClientFactoryImpl {
         // 创建群组服务的延迟初始化处理器
         let config_clone3 = config.clone();
         let group_service = LazyServiceHandler::new(move || {
-            let rt = tokio::runtime::Handle::current();
             let config_clone = config_clone3.clone();
-            let client = rt.block_on(async {
-                get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&config_clone, "group-service".to_string()).await
+            // 使用已存在的运行时，但避免block_on
+            let client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&config_clone, "group".to_string()).await
+                })
             }).map(|client| GroupServiceGrpcClient::new(client)).expect("无法连接群组服务");
             
             GroupServiceHandler::new(client)

@@ -38,6 +38,12 @@ service UserService {
 
   // 保存用户设置
   rpc saveUserConfig (UserConfigRequest) returns (UserConfigResponse);
+  
+  // 发送手机验证码
+  rpc SendPhoneVerificationCode (PhoneVerificationRequest) returns (PhoneVerificationResponse);
+  
+  // 验证手机验证码
+  rpc VerifyPhoneCode (VerifyPhoneCodeRequest) returns (VerifyPhoneCodeResponse);
 }
 
 // 创建用户请求
@@ -129,7 +135,7 @@ message RegisterRequest {
   string nickname = 3;
   string tenant_id = 4;
   string phone = 5;
-  string msg_code = 6;
+  string verify_code = 6;
 }
 
 // 忘记密码请求
@@ -137,6 +143,8 @@ message ForgetPasswordRequest{
   string username = 1;
   string password = 2;
   string tenant_id = 3;
+  string phone = 4;
+  string verify_code = 5;
 }
 
 // 用户设置请求
@@ -164,4 +172,28 @@ message UserConfig {
   optional int32 msg_read_flag = 6;
   google.protobuf.Timestamp create_time = 7;
   google.protobuf.Timestamp update_time = 8;
+}
+
+// 手机验证码请求
+message PhoneVerificationRequest {
+  string phone = 1;
+  string action = 2; // register, login, reset_password等
+}
+
+// 手机验证码响应
+message PhoneVerificationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 验证手机验证码请求
+message VerifyPhoneCodeRequest {
+  string phone = 1;
+  string code = 2;
+}
+
+// 验证手机验证码响应
+message VerifyPhoneCodeResponse {
+  bool valid = 1;
+  string message = 2;
 }

@@ -175,7 +175,7 @@ database:
 # 服务配置
 server:
   host: 127.0.0.1
-  port: 50001
+  port: 8000
   ws_lb_strategy: RoundRobin # Random, RoundRobin
 
 
@@ -346,4 +346,17 @@ oss:
   avatar_bucket: rustIM-avatar
   region: us-east-1
 
+# 腾讯云短信配置
+sms:
+  tencent:
+    secret_id: AKIDBXjhiYBboqtmTzLYaVHuStDcvJdrv0uf    # 替换为您的腾讯云SecretId
+    secret_key: fBYv79yaClDVaR7f3GLH3c2FH6h9QZXH       # 替换为您的腾讯云SecretKey
+    app_id: 1400971247                                 # 替换为您的腾讯云短信应用ID
+    sign_name: 蚂蚁密信App                              # 替换为您的短信签名名称
+    template_id: 2381850                               # 替换为您的验证码短信模板ID
+    expire_seconds: 300                                # 验证码有效期（秒）
+    code_length: 6                                     # 验证码长度
+    region: ap-guangzhou                               # 地域，如ap-guangzhou
+    throttle_enabled: true                             # 是否启用防重复发送限制
+    throttle_seconds: 300                              # 限制时间内不允许重复发送（秒）
 

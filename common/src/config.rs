@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use notify::{Event, RecursiveMode, Watcher};
 use once_cell::sync::Lazy;
 use tracing::{error, info, warn};
-use crate::configs::{DatabaseConfig, GatewayConfig, LogConfig, OssConfig, TelemetryConfig};
+use crate::configs::{DatabaseConfig, GatewayConfig, LogConfig, OssConfig, TelemetryConfig, SmsConfig};
 use crate::utils::url;
 
 // 定义一个静态全局配置，可以在任何地方访问
@@ -26,6 +26,7 @@ pub struct AppConfig {
     pub redis: RedisConfig,
     pub kafka: KafkaConfig,
     pub oss: OssConfig,
+    pub sms: SmsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
