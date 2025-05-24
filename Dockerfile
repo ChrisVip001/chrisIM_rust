@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     librdkafka-dev \
     libpq-dev \
     protobuf-compiler \
+    libprotobuf-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
