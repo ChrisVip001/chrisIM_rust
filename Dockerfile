@@ -1,6 +1,6 @@
 # 多阶段构建 Dockerfile for RustIM
 # 阶段1: 构建环境
-FROM rust:1.75-slim-bullseye as builder
+FROM rust:1.76-slim-bullseye as builder
 
 # 设置环境变量
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
@@ -42,13 +42,12 @@ WORKDIR /app
 RUN echo "=== Docker 构建开始 ===" && \
     echo "工作目录: $(pwd)" && \
     echo "用户: $(whoami)" && \
-    echo "构建时间: $(date)"
+    echo "构建时间: $(date)" && \
+    echo "Rust 版本: $(rustc --version)" && \
+    echo "Cargo 版本: $(cargo --version)"
 
 # 复制 Cargo 配置文件
 COPY Cargo.toml ./
-
-# 复制 Cargo.lock 文件（如果存在）
-COPY Cargo.loc[k] ./
 
 # 复制所有服务的 Cargo.toml 文件
 COPY common/Cargo.toml common/
@@ -62,21 +61,47 @@ COPY msg-gateway/Cargo.toml msg-gateway/
 COPY api-gateway/Cargo.toml api-gateway/
 COPY msg-storage/Cargo.toml msg-storage/
 
-# 生成 Cargo.lock 文件（如果不存在）
-RUN if [ ! -f "Cargo.lock" ]; then \
-        echo "=== Cargo.lock 不存在，正在生成 ===" && \
-        cargo generate-lockfile && \
-        echo "=== Cargo.lock 生成完成 ==="; \
+# 处理 Cargo.lock 文件 - 改进版本兼容性处理
+RUN echo "=== 处理 Cargo.lock 文件 ===" && \
+    if [ -f "Cargo.lock" ]; then \
+        echo "检测到现有 Cargo.lock 文件" && \
+        # 检查 Cargo.lock 版本兼容性 \
+        if cargo tree --version > /dev/null 2>&1; then \
+            echo "Cargo.lock 版本兼容，使用现有文件" && \
+            ls -la Cargo.lock; \
+        else \
+            echo "Cargo.lock 版本不兼容，重新生成" && \
+            rm -f Cargo.lock && \
+            cargo generate-lockfile && \
+            echo "重新生成 Cargo.lock 完成"; \
+        fi; \
     else \
-        echo "=== 使用现有的 Cargo.lock 文件 ==="; \
+        echo "Cargo.lock 不存在，正在生成..." && \
+        cargo generate-lockfile && \
+        echo "Cargo.lock 生成完成"; \
     fi
 
-# 验证文件是否正确复制（调试用）
-RUN echo "=== 验证 Cargo 文件 ===" && \
+# 尝试复制 Cargo.lock 文件（如果存在且兼容）
+COPY Cargo.loc[k] ./
+
+# 最终验证和生成 Cargo.lock
+RUN echo "=== 最终验证 Cargo.lock ===" && \
+    if [ ! -f "Cargo.lock" ]; then \
+        echo "生成新的 Cargo.lock 文件..." && \
+        cargo generate-lockfile; \
+    fi && \
+    echo "验证 Cargo.lock 兼容性..." && \
+    if ! cargo tree --version > /dev/null 2>&1; then \
+        echo "Cargo.lock 不兼容，重新生成..." && \
+        rm -f Cargo.lock && \
+        cargo generate-lockfile; \
+    fi && \
+    echo "=== Cargo.lock 处理完成 ===" && \
     ls -la Cargo.toml Cargo.lock && \
     echo "Cargo.toml 内容预览:" && \
     head -10 Cargo.toml && \
-    echo "Cargo.lock 文件大小: $(wc -l < Cargo.lock) 行"
+    echo "Cargo.lock 文件大小: $(wc -l < Cargo.lock) 行" && \
+    echo "Cargo.lock 版本: $(head -3 Cargo.lock | grep version || echo '未知版本')"
 
 # 创建虚拟源文件以触发依赖下载
 RUN mkdir -p \
@@ -106,6 +131,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
     echo "=== 开始预构建依赖 ===" && \
+    echo "当前 Cargo.lock 状态:" && \
+    ls -la Cargo.lock && \
+    echo "开始构建..." && \
     cargo build --release && \
     echo "=== 依赖预构建完成 ==="
 

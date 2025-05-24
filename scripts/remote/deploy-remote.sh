@@ -2,6 +2,7 @@
 
 # RustIM 远程部署脚本 - 针对腾讯云 OpenCloudOS 优化
 # 支持多环境部署：staging 和 production
+# 集成快速构建优化功能
 
 set -e
 
@@ -13,11 +14,19 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 默认配置
-ENVIRONMENT="staging"
+ENVIRONMENT="production"
 PROJECT_DIR="/home/$(whoami)/rust-im"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 BACKUP_DIR="/home/$(whoami)/backups"
 GIT_REMOTE_URL="https://github.com/ChrisVip001/chrisIM_rust"
+
+# 构建优化配置
+USE_FAST_BUILD=true
+USE_CHINA_MIRROR=false
+CLEAN_BUILD=false
+BUILD_PARALLEL_JOBS=$(nproc)
+DOCKER_BUILDKIT=1
+COMPOSE_DOCKER_CLI_BUILD=1
 
 # Docker Compose 命令检测
 DOCKER_COMPOSE_CMD=""
@@ -44,19 +53,33 @@ show_help() {
     echo ""
     echo "用法: $0 [选项]"
     echo ""
-    echo "选项:"
+    echo "部署选项:"
     echo "  -e, --environment ENV    部署环境 (staging|production) [默认: production]"
     echo "  -d, --directory DIR      项目目录 [默认: $PROJECT_DIR]"
     echo "  -f, --compose-file FILE  Docker Compose 文件 [默认: $DOCKER_COMPOSE_FILE]"
     echo "  -b, --backup-dir DIR     备份目录 [默认: $BACKUP_DIR]"
+    echo ""
+    echo "构建优化选项:"
+    echo "  --fast-build            启用快速构建优化 [默认: 启用]"
+    echo "  --no-fast-build         禁用快速构建优化"
+    echo "  --use-china-mirror      使用中国镜像源加速"
+    echo "  --clean-build           清理所有缓存后构建"
+    echo "  --parallel JOBS         并行构建任务数 [默认: $BUILD_PARALLEL_JOBS]"
+    echo "  --no-cache              不使用构建缓存"
+    echo ""
+    echo "其他选项:"
     echo "  -h, --help              显示此帮助信息"
     echo ""
     echo "示例:"
-    echo "  $0 -e staging"
-    echo "  $0 -e production -d /opt/rust-im"
+    echo "  $0 -e staging                    # 部署到staging环境"
+    echo "  $0 -e production --fast-build    # 生产环境快速构建部署"
+    echo "  $0 --use-china-mirror            # 使用中国镜像源加速"
+    echo "  $0 --clean-build --parallel 4    # 清理缓存并使用4个并行任务"
 }
 
 # 解析命令行参数
+USE_BUILD_CACHE=true
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         -e|--environment)
@@ -74,6 +97,30 @@ while [[ $# -gt 0 ]]; do
         -b|--backup-dir)
             BACKUP_DIR="$2"
             shift 2
+            ;;
+        --fast-build)
+            USE_FAST_BUILD=true
+            shift
+            ;;
+        --no-fast-build)
+            USE_FAST_BUILD=false
+            shift
+            ;;
+        --use-china-mirror)
+            USE_CHINA_MIRROR=true
+            shift
+            ;;
+        --clean-build)
+            CLEAN_BUILD=true
+            shift
+            ;;
+        --parallel)
+            BUILD_PARALLEL_JOBS="$2"
+            shift 2
+            ;;
+        --no-cache)
+            USE_BUILD_CACHE=false
+            shift
             ;;
         -h|--help)
             show_help
@@ -110,70 +157,149 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# 显示部署配置信息
+show_deploy_config() {
+    log_info "部署配置信息:"
+    echo "  - 环境: $ENVIRONMENT"
+    echo "  - 项目目录: $PROJECT_DIR"
+    echo "  - Docker Compose 文件: $DOCKER_COMPOSE_FILE"
+    echo "  - 备份目录: $BACKUP_DIR"
+    echo ""
+    log_info "构建优化配置:"
+    echo "  - 快速构建: $USE_FAST_BUILD"
+    echo "  - 中国镜像源: $USE_CHINA_MIRROR"
+    echo "  - 清理构建: $CLEAN_BUILD"
+    echo "  - 并行任务数: $BUILD_PARALLEL_JOBS"
+    echo "  - 使用缓存: $USE_BUILD_CACHE"
+    echo "  - BuildKit: $DOCKER_BUILDKIT"
+    echo ""
+}
+
 # 检查系统要求
 check_requirements() {
     log_info "检查系统要求..."
-    
+
     # 检查 Docker
     if ! command -v docker &> /dev/null; then
         log_error "Docker 未安装"
         exit 1
     fi
-    
+
+    if ! docker info &> /dev/null; then
+        log_error "Docker 服务未运行"
+        exit 1
+    fi
+
     # 检查 Git
     if ! command -v git &> /dev/null; then
         log_error "Git 未安装"
         exit 1
     fi
-    
+
     # 检查项目目录
     if [[ ! -d "$PROJECT_DIR" ]]; then
         log_error "项目目录不存在: $PROJECT_DIR"
         exit 1
     fi
-    
+
     log_success "系统要求检查通过"
+}
+
+# 优化 Docker 构建环境
+optimize_docker_build() {
+    if [[ "$USE_FAST_BUILD" != "true" ]]; then
+        log_info "跳过 Docker 构建优化"
+        return 0
+    fi
+
+    log_info "优化 Docker 构建环境..."
+
+    # 启用 BuildKit
+    export DOCKER_BUILDKIT=1
+    export COMPOSE_DOCKER_CLI_BUILD=1
+
+    # 设置并行构建
+    export DOCKER_BUILD_PARALLEL=$BUILD_PARALLEL_JOBS
+
+    # 预热构建缓存
+    log_info "预热构建缓存..."
+    docker pull rust:1.75-slim-bullseye &
+    docker pull debian:bullseye-slim &
+    wait
+
+    log_success "Docker 构建环境优化完成"
+}
+
+# 清理构建缓存和镜像
+clean_build_cache() {
+    if [[ "$CLEAN_BUILD" != "true" ]]; then
+        return 0
+    fi
+
+    log_info "清理构建缓存和镜像..."
+
+    # 停止所有容器
+    log_info "停止所有相关容器..."
+    $DOCKER_COMPOSE_CMD -f "$PROJECT_DIR/$DOCKER_COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+
+    # 清理构建缓存
+    log_info "清理 Docker 构建缓存..."
+    docker builder prune -f
+
+    # 清理未使用的镜像
+    log_info "清理未使用的镜像..."
+    docker image prune -f
+
+    # 清理 RustIM 相关镜像
+    log_info "清理 RustIM 相关镜像..."
+    docker images | grep -E "(rustim|rust-im)" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
+
+    # 清理系统资源
+    log_info "清理系统资源..."
+    docker system prune -f
+
+    log_success "清理完成"
 }
 
 # 创建备份
 create_backup() {
     log_info "创建备份..."
-    
+
     local timestamp=$(date +"%Y%m%d_%H%M%S")
     local backup_name="rustim_${ENVIRONMENT}_${timestamp}"
     local backup_path="$BACKUP_DIR/$backup_name"
-    
+
     # 创建备份目录
     mkdir -p "$backup_path"
-    
+
     # 备份配置文件
     if [[ -f "$PROJECT_DIR/.env" ]]; then
         cp "$PROJECT_DIR/.env" "$backup_path/"
     fi
-    
+
     if [[ -f "$PROJECT_DIR/$DOCKER_COMPOSE_FILE" ]]; then
         cp "$PROJECT_DIR/$DOCKER_COMPOSE_FILE" "$backup_path/"
     fi
-    
+
     # 备份数据库（如果运行中）
     if $DOCKER_COMPOSE_CMD -f "$PROJECT_DIR/$DOCKER_COMPOSE_FILE" ps postgres | grep -q "Up"; then
         log_info "备份数据库..."
         $DOCKER_COMPOSE_CMD -f "$PROJECT_DIR/$DOCKER_COMPOSE_FILE" exec -T postgres pg_dump -U rustim rustim > "$backup_path/database_backup.sql"
     fi
-    
+
     # 清理旧备份（保留最近 5 个）
     cd "$BACKUP_DIR"
     ls -t | grep "rustim_${ENVIRONMENT}_" | tail -n +6 | xargs -r rm -rf
-    
+
     log_success "备份创建完成: $backup_path"
 }
 
 # 设置环境配置
 setup_environment() {
     log_info "设置 $ENVIRONMENT 环境配置..."
-    
+
     cd "$PROJECT_DIR"
-    
+
     # 根据环境选择配置文件
     local env_file=".env.${ENVIRONMENT}"
     if [[ -f "$env_file" ]]; then
@@ -182,7 +308,7 @@ setup_environment() {
     else
         log_warning "环境配置文件 $env_file 不存在，使用默认配置"
     fi
-    
+
     # 根据环境选择 Docker Compose 文件
     local compose_file="docker-compose.${ENVIRONMENT}.yml"
     if [[ -f "$compose_file" ]]; then
@@ -436,52 +562,100 @@ pull_latest_code() {
 # 构建和部署应用
 deploy_application() {
     log_info "部署应用..."
-    
+
     cd "$PROJECT_DIR"
-    
+
     # 停止现有服务
     log_info "停止现有服务..."
     $DOCKER_COMPOSE_CMD -f "$DOCKER_COMPOSE_FILE" down
-    
-    # 清理未使用的镜像和容器
-    log_info "清理 Docker 资源..."
-    docker system prune -f
-    
+
+    # 清理未使用的镜像和容器（如果不是清理构建）
+    if [[ "$CLEAN_BUILD" != "true" ]]; then
+        log_info "清理 Docker 资源..."
+        docker system prune -f
+    fi
+
+    # 准备构建参数
+    local build_args=""
+
+    if [[ "$USE_CHINA_MIRROR" == "true" ]]; then
+        build_args="$build_args --build-arg USE_CHINA_MIRROR=true"
+        log_info "使用中国镜像源加速构建"
+    fi
+
+    if [[ "$USE_BUILD_CACHE" == "false" ]]; then
+        build_args="$build_args --no-cache"
+        log_warning "禁用构建缓存"
+    fi
+
     # 构建新镜像
     log_info "构建应用镜像..."
-    $DOCKER_COMPOSE_CMD -f "$DOCKER_COMPOSE_FILE" build --no-cache
-    
+    local build_cmd="$DOCKER_COMPOSE_CMD -f $DOCKER_COMPOSE_FILE build $build_args"
+    local start_time=$(date +%s)
+
+    if [[ "$USE_FAST_BUILD" == "true" ]]; then
+        log_info "使用快速构建模式"
+        log_info "执行构建命令: $build_cmd"
+
+        # 后台执行构建并监控进度
+        $build_cmd &
+        local build_pid=$!
+
+        # 监控构建进度
+        monitor_build_progress $build_pid
+
+        # 等待构建完成
+        wait $build_pid
+        local build_result=$?
+    else
+        log_info "使用标准构建模式"
+        $build_cmd
+        local build_result=$?
+    fi
+
+    local end_time=$(date +%s)
+    local total_time=$((end_time - start_time))
+    local minutes=$((total_time / 60))
+    local seconds=$((total_time % 60))
+
+    if [[ $build_result -eq 0 ]]; then
+        log_success "镜像构建完成！用时: ${minutes}分${seconds}秒"
+    else
+        log_error "镜像构建失败！"
+        exit 1
+    fi
+
     # 启动服务
     log_info "启动服务..."
     $DOCKER_COMPOSE_CMD -f "$DOCKER_COMPOSE_FILE" up -d
-    
+
     # 等待服务启动
     log_info "等待服务启动..."
     sleep 30
-    
+
     log_success "应用部署完成"
 }
 
 # 健康检查
 health_check() {
     log_info "执行健康检查..."
-    
+
     local max_attempts=10
     local attempt=1
     local health_url="http://localhost:8080/health"
-    
+
     while [[ $attempt -le $max_attempts ]]; do
         log_info "健康检查尝试 $attempt/$max_attempts..."
-        
+
         if curl -f "$health_url" &> /dev/null; then
             log_success "健康检查通过"
             return 0
         fi
-        
+
         sleep 10
         ((attempt++))
     done
-    
+
     log_error "健康检查失败"
     return 1
 }
@@ -489,17 +663,17 @@ health_check() {
 # 显示部署状态
 show_status() {
     log_info "显示部署状态..."
-    
+
     cd "$PROJECT_DIR"
-    
+
     echo ""
     echo "=== 服务状态 ==="
     $DOCKER_COMPOSE_CMD -f "$DOCKER_COMPOSE_FILE" ps
-    
+
     echo ""
     echo "=== 服务日志 (最近 20 行) ==="
     $DOCKER_COMPOSE_CMD -f "$DOCKER_COMPOSE_FILE" logs --tail=20
-    
+
     echo ""
     echo "=== 系统资源使用情况 ==="
     echo "内存使用:"
@@ -510,28 +684,63 @@ show_status() {
     echo ""
     echo "Docker 资源使用:"
     docker system df
+
+    if [[ "$USE_FAST_BUILD" == "true" ]]; then
+        echo ""
+        echo "=== 构建缓存信息 ==="
+        docker builder du 2>/dev/null || echo "无法获取构建缓存信息"
+    fi
+}
+
+# 显示优化建议
+show_optimization_tips() {
+    if [[ "$USE_FAST_BUILD" != "true" ]]; then
+        return 0
+    fi
+
+    log_info "构建优化建议:"
+    echo ""
+    echo "🚀 进一步加速构建的方法:"
+    echo "  1. 使用 SSD 硬盘存储 Docker 数据"
+    echo "  2. 增加服务器内存和 CPU 核心数"
+    echo "  3. 配置 Docker Hub 镜像加速器"
+    echo "  4. 使用本地 Cargo 缓存目录挂载"
+    echo "  5. 定期清理不必要的 Docker 镜像和容器"
+    echo ""
+    echo "🌐 网络优化:"
+    echo "  1. 使用 --use-china-mirror 选项"
+    echo "  2. 配置 HTTP/HTTPS 代理"
+    echo "  3. 使用企业内部镜像仓库"
+    echo ""
+    echo "💾 缓存优化:"
+    echo "  1. 保持 Cargo.lock 文件在版本控制中"
+    echo "  2. 避免频繁使用 --clean-build"
+    echo "  3. 合理使用 --parallel 参数"
 }
 
 # 主函数
 main() {
-    echo "=== RustIM 远程部署脚本 ==="
-    echo "环境: $ENVIRONMENT"
-    echo "项目目录: $PROJECT_DIR"
-    echo "Docker Compose 文件: $DOCKER_COMPOSE_FILE"
+    echo "=== RustIM 远程部署脚本 (集成快速构建) ==="
     echo ""
-    
+
+    # 显示配置信息
+    show_deploy_config
+
     # 执行部署步骤
     check_requirements
     detect_docker_compose
+    optimize_docker_build
+    clean_build_cache
     create_backup
     setup_environment
     pull_latest_code
     deploy_application
-    
+
     # 健康检查
     if health_check; then
         log_success "部署成功完成！"
         show_status
+        show_optimization_tips
     else
         log_error "部署失败，请检查日志"
         show_status
