@@ -169,7 +169,7 @@ database:
         - "MsgTypeFriendBlack"
         - "MsgTypeFriendDelete"
 
-  xdb: ./api/fixtures/xdb/ip2region.xdb
+  xdb: ./ip2region.xdb
 
 
 # 服务配置

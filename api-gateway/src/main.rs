@@ -1,5 +1,6 @@
 use axum::http::HeaderValue;
 use axum::{
+    extract::connect_info::ConnectInfo,
     http::{self, Method},
     Router,
 };
@@ -7,6 +8,7 @@ use axum_server::{self, Handle};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::path::Path;
 use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -16,6 +18,7 @@ use tower_http::trace::TraceLayer;
 use common::config::{Component, ConfigLoader};
 use common::grpc_client::base::register_service;
 use tracing::{error, info};
+use api_utils::ip_region;
 
 mod api_doc;
 mod api_utils;
@@ -58,6 +61,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     info!("正在启动API网关服务...");
+
+    // 初始化IP地理位置服务
+    // 在common/src/fixtures/xdb目录查找
+    let xdb_path = Path::new(&config.database.xdb);
+    if xdb_path.exists() {
+        match ip_region::ip_location::init_ip_location(xdb_path) {
+            Ok(_) => {
+                info!("IP地理位置数据库初始化成功: {:?}", xdb_path);
+            },
+            Err(e) => {
+                error!("初始化IP地理位置服务失败: {}", e);
+            }
+        }
+    } else {
+        error!("IP地理位置数据库文件不存在: {:?}, IP位置查询功能将使用基本功能",xdb_path);
+    }
+    
 
     // 初始化Prometheus指标
     metrics::init_metrics();
@@ -107,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
     // 启动服务
     if let Err(err) = axum_server::bind(addr)
         .handle(handle)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
     {
         let _ = shutdown_rx.await;
