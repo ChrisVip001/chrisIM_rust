@@ -1,0 +1,179 @@
+version: '3.8'
+
+services:
+  # RustIM API Gateway (测试环境)
+  rustim-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rustim-api-staging
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=debug
+      - DATABASE_URL=postgres://rustim:rustim_password@postgres:5432/rustim_staging
+      - REDIS_URL=redis://redis:6379/1
+      - KAFKA_BROKERS=kafka:9092
+      - JWT_SECRET=staging_jwt_secret_key_change_in_production
+      - ENVIRONMENT=staging
+      - API_HOST=0.0.0.0
+      - API_PORT=8080
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+    restart: unless-stopped
+    networks:
+      - rustim-network
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # WebSocket 服务器 (测试环境)
+  rustim-websocket:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: rustim-websocket-staging
+    ports:
+      - "8085:8085"
+    environment:
+      - RUST_LOG=debug
+      - REDIS_URL=redis://redis:6379/1
+      - KAFKA_BROKERS=kafka:9092
+      - WEBSOCKET_HOST=0.0.0.0
+      - WEBSOCKET_PORT=8085
+      - ENVIRONMENT=staging
+    depends_on:
+      - redis
+      - kafka
+    restart: unless-stopped
+    networks:
+      - rustim-network
+    volumes:
+      - ./logs:/app/logs
+
+  # PostgreSQL 数据库 (测试环境)
+  postgres:
+    image: postgres:15-alpine
+    container_name: rustim-postgres-staging
+    environment:
+      - POSTGRES_DB=rustim_staging
+      - POSTGRES_USER=rustim
+      - POSTGRES_PASSWORD=rustim_password
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_staging:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustim -d rustim_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存 (测试环境)
+  redis:
+    image: redis:7-alpine
+    container_name: rustim-redis-staging
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_staging:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: unless-stopped
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Zookeeper (测试环境)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: rustim-zookeeper-staging
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data_staging:/var/lib/zookeeper/data
+      - zookeeper_logs_staging:/var/lib/zookeeper/log
+    restart: unless-stopped
+    networks:
+      - rustim-network
+
+  # Kafka 消息队列 (测试环境)
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: rustim-kafka-staging
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+    volumes:
+      - kafka_data_staging:/var/lib/kafka/data
+    restart: unless-stopped
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx 反向代理 (测试环境)
+  nginx:
+    image: nginx:alpine
+    container_name: rustim-nginx-staging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx/staging.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - rustim-api
+      - rustim-websocket
+    restart: unless-stopped
+    networks:
+      - rustim-network
+
+volumes:
+  postgres_data_staging:
+    driver: local
+  redis_data_staging:
+    driver: local
+  kafka_data_staging:
+    driver: local
+  zookeeper_data_staging:
+    driver: local
+  zookeeper_logs_staging:
+    driver: local
+
+networks:
+  rustim-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16 
