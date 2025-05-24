@@ -6,8 +6,15 @@ FROM rust:1.75-slim-bullseye as builder
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 ENV RUSTFLAGS="-C target-cpu=native"
 
-# 安装构建依赖
-RUN apt-get update && apt-get install -y \
+# 使用国内镜像源加速（可选，根据服务器位置调整）
+RUN if [ -f /etc/apt/sources.list ]; then \
+        cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+        sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    fi
+
+# 安装构建依赖 - 优化包管理器缓存
+RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     pkg-config \
     libssl-dev \
@@ -16,13 +23,32 @@ RUN apt-get update && apt-get install -y \
     librdkafka-dev \
     libpq-dev \
     protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# 配置 Cargo 使用国内镜像源
+RUN mkdir -p /usr/local/cargo && \
+    echo '[source.crates-io]' > /usr/local/cargo/config.toml && \
+    echo 'replace-with = "rsproxy-sparse"' >> /usr/local/cargo/config.toml && \
+    echo '[source.rsproxy-sparse]' >> /usr/local/cargo/config.toml && \
+    echo 'registry = "sparse+https://rsproxy.cn/index/"' >> /usr/local/cargo/config.toml && \
+    echo '[registries.rsproxy-sparse]' >> /usr/local/cargo/config.toml && \
+    echo 'index = "sparse+https://rsproxy.cn/index/"' >> /usr/local/cargo/config.toml
 
 # 创建应用目录
 WORKDIR /app
 
+# 显示构建上下文信息（调试用）
+RUN echo "=== Docker 构建开始 ===" && \
+    echo "工作目录: $(pwd)" && \
+    echo "用户: $(whoami)" && \
+    echo "构建时间: $(date)"
+
 # 复制 Cargo 配置文件
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
+
+# 复制 Cargo.lock 文件（如果存在）
+COPY Cargo.loc[k] ./
 
 # 复制所有服务的 Cargo.toml 文件
 COPY common/Cargo.toml common/
@@ -35,6 +61,22 @@ COPY msg-server/Cargo.toml msg-server/
 COPY msg-gateway/Cargo.toml msg-gateway/
 COPY api-gateway/Cargo.toml api-gateway/
 COPY msg-storage/Cargo.toml msg-storage/
+
+# 生成 Cargo.lock 文件（如果不存在）
+RUN if [ ! -f "Cargo.lock" ]; then \
+        echo "=== Cargo.lock 不存在，正在生成 ===" && \
+        cargo generate-lockfile && \
+        echo "=== Cargo.lock 生成完成 ==="; \
+    else \
+        echo "=== 使用现有的 Cargo.lock 文件 ==="; \
+    fi
+
+# 验证文件是否正确复制（调试用）
+RUN echo "=== 验证 Cargo 文件 ===" && \
+    ls -la Cargo.toml Cargo.lock && \
+    echo "Cargo.toml 内容预览:" && \
+    head -10 Cargo.toml && \
+    echo "Cargo.lock 文件大小: $(wc -l < Cargo.lock) 行"
 
 # 创建虚拟源文件以触发依赖下载
 RUN mkdir -p \
@@ -62,7 +104,10 @@ RUN mkdir -p \
 # 预构建依赖（利用 Docker 缓存层）
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release
+    --mount=type=cache,target=/app/target \
+    echo "=== 开始预构建依赖 ===" && \
+    cargo build --release && \
+    echo "=== 依赖预构建完成 ==="
 
 # 删除虚拟源文件
 RUN rm -rf \
@@ -93,7 +138,9 @@ COPY msg-storage/ msg-storage/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
+    echo "=== 开始构建应用 ===" && \
     cargo build --release && \
+    echo "=== 应用构建完成 ===" && \
     mkdir -p /app/bin && \
     cp target/release/user-service /app/bin/ && \
     cp target/release/group-service /app/bin/ && \
@@ -102,19 +149,28 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp target/release/msg-server /app/bin/ && \
     cp target/release/msg-gateway /app/bin/ && \
     cp target/release/api-gateway /app/bin/ && \
-    strip /app/bin/*
+    strip /app/bin/* && \
+    echo "=== 二进制文件准备完成 ==="
 
 # 阶段2: 运行时环境
 FROM debian:bullseye-slim as runtime
 
+# 使用国内镜像源加速（可选）
+RUN if [ -f /etc/apt/sources.list ]; then \
+        cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+        sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    fi
+
 # 安装运行时依赖
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl1.1 \
     librdkafka1 \
     libpq5 \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # 创建非 root 用户
 RUN groupadd -r rustim && useradd -r -g rustim -u 1000 rustim
