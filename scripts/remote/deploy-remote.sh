@@ -189,13 +189,22 @@ setup_environment() {
         log_success "使用 $ENVIRONMENT 环境的 Docker Compose 配置"
     fi
 }
-
 # 拉取最新代码
 pull_latest_code() {
     log_info "拉取最新代码..."
-    
+
     cd "$PROJECT_DIR"
-    
+
+    # 配置 Git 安全目录（解决 dubious ownership 问题）
+    log_info "配置 Git 安全目录..."
+    git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
+
+    # 检查是否是 Git 仓库
+    if [[ ! -d ".git" ]]; then
+        log_warning "当前目录不是 Git 仓库，跳过代码更新"
+        return 0
+    fi
+
     # 根据环境确定分支
     local branch
     if [[ "$ENVIRONMENT" == "staging" ]]; then
@@ -203,18 +212,30 @@ pull_latest_code() {
     else
         branch="release"
     fi
-    
+
     # 检查当前分支
-    local current_branch=$(git branch --show-current)
+    local current_branch=$(git branch --show-current 2>/dev/null || echo "unknown")
     if [[ "$current_branch" != "$branch" ]]; then
         log_info "切换到 $branch 分支..."
-        git checkout "$branch"
+
+        # 检查分支是否存在
+        if git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
+            git checkout "$branch"
+        elif git show-ref --verify --quiet "refs/remotes/origin/$branch" 2>/dev/null; then
+            git checkout -b "$branch" "origin/$branch"
+        else
+            log_warning "分支 $branch 不存在，保持当前分支"
+            return 0
+        fi
     fi
-    
+
     # 拉取最新代码
-    git pull origin "$branch"
-    
-    log_success "代码更新完成"
+    log_info "拉取 $branch 分支的最新代码..."
+    if git pull origin "$branch" 2>/dev/null; then
+        log_success "代码更新完成"
+    else
+        log_warning "代码拉取失败，使用当前代码继续部署"
+    fi
 }
 
 # 构建和部署应用
