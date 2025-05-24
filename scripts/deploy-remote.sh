@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 默认配置
-ENVIRONMENT="staging"
+ENVIRONMENT="production"
 PROJECT_DIR="/home/$(whoami)/rust-im"
 DOCKER_COMPOSE_FILE="docker-compose.yml"
 BACKUP_DIR="/home/$(whoami)/backups"
@@ -194,23 +194,23 @@ setup_environment() {
 # 拉取最新代码
 pull_latest_code() {
     log_info "拉取最新代码..."
-
+    
     cd "$PROJECT_DIR"
-
+    
     # 配置 Git 网络设置
     log_info "配置 Git 网络设置..."
     git config --global http.lowSpeedLimit 1000
     git config --global http.lowSpeedTime 300
     git config --global http.postBuffer 524288000
     git config --global core.compression 0
-
+    
     # 检查是否是 Git 仓库
     if [[ ! -d ".git" ]]; then
         log_warning "当前目录不是 Git 仓库，正在初始化..."
-
+        
         # 初始化 Git 仓库
         git init
-
+        
         # 添加远程仓库（需要用户提供）
         if [[ -z "${GIT_REMOTE_URL:-}" ]]; then
             log_error "请设置环境变量 GIT_REMOTE_URL 或手动配置 Git 仓库"
@@ -224,14 +224,14 @@ pull_latest_code() {
             log_info "  git checkout <branch-name>"
             exit 1
         fi
-
+        
         # 添加远程仓库
         git remote add origin "$GIT_REMOTE_URL"
-
+        
         # 获取远程分支
         log_info "获取远程分支信息..."
         git fetch origin
-
+        
         # 根据环境确定分支
         local branch
         if [[ "$ENVIRONMENT" == "staging" ]]; then
@@ -239,7 +239,7 @@ pull_latest_code() {
         else
             branch="release"
         fi
-
+        
         # 检查远程分支是否存在
         if git ls-remote --heads origin "$branch" | grep -q "$branch"; then
             log_info "检出 $branch 分支..."
@@ -250,11 +250,11 @@ pull_latest_code() {
             git ls-remote --heads origin
             exit 1
         fi
-
+        
         log_success "Git 仓库初始化完成"
         return 0
     fi
-
+    
     # 根据环境确定分支
     local branch
     if [[ "$ENVIRONMENT" == "staging" ]]; then
@@ -262,22 +262,22 @@ pull_latest_code() {
     else
         branch="release"
     fi
-
+    
     # 检查是否有未提交的更改
     if ! git diff --quiet || ! git diff --cached --quiet; then
         log_warning "检测到本地文件有更改，正在处理..."
-
+        
         # 备份重要的配置文件
         local backup_timestamp=$(date +"%Y%m%d_%H%M%S")
         local temp_backup_dir="/tmp/rustim_config_backup_${backup_timestamp}"
         mkdir -p "$temp_backup_dir"
-
+        
         # 备份 .env 文件（如果存在且有更改）
         if [[ -f ".env" ]] && ! git diff --quiet .env 2>/dev/null; then
             log_info "备份本地 .env 文件..."
             cp ".env" "$temp_backup_dir/.env.local"
         fi
-
+        
         # 备份其他重要配置文件
         for config_file in "docker-compose.override.yml" "config/nginx.conf" "config/redis.conf"; do
             if [[ -f "$config_file" ]] && ! git diff --quiet "$config_file" 2>/dev/null; then
@@ -286,19 +286,19 @@ pull_latest_code() {
                 cp "$config_file" "$temp_backup_dir/$config_file"
             fi
         done
-
+        
         # 暂存本地更改
         log_info "暂存本地更改..."
         git stash push -m "Auto-stash before deployment at $(date)"
-
+        
         log_success "本地更改已暂存，备份保存在: $temp_backup_dir"
     fi
-
+    
     # 检查当前分支
     local current_branch=$(git branch --show-current)
     if [[ "$current_branch" != "$branch" ]]; then
         log_info "切换到 $branch 分支..."
-
+        
         # 检查分支是否存在
         if git show-ref --verify --quiet "refs/heads/$branch"; then
             git checkout "$branch"
@@ -311,18 +311,18 @@ pull_latest_code() {
             exit 1
         fi
     fi
-
+    
     # 拉取最新代码 - 添加重试机制
     log_info "拉取 $branch 分支的最新代码..."
-
+    
     local max_retries=3
     local retry_count=0
     local pull_success=false
-
+    
     while [[ $retry_count -lt $max_retries ]]; do
         retry_count=$((retry_count + 1))
         log_info "尝试拉取代码 (第 $retry_count 次)..."
-
+        
         # 尝试使用不同的方法拉取代码
         if [[ $retry_count -eq 1 ]]; then
             # 第一次尝试：正常拉取
@@ -345,35 +345,35 @@ pull_latest_code() {
                 break
             fi
         fi
-
+        
         log_warning "第 $retry_count 次拉取失败，等待 10 秒后重试..."
         sleep 10
     done
-
+    
     if [[ "$pull_success" != "true" ]]; then
         log_error "代码拉取失败，网络连接问题"
         log_info "尝试重新克隆仓库..."
-
+        
         # 备份当前目录
         local backup_dir="${PROJECT_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
         if [[ -d "$PROJECT_DIR" ]]; then
             log_info "备份当前项目目录到: $backup_dir"
             mv "$PROJECT_DIR" "$backup_dir"
         fi
-
+        
         # 创建父目录
         mkdir -p "$(dirname "$PROJECT_DIR")"
-
+        
         # 尝试重新克隆
         log_info "重新克隆项目..."
         if timeout 600 git clone "$GIT_REMOTE_URL" "$PROJECT_DIR"; then
             cd "$PROJECT_DIR"
-
+            
             # 切换到目标分支
             if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
                 git checkout -b "$branch" "origin/$branch" 2>/dev/null || git checkout "$branch"
                 log_success "重新克隆成功，已切换到 $branch 分支"
-
+                
                 # 恢复重要的配置文件
                 if [[ -d "$backup_dir" ]]; then
                     log_info "恢复配置文件..."
@@ -381,7 +381,7 @@ pull_latest_code() {
                     [[ -f "$backup_dir/docker-compose.override.yml" ]] && cp "$backup_dir/docker-compose.override.yml" "."
                     log_success "配置文件恢复完成"
                 fi
-
+                
                 return 0
             else
                 log_error "目标分支 $branch 不存在"
@@ -400,39 +400,40 @@ pull_latest_code() {
                 mv "$backup_dir" "$PROJECT_DIR"
                 log_info "已恢复原项目目录"
             fi
-
+            
             log_info "可能的解决方案："
             log_info "1. 检查网络连接: ping github.com"
             log_info "2. 配置代理: git config --global http.proxy http://proxy:port"
             log_info "3. 使用 SSH 克隆: git remote set-url origin git@github.com:username/repo.git"
             log_info "4. 手动下载代码并解压到项目目录"
             log_info "5. 跳过代码更新继续部署: export SKIP_GIT_PULL=true"
-
+            
             # 检查是否设置了跳过 Git 拉取
             if [[ "${SKIP_GIT_PULL:-}" == "true" ]]; then
                 log_warning "跳过 Git 拉取，使用当前代码继续部署"
                 return 0
             fi
-
+            
             exit 1
         fi
     fi
-
+    
     # 如果有暂存的更改，询问是否恢复
     if git stash list | grep -q "Auto-stash before deployment"; then
         log_warning "检测到之前暂存的本地更改"
         log_info "暂存列表："
         git stash list | head -3
-
+        
         # 在部署脚本中，我们通常不恢复暂存的更改
         # 因为环境配置应该通过 .env.staging 或 .env.production 来管理
         log_info "本地更改已暂存，如需恢复请手动执行："
         log_info "  git stash pop"
         log_info "注意：建议使用环境特定的配置文件（.env.staging, .env.production）"
     fi
-
+    
     log_success "代码更新完成"
 }
+
 # 构建和部署应用
 deploy_application() {
     log_info "部署应用..."

@@ -1,11 +1,10 @@
-version: '3.8'
-
 services:
   # RustIM API Gateway (测试环境)
   rustim-api:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
     container_name: rustim-api-staging
     ports:
       - "8080:8080"
@@ -27,6 +26,7 @@ services:
       - rustim-network
     volumes:
       - ./logs:/app/logs
+    command: ["api-gateway"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -38,7 +38,8 @@ services:
   rustim-websocket:
     build:
       context: .
-      dockerfile: Dockerfile.websocket
+      dockerfile: Dockerfile
+      target: runtime
     container_name: rustim-websocket-staging
     ports:
       - "8085:8085"
@@ -57,6 +58,7 @@ services:
       - rustim-network
     volumes:
       - ./logs:/app/logs
+    command: ["msg-gateway"]
 
   # PostgreSQL 数据库 (测试环境)
   postgres:
