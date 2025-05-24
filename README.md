@@ -1,303 +1,433 @@
-# RustIM - 基于Rust的云原生IM系统
+# RustIM - 云原生即时通讯系统
 
-这是一个使用Rust语言开发的微服务架构即时通讯系统，采用云原生设计理念。
+[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## 系统架构
+RustIM 是一个基于 Rust 语言开发的高性能、云原生微服务架构即时通讯系统。采用现代化的技术栈，支持大规模并发用户，具备高可用性、可扩展性和容器化部署能力。
 
-系统由以下微服务组成：
+## 🚀 核心特性
 
-1. **用户服务 (user-service)**：负责用户注册、登录、认证和查询用户信息
-2. **群组服务 (group-service)**：管理群组及成员关系
-3. **好友服务 (friend-service)**：管理用户之间的好友关系
-4. **私聊消息服务器 (private-message-server)**：负责一对一聊天消息的处理和分发
-5. **群聊消息服务 (group-message-server)**：负责群组聊天消息的处理和分发
-6. **消息网关（message-gateway）**：负责与客户端的WebSocket连接管理和消息推送
-7. **API网关服务 (gateway-service)**：统一认证、路由转发和负载均衡
+- **微服务架构**: 模块化设计，服务独立部署和扩展
+- **高性能**: 基于 Rust 异步编程，支持百万级并发连接
+- **云原生**: 完整的容器化支持，支持 Kubernetes 部署
+- **实时通信**: WebSocket 长连接，毫秒级消息推送
+- **分布式**: 支持多节点部署，水平扩展
+- **安全可靠**: JWT 认证，数据加密传输
+- **监控完善**: 集成 Prometheus 监控和链路追踪
 
-## 技术栈
+## 🏗️ 系统架构
 
-- **语言**: Rust
-- **通信协议**: gRPC (服务间), REST/WebSocket (客户端)
-- **数据库**: PostgreSQL, Redis
-- **消息队列**: Kafka
-- **API框架**: Axum (HTTP), Tonic (gRPC)
-- **容器化**: Docker
-- **配置管理**: dotenv + config
-- **监控**: Prometheus
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Web Client    │    │  Mobile Client  │    │  Desktop Client │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 │
+                    ┌─────────────┴─────────────┐
+                    │      Load Balancer        │
+                    └─────────────┬─────────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │      API Gateway          │
+                    │   (认证、路由、限流)        │
+                    └─────────────┬─────────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+┌───────┴────────┐    ┌──────────┴───────────┐    ┌────────┴────────┐
+│  Message       │    │    Business          │    │   Storage       │
+│  Gateway       │    │    Services          │    │   Services      │
+│                │    │                      │    │                 │
+│ • WebSocket    │    │ • User Service       │    │ • PostgreSQL    │
+│ • 消息推送      │    │ • Friend Service     │    │ • Redis         │
+│ • 连接管理      │    │ • Group Service      │    │ • Kafka         │
+│                │    │ • Message Server     │    │ • OSS           │
+└────────────────┘    └──────────────────────┘    └─────────────────┘
+```
 
-## 开发环境要求
+### 服务组件
 
+| 服务名称 | 端口 | 功能描述 |
+|---------|------|----------|
+| **api-gateway** | 8080 | API网关，统一入口，认证授权，路由转发 |
+| **msg-gateway** | 8085 | 消息网关，WebSocket连接管理，实时消息推送 |
+| **user-service** | 50001 | 用户管理，注册登录，用户信息维护 |
+| **friend-service** | 50002 | 好友关系管理，好友申请，黑名单 |
+| **group-service** | 50003 | 群组管理，群成员管理，群权限控制 |
+| **msg-server** | 50004 | 消息处理，消息存储，消息分发 |
+| **oss** | 50005 | 对象存储服务，文件上传下载 |
+
+## 🛠️ 技术栈
+
+### 后端技术
+- **语言**: Rust 1.75+
+- **异步运行时**: Tokio
+- **Web框架**: Axum (HTTP), Tonic (gRPC)
+- **数据库**: PostgreSQL, Redis, MongoDB
+- **消息队列**: Apache Kafka
+- **认证**: JWT
+- **监控**: Prometheus, Jaeger
+- **配置管理**: YAML/TOML/JSON
+
+### 基础设施
+- **容器化**: Docker, Docker Compose
+- **编排**: Kubernetes (可选)
+- **负载均衡**: Nginx (可选)
+- **服务发现**: Consul (可选)
+- **日志收集**: ELK Stack (可选)
+
+## 📋 环境要求
+
+### 开发环境
 - Rust 1.75+
-- Docker & Docker Compose
-- PostgreSQL
-- Redis
-- Kafka
+- Docker 20.10+
+- Docker Compose 2.0+
+- Git
 
-## 快速开始
+### 生产环境
+- 4 Core CPU, 8GB RAM (最小配置)
+- 100GB 存储空间
+- Docker 或 Kubernetes 环境
 
-1. 克隆仓库
+## 🚀 快速开始
+
+### 0. 安装 Docker 环境 (必需)
+
+如果服务器还没有安装 Docker，请先运行安装脚本：
 
 ```bash
-git clone https://github.com/yourusername/rustIM_demo.git
-cd rustIM_demo
+# 克隆项目
+git clone https://github.com/yourusername/rust-im.git
+cd rust-im
+
+# 安装 Docker 环境 (支持 Ubuntu/Debian/CentOS/RHEL)
+chmod +x scripts/install-docker.sh
+./scripts/install-docker.sh
+
+# 安装完成后，重新登录或运行以下命令使 docker 组权限生效
+newgrp docker
+
+# 验证 Docker 安装
+docker --version
+docker-compose --version
+docker run hello-world
 ```
 
-2. 启动依赖服务 (PostgreSQL, Redis, Kafka)
+**支持的操作系统:**
+- Ubuntu 18.04+
+- Debian 10+
+- CentOS 7+
+- RHEL 7+
+- Rocky Linux 8+
+- AlmaLinux 8+
+
+### 1. 克隆项目
 
 ```bash
-docker-compose up -d
+git clone https://github.com/yourusername/rust-im.git
+cd rust-im
 ```
 
-3. 设置环境变量
+### 2. 环境配置
 
 ```bash
+# 复制环境变量文件
 cp .env.example .env
-# 编辑.env文件，设置数据库凭证等
+
+# 编辑配置文件
+vim .env
 ```
 
-4. 构建所有服务
+### 3. 一键部署
 
 ```bash
-cargo build
-```
+# 使用 Docker Compose 部署
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
 
-5. 运行所有服务
-
-```bash
-./scripts/start-all.sh
-```
-
-## 服务间通信流程
-
-1. 客户端通过API网关进行认证并获取token
-2. 客户端通过WebSocket连接到消息网关
-3. 用户发送消息时:
-   - 私聊消息流向: 客户端 -> 消息网关 -> 私聊消息服务 -> 消息队列 -> 消息网关 -> 接收方客户端
-   - 群聊消息流向: 客户端 -> 消息网关 -> 群聊消息服务 -> 消息队列 -> 消息网关 -> 多个接收方客户端
-
-## 项目结构
-
-```
-rustIM_demo/
-├── auth-service/           # 认证服务
-├── user-service/           # 用户服务
-├── group-service/          # 群组服务
-├── friend-service/         # 好友服务
-├── private-message-server/ # 私聊消息服务
-├── group-message-server/   # 群聊消息服务
-├── message-gateway/        # 消息网关
-├── gateway-service/        # API网关
-├── common/                 # 共享代码库
-├── docker-compose.yml      # 容器编排
-└── scripts/                # 运维脚本
-```
-
-## 贡献指南
-
-欢迎提交Issue和Pull Request。请确保代码通过测试并符合项目的代码规范。
-
-## 配置系统
-
-RustIM 支持灵活的配置管理，特别适合容器化环境（如 Docker 和 Kubernetes）。
-
-### 配置来源
-
-配置按以下优先级顺序加载（高优先级会覆盖低优先级）：
-
-1. 环境变量（最高优先级）
-2. 指定的配置文件（通过 `--config` 参数）
-3. 默认配置文件（按顺序查找）：
-   - config.yaml
-   - config.json
-   - config.toml
-   - .env
-4. 默认值（最低优先级）
-
-### 支持的配置格式
-
-- YAML 文件 (*.yaml, *.yml)
-- JSON 文件 (*.json)
-- TOML 文件 (*.toml)
-- 环境变量文件 (.env)
-
-### 动态配置
-
-系统支持动态配置更新，无需重启服务：
-
-```bash
-# 启动服务时指定配置刷新间隔（秒）
-./auth-service --config config.yaml --refresh 30
-```
-
-### Docker 环境配置
-
-在 Docker 环境中，可以：
-
-1. 挂载配置文件：
-   ```bash
-   docker run -v ./config.yaml:/app/config.yaml your-image --config /app/config.yaml
-   ```
-
-2. 使用环境变量：
-   ```bash
-   docker run -e REDIS_URL=redis://redis:6379 -e JWT_SECRET=your_secret your-image
-   ```
-
-### Kubernetes 环境配置
-
-在 Kubernetes 中，推荐使用 ConfigMap 和 Secret 管理配置：
-
-1. 创建配置文件的 ConfigMap：
-   ```bash
-   kubectl create configmap auth-service-config --from-file=config.yaml
-   ```
-
-2. 在 Deployment 中挂载配置：
-   ```yaml
-   volumes:
-   - name: config-volume
-     configMap:
-       name: auth-service-config
-   volumeMounts:
-   - name: config-volume
-     mountPath: /config
-   ```
-
-3. 启用 Kubernetes 配置：
-   ```yaml
-   command: ["/app/auth-service", "--k8s-config"]
-   ```
-
-4. 敏感信息使用 Secret：
-   ```yaml
-   env:
-   - name: JWT_SECRET
-     valueFrom:
-       secretKeyRef:
-         name: auth-service-secrets
-         key: jwt-secret
-   ```
-
-## 配置变更通知
-
-当配置发生变更时，服务会自动重新加载配置而无需重启。日志会记录配置更新事件：
-
-```
-[INFO] 配置已更新
-```
-
-## Windows环境下的构建注意事项
-
-在Windows环境下构建本项目时，特别是对于`rdkafka`库的编译，可能需要以下额外步骤：
-
-1. 安装必要的构建工具：
-   - 安装 [CMake](https://cmake.org/download/)（确保添加到系统PATH）
-   - 安装 [MinGW-w64](https://www.mingw-w64.org/downloads/)（确保添加到系统PATH）
-   - 或者安装 [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-
-2. 安装 [Git for Windows](https://gitforwindows.org/)（确保添加到系统PATH）
-
-3. **推荐方法**：使用提供的Windows构建脚本：
-   ```
-   scripts\windows-build.bat
-   ```
-   此脚本会自动检查依赖并设置正确的环境变量，然后根据您的选择使用静态或动态构建方式。
-
-4. 手动构建方式：
-   - 设置环境变量以使用原生Windows构建而非Unix命令：
-     ```
-     set CARGO_NET_GIT_FETCH_WITH_CLI=true
-     set CMAKE_GENERATOR=Visual Studio 17 2022
-     ```
-   - 使用动态链接（更简单但可能性能较差）：
-     ```
-     cargo build --features dynamic --no-default-features
-     ```
-   - 或使用CMake静态构建（推荐但需要更多依赖）：
-     ```
-     cargo build
-     ```
-
-若仍然遇到问题，可以考虑在WSL (Windows Subsystem for Linux)中开发，或使用Docker环境。
-
-## 跨平台支持
-
-RustIM系统提供了完整的跨平台支持，可以在MacOS、Windows和各种Linux发行版上构建和运行。
-
-### 自动化构建脚本
-
-为了简化不同平台上的构建流程，我们提供了针对各个平台的自动化构建脚本：
-
-1. **通用构建脚本** - 自动检测环境并调用相应的平台特定脚本：
-   ```bash
-   # Unix环境 (MacOS/Linux)
-   ./scripts/build.sh
-   ```
-
-2. **特定平台脚本**：
-   - **MacOS**：`./scripts/macos-build.sh`
-   - **Linux**：`./scripts/linux-build.sh`
-   - **Windows**：`scripts\windows-build.bat`
-
-### 各平台构建注意事项
-
-#### MacOS
-
-在MacOS上构建需要以下依赖：
-- Homebrew
-- CMake
-- pkg-config
-- OpenSSL
-- librdkafka
-
-MacOS构建脚本会自动检测并提示安装这些依赖。您也可以手动安装：
-```bash
-brew install cmake pkg-config openssl librdkafka
-```
-
-#### Linux
-
-支持多种Linux发行版：
-- Ubuntu/Debian
-- RHEL/CentOS/Fedora
-- SUSE/openSUSE
-- Arch Linux
-
-Linux构建脚本会根据您的发行版自动安装所需依赖。
-
-#### Windows环境
-
-Windows环境下的构建请参考[Windows环境下的构建注意事项](#Windows环境下的构建注意事项)部分。
-
-### Docker支持
-
-对于任何平台，使用Docker是最简单的方式：
-
-```bash
-# 构建Docker镜像
-docker build -t rustim .
-
-# 运行服务
+# 或者手动部署
 docker-compose up -d
 ```
 
-Docker环境自动处理所有依赖问题，提供一致的运行环境。
+### 4. 验证部署
 
-### 常见问题排查
+```bash
+# 检查服务状态
+docker-compose ps
 
-1. **rdkafka构建问题**：
-   - 确保已安装CMake和Git
-   - 尝试使用动态链接特性：`cargo build --features dynamic --no-default-features`
+# 查看日志
+docker-compose logs -f
 
-2. **OpenSSL相关错误**：
-   - MacOS：设置环境变量 `export OPENSSL_DIR=$(brew --prefix openssl)`
-   - Linux：确保安装了openssl开发包
-   - Windows：参考Windows构建注意事项
+# 健康检查
+curl http://localhost:8080/health
+```
 
-3. **构建缓慢**：
-   - 尝试使用系统提供的librdkafka而不是自行构建
-   - 使用动态链接特性：`--features dynamic` 
+## 🔧 配置说明
 
-## API 文档
+### 环境变量
 
-RustIM 系统提供了完整的 API 文档，包括 gRPC 服务接口和 REST API 接口。
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `DATABASE_URL` | - | PostgreSQL 连接字符串 |
+| `REDIS_URL` | redis://localhost:6379 | Redis 连接地址 |
+| `KAFKA_BROKERS` | localhost:9092 | Kafka 集群地址 |
+| `JWT_SECRET` | - | JWT 签名密钥 |
+| `LOG_LEVEL` | info | 日志级别 |
+
+### 配置文件
+
+主配置文件位于 `config/config.yaml`，支持以下配置：
+
+- **数据库配置**: PostgreSQL, Redis, MongoDB 连接参数
+- **服务配置**: 各微服务的监听地址和端口
+- **认证配置**: JWT 密钥、过期时间等
+- **限流配置**: API 限流规则
+- **监控配置**: Prometheus 指标暴露
+
+## 🐳 Docker 部署
+
+### 构建镜像
+
+```bash
+# 构建所有服务镜像
+docker build -t rustim:latest .
+
+# 或使用多阶段构建
+docker build --target production -t rustim:prod .
+```
+
+### 使用 Docker Compose
+
+```bash
+# 启动所有服务
+docker-compose up -d
+
+# 启动特定服务
+docker-compose up -d postgres redis kafka
+
+# 查看服务状态
+docker-compose ps
+
+# 停止所有服务
+docker-compose down
+```
+
+### 生产环境部署
+
+```bash
+# 使用生产配置
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# 启用监控
+docker-compose -f docker-compose.yml -f docker-compose.telemetry.yml up -d
+```
+
+## ☸️ Kubernetes 部署
+
+### 前置条件
+
+```bash
+# 安装 kubectl
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+
+# 安装 Helm (可选)
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+```
+
+### 部署步骤
+
+```bash
+# 创建命名空间
+kubectl create namespace rustim
+
+# 部署基础设施
+kubectl apply -f k8s/infrastructure/
+
+# 部署应用服务
+kubectl apply -f k8s/services/
+
+# 检查部署状态
+kubectl get pods -n rustim
+```
+
+## 📊 监控和运维
+
+### 健康检查
+
+```bash
+# API 网关健康检查
+curl http://localhost:8080/health
+
+# 各服务健康检查
+curl http://localhost:8080/api/users/health
+curl http://localhost:8080/api/friends/health
+curl http://localhost:8080/api/groups/health
+```
+
+### 监控指标
+
+访问 Prometheus 指标端点：
+- API Gateway: http://localhost:8080/metrics
+- 各微服务: http://localhost:PORT/metrics
+
+### 日志查看
+
+```bash
+# 查看所有服务日志
+docker-compose logs -f
+
+# 查看特定服务日志
+docker-compose logs -f api-gateway
+docker-compose logs -f user-service
+
+# 实时跟踪日志
+docker-compose logs -f --tail=100 msg-gateway
+```
+
+## 🧪 测试
+
+### 单元测试
+
+```bash
+# 运行所有测试
+cargo test
+
+# 运行特定服务测试
+cargo test -p user-service
+cargo test -p api-gateway
+```
+
+### 集成测试
+
+```bash
+# 启动测试环境
+docker-compose -f docker-compose.test.yml up -d
+
+# 运行集成测试
+cargo test --test integration
+
+# 性能测试
+./scripts/benchmark.sh
+```
+
+### API 测试
+
+```bash
+# 使用 curl 测试
+curl -X POST http://localhost:8080/api/users/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test","password":"123456","email":"test@example.com"}'
+
+# 使用 Postman 集合
+# 导入 docs/postman/RustIM.postman_collection.json
+```
+
+## 🔒 安全
+
+### 认证授权
+- JWT Token 认证
+- 角色权限控制
+- API 限流保护
+
+### 数据安全
+- 密码 bcrypt 加密
+- HTTPS/WSS 传输加密
+- 敏感数据脱敏
+
+### 网络安全
+- 防火墙配置
+- IP 白名单
+- DDoS 防护
+
+## 📈 性能优化
+
+### 数据库优化
+- 连接池配置
+- 索引优化
+- 读写分离
+
+### 缓存策略
+- Redis 缓存热点数据
+- 本地缓存减少网络开销
+- CDN 加速静态资源
+
+### 消息队列
+- Kafka 异步处理
+- 消息分区提高并发
+- 消费者组负载均衡
+
+## 🛠️ 开发指南
+
+### 代码结构
+
+```
+rust-im/
+├── api-gateway/          # API网关服务
+├── msg-gateway/          # 消息网关服务
+├── user-service/         # 用户服务
+├── friend-service/       # 好友服务
+├── group-service/        # 群组服务
+├── msg-server/           # 消息服务
+├── oss/                  # 对象存储服务
+├── common/               # 共享代码库
+├── cache/                # 缓存模块
+├── config/               # 配置文件
+├── scripts/              # 部署脚本
+├── docs/                 # 文档
+└── k8s/                  # Kubernetes 配置
+```
+
+### 添加新服务
+
+1. 创建服务目录和 Cargo.toml
+2. 实现服务逻辑
+3. 添加到 workspace
+4. 更新 Docker 配置
+5. 添加路由配置
+
+### 代码规范
+
+```bash
+# 代码格式化
+cargo fmt
+
+# 代码检查
+cargo clippy
+
+# 安全审计
+cargo audit
+```
+
+## 🤝 贡献指南
+
+1. Fork 项目
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+
+## 🆘 支持
+
+- 📧 邮箱: support@rustim.com
+- 💬 QQ群: 123456789
+- 📖 文档: https://docs.rustim.com
+- 🐛 问题反馈: [GitHub Issues](https://github.com/yourusername/rust-im/issues)
+
+## 🗺️ 路线图
+
+- [ ] 支持音视频通话
+- [ ] 移动端 SDK
+- [ ] 消息加密
+- [ ] 多租户支持
+- [ ] AI 智能助手
+- [ ] 区块链集成
+
+---
+
+⭐ 如果这个项目对你有帮助，请给我们一个 Star！
