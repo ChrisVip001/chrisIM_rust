@@ -1,6 +1,5 @@
 /target
 .idea
 .tokeignore
-Cargo.lock
 *.log
 /docs/server_config.md
