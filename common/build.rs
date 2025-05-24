@@ -32,6 +32,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::env::var("OUT_DIR")?,
                 descriptor_name
             ))
+            .compile_well_known_types(true) // 启用 Google 标准类型支持
+            .extern_path(".google.protobuf", "::prost_types") // 使用 prost_types 作为 Google protobuf 类型
             .compile(
                 // 指定要编译的proto文件
                 &[format!("proto/{}", proto_file)],

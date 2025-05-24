@@ -1,19 +1,18 @@
-# 多阶段构建 Dockerfile for RustIM
+# 多阶段构建 Dockerfile for RustIM - 优化版本
 # 阶段1: 构建环境
 FROM rust:1.85-slim-bullseye as builder
 
-# 设置环境变量
+# 设置环境变量优化编译速度
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
-ENV RUSTFLAGS="-C target-cpu=native"
+ENV RUSTFLAGS="-C target-cpu=native -C opt-level=2"
+ENV CARGO_BUILD_JOBS=8
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
-# 使用国内镜像源加速（可选，根据服务器位置调整）
-RUN if [ -f /etc/apt/sources.list ]; then \
-        cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
-        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-        sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
-    fi
+# 使用国内镜像源加速
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装构建依赖 - 优化包管理器缓存
+# 一次性安装所有构建依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     pkg-config \
@@ -24,32 +23,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     protobuf-compiler \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && rm -rf /var/lib/apt/lists/*
 
 # 配置 Cargo 使用国内镜像源
 RUN mkdir -p /usr/local/cargo && \
     echo '[source.crates-io]' > /usr/local/cargo/config.toml && \
     echo 'replace-with = "rsproxy-sparse"' >> /usr/local/cargo/config.toml && \
+    echo '' >> /usr/local/cargo/config.toml && \
     echo '[source.rsproxy-sparse]' >> /usr/local/cargo/config.toml && \
     echo 'registry = "sparse+https://rsproxy.cn/index/"' >> /usr/local/cargo/config.toml && \
+    echo '' >> /usr/local/cargo/config.toml && \
     echo '[registries.rsproxy-sparse]' >> /usr/local/cargo/config.toml && \
-    echo 'index = "sparse+https://rsproxy.cn/index/"' >> /usr/local/cargo/config.toml
+    echo 'index = "sparse+https://rsproxy.cn/index/"' >> /usr/local/cargo/config.toml && \
+    echo '' >> /usr/local/cargo/config.toml && \
+    echo '[build]' >> /usr/local/cargo/config.toml && \
+    echo 'jobs = 8' >> /usr/local/cargo/config.toml && \
+    echo '' >> /usr/local/cargo/config.toml && \
+    echo '[profile.release]' >> /usr/local/cargo/config.toml && \
+    echo 'opt-level = 2' >> /usr/local/cargo/config.toml && \
+    echo 'lto = "thin"' >> /usr/local/cargo/config.toml && \
+    echo 'codegen-units = 1' >> /usr/local/cargo/config.toml
 
-# 创建应用目录
 WORKDIR /app
 
-# 显示构建上下文信息（调试用）
-RUN echo "=== Docker 构建开始 ===" && \
-    echo "工作目录: $(pwd)" && \
-    echo "用户: $(whoami)" && \
-    echo "构建时间: $(date)" && \
-    echo "Rust 版本: $(rustc --version)" && \
-    echo "Cargo 版本: $(cargo --version)"
-
-# 复制 Cargo 配置文件
-COPY Cargo.toml ./
-
-# 复制所有服务的 Cargo.toml 文件
+# 复制 Cargo 配置文件 - 优化缓存层
+COPY Cargo.toml Cargo.lock ./
 COPY common/Cargo.toml common/
 COPY cache/Cargo.toml cache/
 COPY user-service/Cargo.toml user-service/
@@ -61,91 +59,50 @@ COPY msg-gateway/Cargo.toml msg-gateway/
 COPY api-gateway/Cargo.toml api-gateway/
 COPY msg-storage/Cargo.toml msg-storage/
 
-# 复制 Cargo.lock 文件（如果存在）
-COPY Cargo.loc[k] ./
+# 复制 proto 文件（protobuf 编译需要）
+COPY common/proto/ common/proto/
+COPY common/build.rs common/
 
-# 生成 Cargo.lock 文件（如果不存在）
-RUN if [ ! -f "Cargo.lock" ]; then \
-        echo "=== Cargo.lock 不存在，正在生成 ===" && \
-        cargo generate-lockfile && \
-        echo "=== Cargo.lock 生成完成 ==="; \
-    else \
-        echo "=== 使用现有的 Cargo.lock 文件 ==="; \
-    fi
+# 创建虚拟源文件进行依赖预构建
+RUN mkdir -p common/src cache/src user-service/src group-service/src friend-service/src \
+    oss/src msg-server/src msg-gateway/src api-gateway/src msg-storage/src && \
+    echo "fn main() {}" > user-service/src/main.rs && \
+    echo "fn main() {}" > group-service/src/main.rs && \
+    echo "fn main() {}" > friend-service/src/main.rs && \
+    echo "fn main() {}" > oss/src/main.rs && \
+    echo "fn main() {}" > msg-server/src/main.rs && \
+    echo "fn main() {}" > msg-gateway/src/main.rs && \
+    echo "fn main() {}" > api-gateway/src/main.rs && \
+    echo "fn main() {}" > msg-storage/src/main.rs && \
+    echo "// lib" > common/src/lib.rs && \
+    echo "// lib" > cache/src/lib.rs
 
-# 验证文件是否正确复制（调试用）
-RUN echo "=== 验证 Cargo 文件 ===" && \
-    ls -la Cargo.toml Cargo.lock && \
-    echo "Cargo.toml 内容预览:" && \
-    head -10 Cargo.toml && \
-    echo "Cargo.lock 文件大小: $(wc -l < Cargo.lock) 行"
-
-# 创建虚拟源文件以触发依赖下载
-RUN mkdir -p \
-    common/src \
-    cache/src \
-    user-service/src \
-    group-service/src \
-    friend-service/src \
-    oss/src \
-    msg-server/src \
-    msg-gateway/src \
-    api-gateway/src \
-    msg-storage/src \
-    && echo "fn main() {}" > user-service/src/main.rs \
-    && echo "fn main() {}" > group-service/src/main.rs \
-    && echo "fn main() {}" > friend-service/src/main.rs \
-    && echo "fn main() {}" > oss/src/main.rs \
-    && echo "fn main() {}" > msg-server/src/main.rs \
-    && echo "fn main() {}" > msg-gateway/src/main.rs \
-    && echo "fn main() {}" > api-gateway/src/main.rs \
-    && echo "fn main() {}" > msg-storage/src/main.rs \
-    && echo "// lib" > common/src/lib.rs \
-    && echo "// lib" > cache/src/lib.rs
-
-# 预构建依赖（利用 Docker 缓存层）
+# 预构建依赖 - 使用缓存挂载
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    echo "=== 开始预构建依赖 ===" && \
-    echo "当前 Cargo.lock 状态:" && \
-    ls -la Cargo.lock && \
-    echo "开始构建..." && \
-    cargo build --release && \
-    echo "=== 依赖预构建完成 ==="
+    cargo build --release --jobs 8
 
 # 删除虚拟源文件
-RUN rm -rf \
-    common/src \
-    cache/src \
-    user-service/src \
-    group-service/src \
-    friend-service/src \
-    oss/src \
-    msg-server/src \
-    msg-gateway/src \
-    api-gateway/src \
-    msg-storage/src
+RUN rm -rf */src
 
 # 复制实际源代码
-COPY common/ common/
-COPY cache/ cache/
-COPY user-service/ user-service/
-COPY group-service/ group-service/
-COPY friend-service/ friend-service/
-COPY oss/ oss/
-COPY msg-server/ msg-server/
-COPY msg-gateway/ msg-gateway/
-COPY api-gateway/ api-gateway/
-COPY msg-storage/ msg-storage/
+COPY common/src/ common/src/
+COPY cache/src/ cache/src/
+COPY user-service/src/ user-service/src/
+COPY group-service/src/ group-service/src/
+COPY friend-service/src/ friend-service/src/
+COPY oss/src/ oss/src/
+COPY msg-server/src/ msg-server/src/
+COPY msg-gateway/src/ msg-gateway/src/
+COPY api-gateway/src/ api-gateway/src/
+COPY msg-storage/src/ msg-storage/src/
 
-# 构建所有服务
+# 最终构建
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    echo "=== 开始构建应用 ===" && \
-    cargo build --release && \
-    echo "=== 应用构建完成 ===" && \
+    cargo build --release --jobs 8 && \
     mkdir -p /app/bin && \
     cp target/release/user-service /app/bin/ && \
     cp target/release/group-service /app/bin/ && \
@@ -154,18 +111,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp target/release/msg-server /app/bin/ && \
     cp target/release/msg-gateway /app/bin/ && \
     cp target/release/api-gateway /app/bin/ && \
-    strip /app/bin/* && \
-    echo "=== 二进制文件准备完成 ==="
+    strip /app/bin/*
 
 # 阶段2: 运行时环境
 FROM debian:bullseye-slim as runtime
 
-# 使用国内镜像源加速（可选）
-RUN if [ -f /etc/apt/sources.list ]; then \
-        cp /etc/apt/sources.list /etc/apt/sources.list.bak && \
-        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-        sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
-    fi
+# 使用国内镜像源
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -175,12 +128,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && rm -rf /var/lib/apt/lists/*
 
 # 创建非 root 用户
 RUN groupadd -r rustim && useradd -r -g rustim -u 1000 rustim
 
-# 创建应用目录
 WORKDIR /app
 
 # 复制二进制文件
@@ -191,14 +143,13 @@ COPY config/ /app/config/
 COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 # 设置权限
-RUN chmod +x /app/docker-entrypoint.sh && \
-    chmod +x /app/bin/* && \
+RUN chmod +x /app/docker-entrypoint.sh /app/bin/* && \
     chown -R rustim:rustim /app
 
 # 设置环境变量
-ENV PATH="/app/bin:${PATH}"
-ENV RUST_LOG=info
-ENV RUST_BACKTRACE=1
+ENV PATH="/app/bin:${PATH}" \
+    RUST_LOG=info \
+    RUST_BACKTRACE=1
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
