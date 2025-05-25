@@ -21,14 +21,6 @@ impl LogConfig {
         }
     }
 
-    // 获取输出目标，如果未指定则返回默认值 "console"
-    pub fn output(&self) -> &str {
-        match &self.output {
-            Some(output) => output.as_str(),
-            None => "console", // 默认输出到控制台
-        }
-    }
-
     // 获取sqlx日志级别
     pub fn sqlx_level(&self) -> &str {
         match &self.sqlx_level {
