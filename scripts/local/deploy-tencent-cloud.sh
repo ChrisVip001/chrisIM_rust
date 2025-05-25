@@ -35,6 +35,7 @@ declare -A SERVICES=(
     ["friend-service"]="50002"
     ["group-service"]="50003"
     ["msg-server"]="50004"
+    ["msg-storage"]="50005"
 )
 
 # 构建配置

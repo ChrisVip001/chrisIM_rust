@@ -3,7 +3,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Clone)]
 pub struct LogConfig {
     pub level: String,
-    pub output: String,
+    pub output: Option<String>,  // 修改为可选字段
     pub sqlx_level: Option<String>,    // SQL查询日志级别
     pub components: Option<std::collections::HashMap<String, String>>, // 其他组件的日志级别
     pub format: Option<String>,        // 日志输出格式: plain或json
@@ -18,6 +18,14 @@ impl LogConfig {
             "warn" => tracing::Level::WARN,
             "error" => tracing::Level::ERROR,
             _ => tracing::Level::INFO,
+        }
+    }
+
+    // 获取输出目标，如果未指定则返回默认值 "console"
+    pub fn output(&self) -> &str {
+        match &self.output {
+            Some(output) => output.as_str(),
+            None => "console", // 默认输出到控制台
         }
     }
 
