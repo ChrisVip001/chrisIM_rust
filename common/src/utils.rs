@@ -104,3 +104,24 @@ pub fn generate_user_id() -> String {
     format!("{}{}", prefix, suffix)
 }
 
+
+
+pub fn generate_user_custom_id() -> String {
+    let mut rng = rand::thread_rng();
+
+    // 生成8位字母和数字的随机字符串
+    let random_id: String = (0..8)
+        .map(|_| {
+            let idx = rng.gen_range(0..62);
+            match idx {
+                0..=9 => (b'0' + idx as u8) as char,   // 数字 0-9
+                10..=35 => (b'a' + (idx - 10) as u8) as char,  // 小写字母 a-z
+                _ => (b'A' + (idx - 36) as u8) as char,  // 大写字母 A-Z
+            }
+        })
+        .collect();
+
+    // 拼接前缀
+    format!("myid-{}", random_id)
+}
+

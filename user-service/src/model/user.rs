@@ -23,6 +23,7 @@ pub struct User {
     pub user_stat: i32,
     pub tenant_id: String,
     pub last_login_time: Option<DateTime<Utc>>,
+    pub custom_id: String,
 }
 
 /// 创建用户请求数据
@@ -33,6 +34,7 @@ pub struct CreateUserData {
     pub password: String,
     pub nickname: Option<String>,
     pub avatar_url: Option<String>,
+    pub custom_id: String,
 }
 
 /// 更新用户请求数据
@@ -48,6 +50,7 @@ pub struct UpdateUserData {
     pub sex: Option<u32>,
     pub user_id: Option<String>,
     pub username: Option<String>,
+    pub custom_id: Option<String>,
 }
 
 impl From<User> for user::User {
@@ -79,6 +82,7 @@ impl From<User> for user::User {
                 seconds: dt.timestamp(),
                 nanos: dt.timestamp_subsec_nanos() as i32,
             }),
+            custom_id: user.custom_id,
         }
     }
 }
@@ -99,6 +103,7 @@ impl From<user::CreateUserRequest> for CreateUserData {
             } else {
                 Some(req.avatar_url)
             },
+            custom_id: String::new(), // 初始化为空，将在服务层设置
         }
     }
 }
@@ -116,6 +121,7 @@ impl From<user::UpdateUserRequest> for UpdateUserData {
             sex: req.sex.map(|x| x as u32),
             user_id: req.user_id,
             username: req.username,
+            custom_id: None,
         }
     }
 }
@@ -129,6 +135,7 @@ pub struct RegisterUserData {
     pub tenant_id : String,
     pub phone: String,
     pub verify_code: String,
+    pub custom_id: String,
 }
 
 impl From<user::RegisterRequest> for RegisterUserData {
@@ -140,6 +147,7 @@ impl From<user::RegisterRequest> for RegisterUserData {
             tenant_id: req.tenant_id,
             phone: req.phone,
             verify_code: req.verify_code,
+            custom_id: String::new(), // 初始化为空，将在服务层设置
         }
     }
 }

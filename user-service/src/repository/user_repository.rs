@@ -17,6 +17,22 @@ impl UserRepository {
         Self { pool }
     }
 
+    /// 检查自定义ID是否已存在
+    pub async fn is_custom_id_exists(&self, custom_id: &str) -> Result<bool> {
+        let result = sqlx::query!(
+            "SELECT id FROM users WHERE custom_id = $1",
+            custom_id
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| {
+            error!("检查自定义ID失败: {}", err);
+            Error::Database(err)
+        })?;
+        
+        Ok(result.is_some())
+    }
+
     /// 用户注册
     pub async fn register_user(&self, data: RegisterUserData) -> Result<User> {
         if data.tenant_id.is_empty() {
@@ -48,16 +64,17 @@ impl UserRepository {
         // 插入用户数据
         let row = sqlx::query!(
             r#"
-            INSERT INTO users (id, username, password, phone, tenant_id)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO users (id, username, password, phone, tenant_id, custom_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             "#,
             id.to_string(),
-            data.username,
+            data.username.clone(),
             password_hash,
             data.phone,
-            data.tenant_id
+            data.tenant_id,
+            data.custom_id
         )
         .fetch_one(&self.pool)
         .await
@@ -83,6 +100,7 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
         };
         debug!("用户注册成功: {}", user.id);
         Ok(user)
@@ -107,7 +125,7 @@ impl UserRepository {
             SET password = COALESCE($1, password)
             WHERE id = $2 or phone = $3
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             "#,
             password_hash,
             data.username,
@@ -137,6 +155,7 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
         };
         debug!("修改密码成功: {}", user.username);
         Ok(user)
@@ -168,17 +187,18 @@ impl UserRepository {
         // 插入用户数据
         let row = sqlx::query!(
             r#"
-            INSERT INTO users (id, username, email, password, nickname, avatar_url)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO users (id, username, email, password, nickname, avatar_url, custom_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             "#,
             id.to_string(),
             data.username,
             data.email,
             password_hash,
             data.nickname,
-            data.avatar_url
+            data.avatar_url,
+            data.custom_id
         )
         .fetch_one(&self.pool)
         .await
@@ -204,6 +224,7 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
         };
 
         debug!("用户创建成功: {}", user.id);
@@ -215,7 +236,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             FROM users
             WHERE id = $1
             "#,
@@ -249,6 +270,7 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
         };
 
         Ok(user)
@@ -259,7 +281,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             FROM users
             WHERE username = $1
             "#,
@@ -293,6 +315,7 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
         };
 
         Ok(user)
@@ -303,7 +326,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             FROM users
             WHERE email = $1
             "#,
@@ -337,6 +360,7 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.updated_at,
+            custom_id: row.custom_id,
         };
 
         Ok(user)
@@ -347,7 +371,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             FROM users
             WHERE phone = $1
             "#,
@@ -380,6 +404,7 @@ impl UserRepository {
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
         };
         Ok(user)
     }
@@ -433,12 +458,17 @@ impl UserRepository {
             builder.push(" password = COALESCE( ").push_bind(hash_password(&password)?).push(", password) ");
             first = false;
         }
+        if let Some(custom_id) = data.custom_id {
+            if !first { builder.push(","); }
+            builder.push(" custom_id = COALESCE( ").push_bind(custom_id).push(", custom_id) ");
+            first = false;
+        }
 
         if !first { builder.push(","); }
         builder.push(" updated_at = ").push_bind(Utc::now());
         builder.push(" WHERE id = ").push_bind(id);
         builder.push(" RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time "
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id "
         );
         // 生成最终SQL
         let query = builder.build_query_as::<User>();
@@ -461,6 +491,7 @@ impl UserRepository {
             user_stat: row.user_stat,
             tenant_id: row.tenant_id,
             last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
         };
 
         debug!("用户更新成功: {}", updated_user.id);
@@ -499,7 +530,7 @@ impl UserRepository {
         let rows = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             FROM users
             WHERE username ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1
             ORDER BY username
@@ -535,6 +566,7 @@ impl UserRepository {
                 user_stat: row.user_stat.unwrap_or_default() as i32,
                 tenant_id: row.tenant_id.unwrap_or_default(),
                 last_login_time: row.last_login_time,
+                custom_id: row.custom_id,
             })
             .collect();
 

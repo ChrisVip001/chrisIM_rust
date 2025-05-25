@@ -87,7 +87,7 @@ impl UserServiceHandler {
             }
 
             // 更新用户
-            (&Method::PUT, "updateUser") | (&Method::PATCH, "updateUser") => {
+            (&Method::POST, "updateUser") => {
                 let user_id = get_optional_string(&body, "user_id", None);
                 if user_id.clone().unwrap_or_default().is_empty() {
                     return Ok(error_response("用户ID不能为空", StatusCode::BAD_REQUEST));
@@ -127,44 +127,20 @@ impl UserServiceHandler {
                 ))
             }
 
-            // 用户账号密码注册
+            // 用户账号密码注册(不校验验证码)
             (&Method::POST, "registerByUsername") => {
-                let username = body
-                    .get("username")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let password = body
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let nickname = body
-                    .get("nickname")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let tenant_id = body
-                    .get("tenant_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let phone = body
-                    .get("phone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let msg_code = body
-                    .get("msg_code")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if username.is_empty() {
-                    return Ok(error_response("用户名不能为空", StatusCode::BAD_REQUEST));
-                }
+                let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
+                let username = extract_string_param(&body,"username",None)?;
+                let password = extract_string_param(&body,"password",None)?;
+                let phone = extract_string_param(&body,"phone",None)?;
 
                 let request = proto::user::RegisterRequest {
-                    username: username.to_string(),
-                    password: password.to_string(),
-                    nickname: nickname.to_string(),
-                    tenant_id: tenant_id.to_string(),
-                    phone: phone.to_string(),
-                    verify_code: msg_code.to_string(),
+                    tenant_id,
+                    username,
+                    password,
+                    phone,
+                    verify_code: "".to_string(),
+                    nickname: "".to_string(),
                 };
 
                 match self.client.register_by_username(request).await {
@@ -187,42 +163,19 @@ impl UserServiceHandler {
 
             // 用户手机号注册
             (&Method::POST, "registerByPhone") => {
-                let username = body
-                    .get("username")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let password = body
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let nickname = body
-                    .get("nickname")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let tenant_id = body
-                    .get("tenant_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let phone = body
-                    .get("phone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let msg_code = body
-                    .get("msg_code")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
 
-                if phone.is_empty() {
-                    return Ok(error_response("手机号不能为空", StatusCode::BAD_REQUEST));
-                }
+                let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
+                let phone = extract_string_param(&body,"phone",None)?;
+                let password = extract_string_param(&body,"password",None)?;
+                let msg_code = extract_string_param(&body,"msgCode",Some("msg_code"))?;
 
                 let request = proto::user::RegisterRequest {
-                    username: username.to_string(),
-                    password: password.to_string(),
-                    nickname: nickname.to_string(),
-                    tenant_id: tenant_id.to_string(),
-                    phone: phone.to_string(),
-                    verify_code: msg_code.to_string(),
+                    tenant_id,
+                    phone,
+                    password,
+                    verify_code: msg_code,
+                    username: "".to_string(),
+                    nickname: "".to_string(),
                 };
 
                 match self.client.register_by_phone(request).await {
@@ -471,6 +424,7 @@ impl UserServiceHandler {
             "user_stat" : user.user_stat,
             "tenant_id" : user.tenant_id,
             "last_login_time" : format_timestamp(user.last_login_time.clone()),
+            "custom_id" : user.custom_id,
         })
     }
 

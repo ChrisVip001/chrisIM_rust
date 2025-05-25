@@ -126,6 +126,7 @@ message User {
   int32 user_stat = 13;
   string tenant_id = 14;
   google.protobuf.Timestamp last_login_time = 15;
+  string custom_id = 16;
 }
 
 // 用户注册请求

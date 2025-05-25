@@ -1,4 +1,4 @@
-use chrono::FixedOffset;
+use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
 use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse};
@@ -103,6 +103,47 @@ impl UserServiceImpl {
             }
         }
     }
+
+    /// 生成唯一的用户自定义ID
+    ///
+    /// 生成格式为 "myid-XXXXXXXX" 的唯一ID，如果生成的ID已存在，
+    /// 会重新尝试生成，最多尝试5次，之后会使用时间戳确保唯一性
+    async fn generate_unique_user_id(&self) -> String {
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: i32 = 5; // 最大尝试次数，防止无限循环
+
+        loop {
+            // 使用工具函数生成ID
+            let custom_id = common::utils::generate_user_custom_id();
+
+            // 检查ID是否已存在
+            match self.repository.is_custom_id_exists(&custom_id).await {
+                // 数据库错误
+                Err(err) => {
+                    error!("检查自定义ID时发生错误: {}", err);
+                    attempts += 1;
+                },
+                // ID已存在
+                Ok(true) => {
+                    attempts += 1;
+                    debug!("自定义ID已存在，尝试生成新ID: {}", custom_id);
+                },
+                // ID不存在，可以使用
+                Ok(false) => {
+                    debug!("生成的自定义ID可用: {}", custom_id);
+                    return custom_id;
+                }
+            }
+
+            // 达到最大尝试次数后使用时间戳作为后缀，保证唯一性
+            if attempts >= MAX_ATTEMPTS {
+                let timestamp = Utc::now().timestamp_millis();
+                let final_id = format!("myid-{}", timestamp);
+                debug!("达到最大尝试次数，使用时间戳ID: {}", final_id);
+                return final_id;
+            }
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -116,7 +157,11 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
         debug!("用户账号密码注册请求，用户名: {}", req.username);
         // 转换请求数据
-        let reg_data = RegisterUserData::from(req);
+        let mut reg_data = RegisterUserData::from(req);
+        
+        // 生成用户自定义ID
+        reg_data.custom_id = self.generate_unique_user_id().await;
+        
         // 创建用户
         let user = match self.repository.register_user(reg_data).await {
             Ok(user) => user,
@@ -140,7 +185,16 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
         debug!("用户手机号注册，手机号: {}", req.phone);
         // 转换请求数据
-        let reg_data = RegisterUserData::from(req.clone());
+        let mut reg_data = RegisterUserData::from(req.clone());
+
+        
+        // 生成用户自定义ID
+        reg_data.custom_id = self.generate_unique_user_id().await;
+        
+        // // 如果没有指定用户名，则使用自定义ID作为用户名
+        // if reg_data.username.is_empty() {
+        //     reg_data.username = user_data.custom_id.clone();
+        // }
 
         // 手机号格式校验
         if !validate_phone(&reg_data.phone) {
@@ -219,8 +273,10 @@ impl UserService for UserServiceImpl {
         debug!("创建用户请求，用户名: {}", req.username);
 
         // 转换请求数据
-        let create_data = CreateUserData::from(req);
-
+        let mut create_data = CreateUserData::from(req);
+        
+        // 生成用户自定义ID
+        create_data.custom_id = self.generate_unique_user_id().await;
         // 创建用户
         let user = match self.repository.create_user(create_data).await {
             Ok(user) => user,
