@@ -194,7 +194,7 @@ impl AppConfig {
         }
 
         // 4. 读取环境变量 (最高优先级)
-        builder = builder.add_source(config::Environment::default().separator("_"));
+        builder = builder.add_source(config::Environment::default().separator(","));
 
         // 构建配置
         let config = builder.build()?;
