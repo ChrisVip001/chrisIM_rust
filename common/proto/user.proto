@@ -191,6 +191,7 @@ message PhoneVerificationResponse {
 message VerifyPhoneCodeRequest {
   string phone = 1;
   string code = 2;
+  string action = 3; // register, login, reset_password等
 }
 
 // 验证手机验证码响应

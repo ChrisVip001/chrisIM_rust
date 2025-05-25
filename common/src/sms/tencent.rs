@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::configs::SmsConfig;
 use crate::Result;
 use crate::Error;
-use crate::sms::SmsService;
+use crate::sms::{SmsService, VerificationAction};
 
 const SMS_VERIFICATION_CODE_PREFIX: &str = "sms:verification:code:";
 
@@ -59,8 +59,8 @@ impl TencentSmsService {
     }
 
     /// 构造Redis中验证码的键名
-    fn get_redis_key(&self, phone: &str) -> String {
-        format!("{}{}", SMS_VERIFICATION_CODE_PREFIX, phone)
+    fn get_redis_key(&self, phone: &str, action: VerificationAction) -> String {
+        format!("{}{}:{}", SMS_VERIFICATION_CODE_PREFIX, action.as_code(), phone)
     }
     
     /// 构造腾讯云API签名 - V3版本签名
@@ -171,13 +171,13 @@ fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
 
 #[async_trait]
 impl SmsService for TencentSmsService {
-    async fn send_verification_code(&self, phone: &str) -> Result<String> {
+    async fn send_verification_code(&self, phone: &str, action: VerificationAction) -> Result<String> {
         // 获取Redis连接
         let mut conn = self.redis_client.get_async_connection().await
             .map_err(|e| Error::Redis(format!("获取Redis连接失败: {}", e)))?;
         
         // 检查Redis中是否已存在验证码
-        let redis_key = self.get_redis_key(phone);
+        let redis_key = self.get_redis_key(phone, action);
         
         // 如果启用了防重复发送
         if self.config.tencent.throttle_enabled {
@@ -197,15 +197,17 @@ impl SmsService for TencentSmsService {
                 // 如果验证码已存在的时间小于限制时间，则不允许重发
                 if ttl > 0 && elapsed_seconds < self.config.tencent.throttle_seconds as i64 {
                     let remaining_seconds = self.config.tencent.throttle_seconds as i64 - elapsed_seconds;
-                    debug!("手机号 {} 的验证码 {} 发送过于频繁，请在 {} 秒后重试", phone, code, remaining_seconds);
-                    return Err(Error::Sms(format!("发送验证码过于频繁，请在 {} 秒后重试", remaining_seconds)));
+                    debug!("手机号 {} 的{}验证码 {} 发送过于频繁，请在 {} 秒后重试", 
+                           phone, action.as_str(), code, remaining_seconds);
+                    return Err(Error::Sms(format!("发送{}验证码过于频繁，请在 {} 秒后重试", 
+                                                 action.as_str(), remaining_seconds)));
                 }
                 
                 // 如果已超过限制时间，可以重新发送，删除旧验证码
                 let _: () = conn.del(&redis_key).await
                     .map_err(|e| Error::Redis(format!("删除旧验证码失败: {}", e)))?;
                 
-                debug!("手机号 {} 的旧验证码已超过限制时间，允许重新发送", phone);
+                debug!("手机号 {} 的旧{}验证码已超过限制时间，允许重新发送", phone, action.as_str());
             }
         }
         
@@ -237,7 +239,9 @@ impl SmsService for TencentSmsService {
         //     sms_sdk_app_id: self.config.tencent.app_id.clone(),
         //     template_id: self.config.tencent.template_id.clone(),
         //     sign_name: self.config.tencent.sign_name.clone(),
-        //     template_param_set: vec![code.clone()],
+        //     // 短信模板未设置用途参数
+        //     // template_param_set: vec![code.clone(), action.as_str().to_string()],
+        //      template_param_set: vec![code.clone()],
         // };
         // 
         // // 获取当前时间戳
@@ -260,7 +264,7 @@ impl SmsService for TencentSmsService {
         // debug!("腾讯云短信API请求体: {}", payload);
         // debug!("腾讯云短信API签名: {}", authorization);
         // 
-        // 发送HTTP请求
+        // // 发送HTTP请求
         // let response = self.http_client
         //     .post("https://sms.tencentcloudapi.com")
         //     .header("Authorization", authorization)
@@ -312,21 +316,21 @@ impl SmsService for TencentSmsService {
         //                                 .unwrap_or("");
         //                                 
         //                             if status_code == "Ok" || status_code == "ok" || status_code == "SUCCESS" || status_code.is_empty() {
-        //                                 info!("短信验证码发送成功，手机号: {}", phone);
+        //                                 info!("{}短信验证码发送成功，手机号: {}", action.as_str(), phone);
         //                                 return Ok(code);
         //                             } else {
         //                                 let message = status.get("Message").or_else(|| status.get("message"))
         //                                     .and_then(|m| m.as_str())
         //                                     .unwrap_or("未知错误");
-        //                                 error!("短信发送失败: {}", message);
-        //                                 return Err(Error::Sms(format!("短信发送失败: {}", message)));
+        //                                 error!("{}短信发送失败: {}", action.as_str(), message);
+        //                                 return Err(Error::Sms(format!("{}短信发送失败: {}", action.as_str(), message)));
         //                             }
         //                         }
         //                     }
         //                 }
         //                 
         //                 // 如果没有明确的错误但有RequestId，认为请求成功
-        //                 info!("短信验证码发送处理完成，手机号: {}", phone);
+        //                 info!("{}短信验证码发送处理完成，手机号: {}", action.as_str(), phone);
         //                 return Ok(code);
         //             }
         //         }
@@ -342,12 +346,12 @@ impl SmsService for TencentSmsService {
         // }
     }
 
-    async fn verify_code(&self, phone: &str, code: &str) -> Result<bool> {
+    async fn verify_code(&self, phone: &str, code: &str, action: VerificationAction) -> Result<bool> {
         // 从Redis获取存储的验证码
-        let mut conn = self.redis_client.get_async_connection().await
+        let mut conn = self.redis_client.get_multiplexed_async_connection().await
             .map_err(|e| Error::Redis(format!("获取Redis连接失败: {}", e)))?;
         
-        let redis_key = self.get_redis_key(phone);
+        let redis_key = self.get_redis_key(phone, action);
         
         // 获取存储的验证码
         let stored_code: Option<String> = conn.get(&redis_key).await
@@ -361,15 +365,15 @@ impl SmsService for TencentSmsService {
                     let _: () = conn.del(&redis_key).await
                         .map_err(|e| Error::Redis(format!("删除Redis验证码失败: {}", e)))?;
                     
-                    info!("验证码验证成功，手机号: {}", phone);
+                    info!("{}验证码验证成功，手机号: {}", action.as_str(), phone);
                     Ok(true)
                 } else {
-                    debug!("验证码不匹配，手机号: {}, 输入: {}, 存储: {}", phone, code, stored);
+                    debug!("{}验证码不匹配，手机号: {}, 输入: {}, 存储: {}", action.as_str(), phone, code, stored);
                     Ok(false)
                 }
             },
             None => {
-                debug!("验证码不存在或已过期，手机号: {}", phone);
+                debug!("{}验证码不存在或已过期，手机号: {}", action.as_str(), phone);
                 Ok(false)
             }
         }

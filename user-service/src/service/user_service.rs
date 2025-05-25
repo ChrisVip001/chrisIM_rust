@@ -14,6 +14,8 @@ use redis::Client as RedisClient;
 use common::sms::SmsService;
 use common::sms::tencent::TencentSmsService;
 use common::config::ConfigLoader;
+use common::sms::VerificationAction;
+use std::str::FromStr;
 
 /// 用户服务实现
 pub struct UserServiceImpl {
@@ -46,11 +48,20 @@ impl UserServiceImpl {
     }
     
     /// 发送手机验证码
-    async fn send_phone_verification_code(&self, phone: &str) -> Result<String, Status> {
+    async fn send_phone_verification_code(&self, phone: &str, action_str: &str) -> Result<String, Status> {
         // 检查手机号格式
         if !validate_phone(phone) {
             return Err(Status::invalid_argument("手机号格式不正确"));
         }
+        
+        // 解析验证码用途
+        let action = match VerificationAction::from_str(action_str) {
+            Ok(action) => action,
+            Err(_) => {
+                error!("未知的验证码用途: {}", action_str);
+                return Err(Status::invalid_argument(format!("未知的验证码用途: {}", action_str)));
+            }
+        };
         
         // 添加国家代码前缀（假设都是中国号码）
         let phone_with_prefix = if phone.starts_with("+") {
@@ -60,24 +71,33 @@ impl UserServiceImpl {
         };
         
         // 发送验证码
-        match self.sms_service.send_verification_code(&phone_with_prefix).await {
+        match self.sms_service.send_verification_code(&phone_with_prefix, action).await {
             Ok(code) => {
-                debug!("成功发送验证码到手机号: {}", phone);
+                debug!("成功发送{}验证码到手机号: {}", action.as_str(), phone);
                 Ok(code)
             },
             Err(err) => {
-                error!("发送验证码失败: {}", err);
-                Err(Status::unavailable(format!("发送验证码失败: {}", err)))
+                error!("发送{}验证码失败: {}", action.as_str(), err);
+                Err(Status::unavailable(format!("发送{}验证码失败: {}", action.as_str(), err)))
             }
         }
     }
     
     /// 验证手机验证码
-    async fn verify_phone_code(&self, phone: &str, code: &str) -> Result<bool, Status> {
+    async fn verify_phone_code(&self, phone: &str, code: &str, action_str: &str) -> Result<bool, Status> {
         // 检查手机号格式
         if !validate_phone(phone) {
             return Err(Status::invalid_argument("手机号格式不正确"));
         }
+        
+        // 解析验证码用途
+        let action = match VerificationAction::from_str(action_str) {
+            Ok(action) => action,
+            Err(_) => {
+                error!("未知的验证码用途: {}", action_str);
+                return Err(Status::invalid_argument(format!("未知的验证码用途: {}", action_str)));
+            }
+        };
         
         // 添加国家代码前缀（假设都是中国号码）
         let phone_with_prefix = if phone.starts_with("+") {
@@ -87,19 +107,19 @@ impl UserServiceImpl {
         };
         
         // 验证码
-        match self.sms_service.verify_code(&phone_with_prefix, code).await {
+        match self.sms_service.verify_code(&phone_with_prefix, code, action).await {
             Ok(is_valid) => {
                 if is_valid {
-                    debug!("验证码验证成功，手机号: {}", phone);
+                    debug!("{}验证码验证成功，手机号: {}", action.as_str(), phone);
                     Ok(true)
                 } else {
-                    debug!("验证码不匹配，手机号: {}", phone);
+                    debug!("{}验证码不匹配，手机号: {}", action.as_str(), phone);
                     Ok(false)
                 }
             },
             Err(err) => {
-                error!("验证验证码失败: {}", err);
-                Err(Status::internal(format!("验证验证码失败: {}", err)))
+                error!("验证{}验证码失败: {}", action.as_str(), err);
+                Err(Status::internal(format!("验证{}验证码失败: {}", action.as_str(), err)))
             }
         }
     }
@@ -207,7 +227,7 @@ impl UserService for UserServiceImpl {
             return Err(Status::invalid_argument("验证码不能为空"));
         }
         
-        let verify_result = self.verify_phone_code(&reg_data.phone, &req.verify_code).await?;
+        let verify_result = self.verify_phone_code(&reg_data.phone, &req.verify_code, "register").await?;
         if !verify_result {
             return Err(Status::invalid_argument("验证码不正确或已过期"));
         }
@@ -243,7 +263,7 @@ impl UserService for UserServiceImpl {
                 return Err(Status::invalid_argument("验证码不能为空"));
             }
             
-            let verify_result = self.verify_phone_code(&forget_data.phone, &req.verify_code).await?;
+            let verify_result = self.verify_phone_code(&forget_data.phone, &req.verify_code, "reset_password").await?;
             if !verify_result {
                 return Err(Status::invalid_argument("验证码不正确或已过期"));
             }
@@ -533,7 +553,7 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
         debug!("发送手机验证码请求，手机号: {}, 操作类型: {}", req.phone, req.action);
         
-        match self.send_phone_verification_code(&req.phone).await {
+        match self.send_phone_verification_code(&req.phone, &req.action).await {
             Ok(_) => {
                 // 成功发送验证码
                 Ok(Response::new(PhoneVerificationResponse {
@@ -557,9 +577,9 @@ impl UserService for UserServiceImpl {
         request: Request<VerifyPhoneCodeRequest>,
     ) -> std::result::Result<Response<VerifyPhoneCodeResponse>, Status> {
         let req = request.into_inner();
-        debug!("验证手机验证码请求，手机号: {}", req.phone);
+        debug!("验证手机验证码请求，手机号: {}, 操作类型: {}", req.phone, req.action);
         
-        match self.verify_phone_code(&req.phone, &req.code).await {
+        match self.verify_phone_code(&req.phone, &req.code, &req.action).await {
             Ok(is_valid) => {
                 Ok(Response::new(VerifyPhoneCodeResponse {
                     valid: is_valid,

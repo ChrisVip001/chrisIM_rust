@@ -56,17 +56,11 @@ impl UserServiceHandler {
 
             // 创建用户
             (&Method::POST, "createUser") | (&Method::POST, "register") => {
-                let username = body.get("username").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("用户名不能为空"))?;
-                let password = body.get("password").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("密码不能为空"))?;
-
-                if username.is_empty() || password.is_empty() {
-                    return Err(anyhow::anyhow!("用户名和密码不能为空"));
-                }
-
-                let email = body.get("email").and_then(|v| v.as_str()).unwrap_or_default();
-                let nickname = body.get("nickname").and_then(|v| v.as_str()).unwrap_or_default();
-                let avatar_url = body.get("avatarUrl").or_else(|| body.get("avatar_url"))
-                    .and_then(|v| v.as_str()).unwrap_or_default();
+                let username = extract_string_param(&body, "username", None)?;
+                let password = extract_string_param(&body, "password", None)?;
+                let email = get_optional_string(&body, "email", None).unwrap_or_default();
+                let nickname = get_optional_string(&body, "nickname", None).unwrap_or_default();
+                let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url")).unwrap_or_default();
 
                 let request = proto::user::CreateUserRequest {
                     username: username.to_string(),
@@ -88,7 +82,7 @@ impl UserServiceHandler {
 
             // 更新用户
             (&Method::POST, "updateUser") => {
-                let user_id = get_optional_string(&body, "user_id", None);
+                let user_id = get_optional_string(&body, "userId", Some("user_id"));
                 if user_id.clone().unwrap_or_default().is_empty() {
                     return Ok(error_response("用户ID不能为空", StatusCode::BAD_REQUEST));
                 }
@@ -98,8 +92,8 @@ impl UserServiceHandler {
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
                 let password = get_optional_string(&body, "password", None);
                 let address = get_optional_string(&body, "host", None);
-                let head_image = get_optional_string(&body, "head_image", None);
-                let head_image_thumb = get_optional_string(&body, "head_image_thumb", None);
+                let head_image = get_optional_string(&body, "headImage", Some("head_image"));
+                let head_image_thumb = get_optional_string(&body, "headImageThumb", Some("head_image_thumb"));
                 let sex = get_optional_string(&body, "sex", None)
                     .and_then(|s| s.parse::<i32>().ok());
                 let username = get_optional_string(&body, "username", None);
@@ -198,40 +192,11 @@ impl UserServiceHandler {
 
             // 忘记密码
             (&Method::POST, "forgetPassword") => {
-                let username = body
-                    .get("username")
-                    .or_else(|| body.get("username"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if username.is_empty() {
-                    return Ok(error_response("账号或者手机号不能为空", StatusCode::BAD_REQUEST));
-                }
-
-                let password = body
-                    .get("password")
-                    .or_else(|| body.get("password"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if password.is_empty() {
-                    return Ok(error_response("密码不能为空", StatusCode::BAD_REQUEST));
-                }
-
-                let tenant_id = body
-                    .get("tenant_id")
-                    .or_else(|| body.get("tenant_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                
-                let phone = body
-                    .get("phone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                
-                let verify_code = body
-                    .get("verify_code")
-                    .or_else(|| body.get("msg_code")) // 兼容旧字段名
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                let username = extract_string_param(&body, "username", None)?;
+                let password = extract_string_param(&body, "password", None)?;
+                let tenant_id = get_optional_string(&body, "tenantId", Some("tenant_id")).unwrap_or_default();
+                let phone = get_optional_string(&body, "phone", None).unwrap_or_default();
+                let verify_code = get_optional_string(&body, "verifyCode", Some("verify_code")).unwrap_or_default();
 
                 let request = proto::user::ForgetPasswordRequest {
                     username: username.to_string(),
@@ -261,7 +226,7 @@ impl UserServiceHandler {
 
             // 用户设置查询
             (&Method::GET, "getUserConfig")=> {
-                let user_id = extract_string_param(&body, "user_id", Some("user_id"))?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let response = self.client.get_user_config(&user_id).await?;
                 let user_config = response.user_config.unwrap_or_default();
                 info!("时间: {}", user_config.clone().create_time.unwrap_or_default());
@@ -270,42 +235,25 @@ impl UserServiceHandler {
 
             // 保存用户设置
             (&Method::POST, "saveUserConfig")=> {
-                let user_id = body
-                    .get("user_id")
-                    .or_else(|| body.get("user_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if user_id.is_empty() {
-                    return Ok(error_response("用户ID不能为空", StatusCode::BAD_REQUEST));
-                }
-                let allow_phone_search = body
-                    .get("allow_phone_search")
-                    .and_then(|v| v.as_str())
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let allow_phone_search = get_optional_string(&body, "allowPhoneSearch", Some("allow_phone_search"))
                     .and_then(|s| s.parse::<i32>().ok());
-                let allow_id_search = body
-                    .get("allow_id_search")
-                    .and_then(|v| v.as_str())
+                let allow_id_search = get_optional_string(&body, "allowIdSearch", Some("allow_id_search"))
                     .and_then(|s| s.parse::<i32>().ok());
-                let auto_load_video = body
-                    .get("auto_load_video")
-                    .and_then(|v| v.as_str())
+                let auto_load_video = get_optional_string(&body, "autoLoadVideo", Some("auto_load_video"))
                     .and_then(|s| s.parse::<i32>().ok());
-                let auto_load_pic = body
-                    .get("auto_load_pic")
-                    .and_then(|v| v.as_str())
+                let auto_load_pic = get_optional_string(&body, "autoLoadPic", Some("auto_load_pic"))
                     .and_then(|s| s.parse::<i32>().ok());
-                let msg_read_flag = body
-                    .get("msg_read_flag")
-                    .and_then(|v| v.as_str())
+                let msg_read_flag = get_optional_string(&body, "msgReadFlag", Some("msg_read_flag"))
                     .and_then(|s| s.parse::<i32>().ok());
 
                 let request = proto::user::UserConfigRequest {
                     user_id: user_id.to_string(),
-                    allow_phone_search: allow_phone_search,
-                    allow_id_search: allow_id_search,
-                    auto_load_video: auto_load_video,
-                    auto_load_pic: auto_load_pic,
-                    msg_read_flag: msg_read_flag,
+                    allow_phone_search,
+                    allow_id_search,
+                    auto_load_video,
+                    auto_load_pic,
+                    msg_read_flag,
                 };
                 let response = self.client.save_user_config(request).await?;
                 let user_config = response.user_config.unwrap_or_default();
@@ -314,19 +262,8 @@ impl UserServiceHandler {
             
             // 发送手机验证码
             (&Method::POST, "sendVerificationCode") => {
-                let phone = body
-                    .get("phone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                
-                if phone.is_empty() {
-                    return Ok(error_response("手机号不能为空", StatusCode::BAD_REQUEST));
-                }
-                
-                let action = body
-                    .get("action")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("register");
+                let phone = extract_string_param(&body, "phone", None)?;
+                let action = get_optional_string(&body, "action", None).unwrap_or_default();
                 
                 let request = proto::user::PhoneVerificationRequest {
                     phone: phone.to_string(),
@@ -354,29 +291,16 @@ impl UserServiceHandler {
             
             // 验证手机验证码
             (&Method::POST, "verifyPhoneCode") => {
-                let phone = body
-                    .get("phone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                
-                if phone.is_empty() {
-                    return Ok(error_response("手机号不能为空", StatusCode::BAD_REQUEST));
-                }
-                
-                let code = body
-                    .get("code")
-                    .or_else(|| body.get("verify_code"))
-                    .or_else(|| body.get("msg_code"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                
-                if code.is_empty() {
-                    return Ok(error_response("验证码不能为空", StatusCode::BAD_REQUEST));
-                }
+                let phone = extract_string_param(&body, "phone", None)?;
+                let code = extract_string_param(&body, "verifyCode", Some("verify_code"))
+                    .or_else(|_| extract_string_param(&body, "msgCode", Some("msg_code")))
+                    .or_else(|_| extract_string_param(&body, "code", None))?;
+                let action = get_optional_string(&body, "action", None).unwrap_or("register".to_string());
                 
                 let request = proto::user::VerifyPhoneCodeRequest {
                     phone: phone.to_string(),
                     code: code.to_string(),
+                    action: action.to_string(),
                 };
                 
                 match self.client.verify_phone_code(request).await {
