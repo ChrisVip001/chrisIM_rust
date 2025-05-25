@@ -2,23 +2,12 @@ use anyhow::Result;
 use std::env;
 use common::config::{AppConfig, Component, ConfigLoader};
 use common::grpc::LoggingInterceptor;
-use common::proto::msg_storage::message_storage_server::MessageStorageServer;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tonic::transport::Server;
-use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::{error, info};
 
-mod api;
-mod errors;
-mod model;
-mod repository;
-mod service;
 
-use service::MessageStorageServiceImpl;
-
-// 导入消息存储服务proto文件描述符，用于gRPC反射
-const FILE_DESCRIPTOR_SET: &[u8] = common::proto::msg_storage::FILE_DESCRIPTOR_SET;
 
 #[tokio::main]
 async fn main() -> Result<()> {

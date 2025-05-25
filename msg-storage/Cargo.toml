@@ -19,6 +19,7 @@ sqlx = { workspace = true, features = [
     "postgres",
     "chrono",
 ] }
+anyhow = { workspace = true }
 tokio = { version = "1.36.0", features = ["full"] }
 tonic = { version = "0.11.0", features = ["gzip"] }
 tracing = "0.1"
