@@ -324,7 +324,7 @@ redis:
 # Kafka配置
 kafka:
   hosts:
-    - 127.0.0.1:9092
+    - "127.0.0.1:9092"
   topic: rustIM-chat
   group: chat
   connect_timeout: 5000 # milliseconds
