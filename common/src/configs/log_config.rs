@@ -3,7 +3,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Clone)]
 pub struct LogConfig {
     pub level: String,
-    pub output: Option<String>,  // 修改为可选字段
+    pub output: String,
     pub sqlx_level: Option<String>,    // SQL查询日志级别
     pub components: Option<std::collections::HashMap<String, String>>, // 其他组件的日志级别
     pub format: Option<String>,        // 日志输出格式: plain或json
