@@ -800,14 +800,20 @@ enable_and_start_services() {
         log_warning "服务可能无法正常启动，请确保配置文件存在"
     fi
     
+    # 记录失败的服务和成功的服务
+    local failed_services=()
+    local success_services=()
+    
     for service in "${!SERVICES[@]}"; do
         local service_name="rustim-$service"
         
         log_info "启用服务: $service_name"
-        sudo systemctl enable "$service_name"
+        # 即使启用失败也继续
+        sudo systemctl enable "$service_name" || log_warning "服务 $service_name 启用失败，但将继续尝试启动"
         
         log_info "启动服务: $service_name"
-        sudo systemctl start "$service_name"
+        # 尝试启动服务
+        sudo systemctl start "$service_name" 
         
         # 等待服务启动
         sleep 2
@@ -815,13 +821,36 @@ enable_and_start_services() {
         # 检查服务状态
         if sudo systemctl is-active --quiet "$service_name"; then
             log_success "服务 $service_name 启动成功"
+            success_services+=("$service_name")
         else
             log_error "服务 $service_name 启动失败"
-            sudo systemctl status "$service_name"
+            failed_services+=("$service_name")
+            # 显示失败服务的状态以便调试
+            sudo systemctl status "$service_name" || true
+            log_warning "尽管服务 $service_name 启动失败，但将继续启动其他服务"
         fi
     done
     
-    log_success "所有服务启动完成"
+    # 汇总报告
+    echo ""
+    log_info "服务启动汇总:"
+    if [[ ${#success_services[@]} -gt 0 ]]; then
+        echo -e "${GREEN}成功启动的服务 (${#success_services[@]})${NC}:"
+        for service in "${success_services[@]}"; do
+            echo -e "  - ${GREEN}$service${NC}"
+        done
+    fi
+    
+    if [[ ${#failed_services[@]} -gt 0 ]]; then
+        echo -e "${RED}启动失败的服务 (${#failed_services[@]})${NC}:"
+        for service in "${failed_services[@]}"; do
+            echo -e "  - ${RED}$service${NC}"
+        done
+        log_warning "有 ${#failed_services[@]} 个服务启动失败，请检查服务日志获取详细信息"
+        log_info "可以使用 'sudo journalctl -u SERVICE_NAME' 查看特定服务的日志"
+    else
+        log_success "所有服务启动成功"
+    fi
 }
 
 # 停止服务
@@ -844,6 +873,10 @@ stop_services() {
 restart_services() {
     log_info "重启服务..."
     
+    # 记录失败的服务和成功的服务
+    local failed_services=()
+    local success_services=()
+    
     for service in "${!SERVICES[@]}"; do
         local service_name="rustim-$service"
         
@@ -856,13 +889,35 @@ restart_services() {
         # 检查服务状态
         if sudo systemctl is-active --quiet "$service_name"; then
             log_success "服务 $service_name 重启成功"
+            success_services+=("$service_name")
         else
             log_error "服务 $service_name 重启失败"
-            sudo systemctl status "$service_name"
+            failed_services+=("$service_name")
+            # 显示失败服务的状态以便调试
+            sudo systemctl status "$service_name" || true
+            log_warning "尽管服务 $service_name 重启失败，但将继续重启其他服务"
         fi
     done
     
-    log_success "所有服务重启完成"
+    # 汇总报告
+    echo ""
+    log_info "服务重启汇总:"
+    if [[ ${#success_services[@]} -gt 0 ]]; then
+        echo -e "${GREEN}成功重启的服务 (${#success_services[@]})${NC}:"
+        for service in "${success_services[@]}"; do
+            echo -e "  - ${GREEN}$service${NC}"
+        done
+    fi
+    
+    if [[ ${#failed_services[@]} -gt 0 ]]; then
+        echo -e "${RED}重启失败的服务 (${#failed_services[@]})${NC}:"
+        for service in "${failed_services[@]}"; do
+            echo -e "  - ${RED}$service${NC}"
+        done
+        log_warning "有 ${#failed_services[@]} 个服务重启失败，请检查服务日志获取详细信息"
+    else
+        log_success "所有服务重启成功"
+    fi
 }
 
 # 查看服务状态
@@ -1046,45 +1101,65 @@ cleanup_old_versions() {
 health_check() {
     log_info "执行健康检查..."
     
-    local all_healthy=true
+    # 记录健康和不健康的服务
+    local healthy_services=()
+    local unhealthy_services=()
+    local reasons=()
     
     for service in "${!SERVICES[@]}"; do
         local port="${SERVICES[$service]}"
         local service_name="rustim-$service"
+        local is_healthy=true
+        local unhealthy_reason=""
         
         # 检查服务状态
         if ! sudo systemctl is-active --quiet "$service_name"; then
-            log_error "服务 $service_name 未运行"
-            all_healthy=false
-            continue
-        fi
-        
-        # 检查端口监听
-        if ! netstat -tuln | grep -q ":$port "; then
-            log_error "服务 $service_name 端口 $port 未监听"
-            all_healthy=false
-            continue
-        fi
-        
+            is_healthy=false
+            unhealthy_reason="服务未运行"
+        # 只有服务运行时才检查端口
+        elif ! netstat -tuln | grep -q ":$port "; then
+            is_healthy=false
+            unhealthy_reason="端口 $port 未监听"
         # 检查HTTP健康端点（如果有）
-        if [[ "$service" == "api-gateway" ]]; then
-            if curl -f -s "http://localhost:$port/health" > /dev/null; then
-                log_success "服务 $service_name 健康检查通过"
-            else
-                log_error "服务 $service_name 健康检查失败"
-                all_healthy=false
+        elif [[ "$service" == "api-gateway" ]]; then
+            if ! curl -f -s "http://localhost:$port/health" > /dev/null; then
+                is_healthy=false
+                unhealthy_reason="健康检查API返回非成功状态"
             fi
+        fi
+        
+        # 记录服务健康状态
+        if [[ "$is_healthy" == "true" ]]; then
+            healthy_services+=("$service_name")
+            log_success "服务 $service_name 健康检查通过"
         else
-            log_success "服务 $service_name 运行正常"
+            unhealthy_services+=("$service_name")
+            reasons+=("$service_name: $unhealthy_reason")
+            log_error "服务 $service_name 健康检查失败: $unhealthy_reason"
         fi
     done
     
-    if [[ "$all_healthy" == "true" ]]; then
+    # 输出健康检查汇总
+    echo ""
+    log_info "健康检查汇总:"
+    if [[ ${#healthy_services[@]} -gt 0 ]]; then
+        echo -e "${GREEN}健康的服务 (${#healthy_services[@]})${NC}:"
+        for service in "${healthy_services[@]}"; do
+            echo -e "  - ${GREEN}$service${NC}"
+        done
+    fi
+    
+    if [[ ${#unhealthy_services[@]} -gt 0 ]]; then
+        echo -e "${RED}不健康的服务 (${#unhealthy_services[@]})${NC}:"
+        for ((i=0; i<${#unhealthy_services[@]}; i++)); do
+            echo -e "  - ${RED}${reasons[$i]}${NC}"
+        done
+        log_warning "有 ${#unhealthy_services[@]} 个服务健康检查失败"
+        # 返回失败状态码，但不中断部署流程
+        return 1
+    else
         log_success "所有服务健康检查通过"
         return 0
-    else
-        log_error "部分服务健康检查失败"
-        return 1
     fi
 }
 
@@ -1108,8 +1183,14 @@ main() {
             configure_services
             create_systemd_services
             enable_and_start_services
-            health_check
-            log_success "部署完成！"
+            # 执行健康检查但不中断部署
+            if ! health_check; then
+                log_warning "部分服务健康检查失败，但部署流程已完成"
+                log_info "请检查服务日志以排除故障，然后尝试手动重启失败的服务"
+                log_success "部署完成，但需要注意上述警告！"
+            else
+                log_success "部署完成，所有服务健康检查通过！"
+            fi
             ;;
         build)
             check_requirements
