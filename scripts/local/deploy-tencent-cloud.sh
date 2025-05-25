@@ -3,6 +3,9 @@
 # RustIM 腾讯云服务器部署脚本
 # 适用于已有Docker部署的数据库和Consul的环境
 # 直接部署Rust二进制文件，不使用Docker和K8s
+# 
+# 更新日志：
+# 2025-05-25: 添加 CONFIG_PATH 环境变量，确保服务能正确读取 config.yaml 配置文件
 
 set -e
 
@@ -30,12 +33,12 @@ GIT_BRANCH="master-feature"
 # 服务配置
 declare -A SERVICES=(
     ["api-gateway"]="8080"
-    ["msg-gateway"]="8085"
+   ["msg-gateway"]="8085"
     ["user-service"]="50001"
     ["friend-service"]="50002"
     ["group-service"]="50003"
-    ["msg-server"]="50004"
-    ["msg-storage"]="50005"
+   ["msg-server"]="50004"
+   ["msg-storage"]="50005"
 )
 
 # 构建配置
@@ -716,6 +719,15 @@ configure_services() {
     sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR"
     sudo chmod 640 "$CONFIG_DIR/.env"
     
+    # 确保config.yaml有正确的权限
+    if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
+        log_info "设置 config.yaml 权限..."
+        sudo chmod 644 "$CONFIG_DIR/config.yaml"
+        sudo chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.yaml"
+    else
+        log_error "配置文件 config.yaml 不存在"
+    fi
+    
     log_success "服务配置完成"
 }
 
@@ -751,6 +763,7 @@ SyslogIdentifier=rustim-$service
 # 环境变量
 Environment=RUST_LOG=info
 Environment=RUST_BACKTRACE=1
+Environment=CONFIG_PATH=$CONFIG_DIR/config.yaml
 EnvironmentFile=$CONFIG_DIR/.env
 
 # 安全设置
@@ -778,6 +791,14 @@ EOF
 # 启用并启动服务
 enable_and_start_services() {
     log_info "启用并启动服务..."
+    
+    # 确认配置文件存在
+    if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
+        log_info "配置文件已准备: $CONFIG_DIR/config.yaml"
+    else
+        log_error "配置文件不存在: $CONFIG_DIR/config.yaml"
+        log_warning "服务可能无法正常启动，请确保配置文件存在"
+    fi
     
     for service in "${!SERVICES[@]}"; do
         local service_name="rustim-$service"
