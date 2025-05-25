@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::env;
 use common::config::{AppConfig, Component, ConfigLoader};
 use common::grpc::LoggingInterceptor;
 use common::grpc_client::base::register_service;
@@ -18,16 +19,24 @@ use service::friend_service::FriendServiceImpl;
 // 导入好友服务proto文件描述符，用于gRPC反射
 const FILE_DESCRIPTOR_SET: &[u8] = common::proto::friend::FILE_DESCRIPTOR_SET;
 
+use common::service::shutdown_signal;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // 初始化rustls加密提供程序
     common::service::init_rustls();
 
-    // 加载配置
-    info!("初始化全局配置单例");
-    ConfigLoader::init_global().expect("初始化全局配置失败");
+    // 从环境变量获取配置文件路径
+    let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
+    info!("使用配置文件: {}", config_path);
+    
+    // 使用指定的配置文件路径初始化全局配置
+    let app_config = AppConfig::from_file(Some(&config_path))
+        .expect(&format!("无法从路径加载配置: {}", config_path));
+    ConfigLoader::set_global(app_config);
 
-    let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
+    // 确保全局配置可以正常访问
+    let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {

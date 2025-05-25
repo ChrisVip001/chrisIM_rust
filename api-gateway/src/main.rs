@@ -13,7 +13,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 // 直接使用tracing宏
-use common::config::{Component, ConfigLoader};
+use std::env;
+use common::config::{AppConfig, Component, ConfigLoader};
 use common::grpc_client::base::register_service;
 use tracing::{error, info};
 
@@ -36,9 +37,14 @@ async fn main() -> anyhow::Result<()> {
     // 初始化rustls加密提供程序
     common::service::init_rustls();
 
-    // 加载配置
-    info!("初始化全局配置单例");
-    ConfigLoader::init_global()?;
+    // 从环境变量获取配置文件路径
+    let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
+    info!("使用配置文件: {}", config_path);
+    
+    // 使用指定的配置文件路径初始化全局配置
+    let app_config = AppConfig::from_file(Some(&config_path))
+        .expect(&format!("无法从路径加载配置: {}", config_path));
+    ConfigLoader::set_global(app_config);
 
     let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
 
