@@ -45,7 +45,7 @@ pub enum Error {
     MongoDB(#[from] mongodb::error::Error),
 
     #[error("Redis错误: {0}")]
-    Redis(#[from] redis::RedisError),
+    Redis(String),
 
     #[error("IO错误: {0}")]
     IO(#[from] std::io::Error),
@@ -70,6 +70,9 @@ pub enum Error {
 
     #[error("对象存储服务错误")]
     OSSError,
+    
+    #[error("短信服务错误: {0}")]
+    Sms(String),
 
     #[error("广播错误: {0}")]
     BroadCastError(String),
@@ -84,6 +87,13 @@ impl From<String> for Error {
 impl From<&str> for Error {
     fn from(err: &str) -> Self {
         Error::Internal(err.to_string())
+    }
+}
+
+// Redis错误转换实现
+impl From<redis::RedisError> for Error {
+    fn from(err: redis::RedisError) -> Self {
+        Error::Redis(format!("Redis错误: {}", err))
     }
 }
 
@@ -102,6 +112,7 @@ impl From<Error> for tonic::Status {
             Error::Authentication(msg) => tonic::Status::unauthenticated(msg),
             Error::Authorization(msg) => tonic::Status::permission_denied(msg),
             Error::BadRequest(msg) => tonic::Status::invalid_argument(msg),
+            Error::Sms(msg) => tonic::Status::unavailable(msg),
             _ => tonic::Status::internal(error.to_string()),
         }
     }
@@ -125,6 +136,7 @@ impl From<Error> for axum::http::StatusCode {
             Error::Authentication(_) => StatusCode::UNAUTHORIZED,
             Error::Authorization(_) => StatusCode::FORBIDDEN,
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Error::Sms(_) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -138,11 +150,18 @@ impl IntoResponse for Error {
             Error::InvalidToken => (StatusCode::UNAUTHORIZED, "Token无效".to_string()),
             Error::InvalidIssuer => (StatusCode::UNAUTHORIZED, "签发者无效".to_string()),
             Error::InsufficientPermissions => (StatusCode::FORBIDDEN, "没有足够的权限".to_string()),
-            Error::Internal(_) => (
+            Error::Internal(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "内部认证错误".to_string(),
+                format!("内部服务错误: {}", msg),
             ),
-            _ => todo!(),
+            Error::Sms(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("短信服务错误: {}", msg),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "服务器内部错误".to_string(),
+            ),
         };
 
         let json = Json(json!({
@@ -153,3 +172,5 @@ impl IntoResponse for Error {
         (status, json).into_response()
     }
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

@@ -1,7 +1,7 @@
 use chrono::FixedOffset;
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -9,18 +9,98 @@ use tracing::{debug, error, info};
 use common::utils::validate_phone;
 use crate::model::user_config::UserConfigData;
 use crate::repository::user_config_repository::UserConfigRepository;
+use std::sync::Arc;
+use redis::Client as RedisClient;
+use common::sms::SmsService;
+use common::sms::tencent::TencentSmsService;
+use common::config::ConfigLoader;
 
 /// 用户服务实现
 pub struct UserServiceImpl {
     repository: UserRepository,
     user_config_repository: UserConfigRepository,
+    sms_service: Arc<dyn SmsService>,
 }
 
 impl UserServiceImpl {
     pub fn new(pool: PgPool) -> Self {
+        // 获取配置
+        let config = ConfigLoader::get_global().expect("获取全局配置失败");
+        
+        // 创建Redis客户端
+        let redis_url = config.redis.url();
+        let redis_client = RedisClient::open(redis_url)
+            .expect("创建Redis客户端失败");
+            
+        // 创建短信服务
+        let sms_service = Arc::new(TencentSmsService::new(
+            redis_client.clone(), 
+            Arc::new(config.sms.clone())
+        ));
+        
         Self {
             repository: UserRepository::new(pool.clone()),
             user_config_repository: UserConfigRepository::new(pool.clone()),
+            sms_service,
+        }
+    }
+    
+    /// 发送手机验证码
+    async fn send_phone_verification_code(&self, phone: &str) -> Result<String, Status> {
+        // 检查手机号格式
+        if !validate_phone(phone) {
+            return Err(Status::invalid_argument("手机号格式不正确"));
+        }
+        
+        // 添加国家代码前缀（假设都是中国号码）
+        let phone_with_prefix = if phone.starts_with("+") {
+            phone.to_string()
+        } else {
+            format!("+86{}", phone)
+        };
+        
+        // 发送验证码
+        match self.sms_service.send_verification_code(&phone_with_prefix).await {
+            Ok(code) => {
+                debug!("成功发送验证码到手机号: {}", phone);
+                Ok(code)
+            },
+            Err(err) => {
+                error!("发送验证码失败: {}", err);
+                Err(Status::unavailable(format!("发送验证码失败: {}", err)))
+            }
+        }
+    }
+    
+    /// 验证手机验证码
+    async fn verify_phone_code(&self, phone: &str, code: &str) -> Result<bool, Status> {
+        // 检查手机号格式
+        if !validate_phone(phone) {
+            return Err(Status::invalid_argument("手机号格式不正确"));
+        }
+        
+        // 添加国家代码前缀（假设都是中国号码）
+        let phone_with_prefix = if phone.starts_with("+") {
+            phone.to_string()
+        } else {
+            format!("+86{}", phone)
+        };
+        
+        // 验证码
+        match self.sms_service.verify_code(&phone_with_prefix, code).await {
+            Ok(is_valid) => {
+                if is_valid {
+                    debug!("验证码验证成功，手机号: {}", phone);
+                    Ok(true)
+                } else {
+                    debug!("验证码不匹配，手机号: {}", phone);
+                    Ok(false)
+                }
+            },
+            Err(err) => {
+                error!("验证验证码失败: {}", err);
+                Err(Status::internal(format!("验证验证码失败: {}", err)))
+            }
         }
     }
 }
@@ -60,7 +140,7 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
         debug!("用户手机号注册，手机号: {}", req.phone);
         // 转换请求数据
-        let reg_data = RegisterUserData::from(req);
+        let reg_data = RegisterUserData::from(req.clone());
 
         // 手机号格式校验
         if !validate_phone(&reg_data.phone) {
@@ -68,7 +148,15 @@ impl UserService for UserServiceImpl {
             return Err(Status::invalid_argument("手机号格式不正确"));
         }
 
-        // 短信验证码校验 todo
+        // 短信验证码校验
+        if req.verify_code.is_empty() {
+            return Err(Status::invalid_argument("验证码不能为空"));
+        }
+        
+        let verify_result = self.verify_phone_code(&reg_data.phone, &req.verify_code).await?;
+        if !verify_result {
+            return Err(Status::invalid_argument("验证码不正确或已过期"));
+        }
 
         // 创建用户
         let user = match self.repository.register_user(reg_data).await {
@@ -91,12 +179,23 @@ impl UserService for UserServiceImpl {
         request: Request<ForgetPasswordRequest>,
     ) -> std::result::Result<Response<UserResponse>, Status> {
         let req = request.into_inner();
-        debug!("用户忘记密码修改密码，手机号||账号: {}||{}", req.username, req.username);
+        debug!("用户忘记密码修改密码，手机号||账号: {}||{}", req.phone, req.username);
         // 转换请求数据
-        let forget_data = ForgetPasswordData::from(req);
-        // 短信验证码校验 todo
+        let forget_data = ForgetPasswordData::from(req.clone());
+        
+        // 短信验证码校验
+        if !req.phone.is_empty() {
+            if req.verify_code.is_empty() {
+                return Err(Status::invalid_argument("验证码不能为空"));
+            }
+            
+            let verify_result = self.verify_phone_code(&forget_data.phone, &req.verify_code).await?;
+            if !verify_result {
+                return Err(Status::invalid_argument("验证码不正确或已过期"));
+            }
+        }
 
-        // 创建用户
+        // 修改密码
         let user = match self.repository.forget_password(forget_data).await {
             Ok(user) => user,
             Err(err) => {
@@ -368,5 +467,59 @@ impl UserService for UserServiceImpl {
         Ok(Response::new(UserConfigResponse {
             user_config: Some(UserConfig::from(proto_user_config)),
         }))
+    }
+
+    /// 发送手机验证码
+    async fn send_phone_verification_code(
+        &self,
+        request: Request<PhoneVerificationRequest>,
+    ) -> std::result::Result<Response<PhoneVerificationResponse>, Status> {
+        let req = request.into_inner();
+        debug!("发送手机验证码请求，手机号: {}, 操作类型: {}", req.phone, req.action);
+        
+        match self.send_phone_verification_code(&req.phone).await {
+            Ok(_) => {
+                // 成功发送验证码
+                Ok(Response::new(PhoneVerificationResponse {
+                    success: true,
+                    message: "验证码已发送".to_string(),
+                }))
+            },
+            Err(err) => {
+                // 发送验证码失败
+                Ok(Response::new(PhoneVerificationResponse {
+                    success: false,
+                    message: err.to_string(),
+                }))
+            }
+        }
+    }
+    
+    /// 验证手机验证码
+    async fn verify_phone_code(
+        &self,
+        request: Request<VerifyPhoneCodeRequest>,
+    ) -> std::result::Result<Response<VerifyPhoneCodeResponse>, Status> {
+        let req = request.into_inner();
+        debug!("验证手机验证码请求，手机号: {}", req.phone);
+        
+        match self.verify_phone_code(&req.phone, &req.code).await {
+            Ok(is_valid) => {
+                Ok(Response::new(VerifyPhoneCodeResponse {
+                    valid: is_valid,
+                    message: if is_valid { 
+                        "验证码验证成功".to_string() 
+                    } else { 
+                        "验证码不正确或已过期".to_string() 
+                    },
+                }))
+            },
+            Err(err) => {
+                Ok(Response::new(VerifyPhoneCodeResponse {
+                    valid: false,
+                    message: err.to_string(),
+                }))
+            }
+        }
     }
 }

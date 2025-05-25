@@ -1,3 +1,5 @@
+pub mod ip_location;
+
 const CHINA: &str = "中国";
 const INTERNAL_IP: &str = "内网IP";
 const ZERO: &str = "0";

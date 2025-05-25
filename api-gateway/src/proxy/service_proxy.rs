@@ -121,11 +121,11 @@ impl ServiceProxy {
     /// 从服务类型获取服务名称
     fn get_service_name(&self, service_type: &ServiceType) -> String {
         match service_type {
-            ServiceType::User => "user-service".to_string(),
-            ServiceType::Friend => "friend-service".to_string(),
-            ServiceType::Group => "group-service".to_string(),
-            ServiceType::Chat => "chat-service".to_string(),
-            ServiceType::Static => "static-service".to_string(),
+            ServiceType::User => "user".to_string(),
+            ServiceType::Friend => "friend".to_string(),
+            ServiceType::Group => "group".to_string(),
+            ServiceType::Chat => "chat".to_string(),
+            ServiceType::Static => "static".to_string(),
             ServiceType::HttpService(name) => name.clone(),
             ServiceType::GrpcService(name) => name.clone(),
         }

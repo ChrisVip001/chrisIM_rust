@@ -1,10 +1,16 @@
 use std::task::{Context, Poll};
 use std::time::Instant;
 
-use axum::http;
+use axum::{
+    extract::ConnectInfo,
+    http,
+};
 use futures::future::BoxFuture;
 use tower::{Layer, Service};
 use tracing::{info, warn};
+use std::net::SocketAddr;
+
+use crate::api_utils::ip_region::ip_location;
 
 /// 请求路径日志中间件
 #[derive(Clone)]
@@ -53,6 +59,30 @@ where
             .and_then(|v| v.to_str().ok())
             .unwrap_or("-")
             .to_string(); // 确保完全拥有
+
+        // // 模拟ip试验查找ip属地功能
+        // let analog_ip = req
+        //     .headers()
+        //     .get("analog_ip")
+        //     .and_then(|v| v.to_str().ok())
+        //     .unwrap_or("-")
+        //     .to_string(); // 确保完全拥有
+        // // 获取客户端IP
+        // let mut client_ip = get_client_ip(&req);
+        // if analog_ip !="-" {
+        //     client_ip = analog_ip;
+        // }
+
+        // 获取客户端IP
+        let client_ip = get_client_ip(&req);
+
+        // 获取服务器IP（从请求的主机头或本地配置）
+        let server_ip = get_server_ip(&req);
+        
+        // 获取客户端IP信息
+        let ip_info = ip_location::get_ip_info(&client_ip);
+        // 格式化IP地理位置信息
+        let location_info = ip_location::format_ip_location(&ip_info);
         
         let start_time = Instant::now();
 
@@ -61,6 +91,14 @@ where
             method = %method,
             path = %path,
             request_id = %request_id,
+            client_ip = %client_ip,
+            server_ip = %server_ip,
+            ip_type = %format!("{:?}", ip_info.ip_type),
+            location = %location_info,
+            country = %ip_info.country,
+            province = %ip_info.province,
+            city = %ip_info.city,
+            isp = %ip_info.isp,
             "收到HTTP请求"
         );
 
@@ -82,6 +120,9 @@ where
                         status = %status,
                         duration_ms = %duration.as_millis(),
                         request_id = %request_id,
+                        client_ip = %client_ip,
+                        server_ip = %server_ip,
+                        location = %location_info,
                         "HTTP请求处理完成"
                     );
 
@@ -96,6 +137,9 @@ where
                         path = %path,
                         duration_ms = %duration.as_millis(),
                         request_id = %request_id,
+                        client_ip = %client_ip,
+                        server_ip = %server_ip,
+                        location = %location_info,
                         "HTTP请求处理失败"
                     );
 
@@ -104,4 +148,51 @@ where
             }
         })
     }
+}
+
+/// 从请求中获取客户端IP
+fn get_client_ip<B>(request: &http::Request<B>) -> String {
+    request
+        .headers()
+        .get("X-Forwarded-For")
+        .and_then(|value| value.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
+        .or_else(|| {
+            request
+                .headers()
+                .get("X-Real-IP")
+                .and_then(|value| value.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            // 尝试从连接信息中获取
+            request
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|connect_info| connect_info.0.ip().to_string())
+                .unwrap_or_else(|| "未知客户端IP".to_string())
+        })
+}
+
+/// 获取服务器IP
+fn get_server_ip<B>(request: &http::Request<B>) -> String {
+    // 首先尝试从Host头获取服务器地址
+    request
+        .headers()
+        .get(http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // 如果没有Host头，使用请求URI的authority部分
+            request
+                .uri()
+                .authority()
+                .map(|auth| auth.to_string())
+                .unwrap_or_else(|| {
+                    // 如果都没有，返回服务器的绑定地址（通常是0.0.0.0:端口号）
+                    // 注意：这里我们无法直接获取实际绑定的地址，因为这不是请求级别的信息
+                    // 所以我们返回一个静态字符串表示本地服务器
+                    "服务器地址 (0.0.0.0:8080)".to_string()
+                })
+        })
 }
