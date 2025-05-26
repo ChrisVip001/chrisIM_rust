@@ -106,6 +106,9 @@ gateway:
       - "/api/users/registerByPhone"
       - "/api/users/registerByUsername"
       - "/api/users/sendVerificationCode"
+      # 注册头像上传相关的API路径
+      - "/api/files/register-avatar"
+      - "/api/files/validate-register-avatar"
 
   # Metrics暴露端点 指标配置
   metrics_endpoint: "/metrics"
@@ -344,12 +347,18 @@ kafka:
 
 # OSS配置
 oss:
+  # 存储提供商: s3(默认) 或 cos(腾讯云)
+  provider: cos
+  # S3兼容存储(MinIO)配置
   endpoint: http://127.0.0.1:9000
   access_key: minioadmin
   secret_key: minioadmin
   bucket: rustIM
   avatar_bucket: rustIM-avatar
   region: us-east-1
+  # 腾讯云COS特有配置，仅当provider=cos时有效
+  cos_app_id: 1250000000 # 替换为腾讯云APPID
+  cos_domain: http://127.0.0.1:9000 # 替换为腾讯云COS自定义的域名
 
 # 腾讯云短信配置
 sms:

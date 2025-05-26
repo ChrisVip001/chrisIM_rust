@@ -1,11 +1,12 @@
+pub mod controller;
 pub mod jwt;
 pub mod middleware;
-pub mod controller;
 
-use common::config::ConfigLoader;
+use crate::middleware::get_client_ip;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
+use common::config::ConfigLoader;
 use common::error::Error;
 
 /// 统一认证入口
@@ -13,7 +14,9 @@ pub async fn authenticate(
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, Error> {
-    let config = &ConfigLoader::get_global().expect("Failed to get global config").gateway;
+    let config = &ConfigLoader::get_global()
+        .expect("Failed to get global config")
+        .gateway;
 
     // 检查路径是否在白名单中
     let path = request.uri().path().to_string();
@@ -29,11 +32,9 @@ pub async fn authenticate(
 
     // 检查IP是否在白名单中
     let client_ip = get_client_ip(&request);
-    if let Some(ip) = client_ip {
-        if config.auth.ip_whitelist.contains(&ip) {
-            // IP白名单，直接放行
-            return Ok(next.run(request).await);
-        }
+    if config.auth.ip_whitelist.contains(&client_ip) {
+        // IP白名单，直接放行
+        return Ok(next.run(request).await);
     }
 
     // 获取JWT token并验证
@@ -55,20 +56,4 @@ pub async fn authenticate(
     request.extensions_mut().insert(user_info);
 
     Ok(next.run(request).await)
-}
-
-/// 从请求中获取客户端IP
-fn get_client_ip<B>(request: &Request<B>) -> Option<String> {
-    request
-        .headers()
-        .get("X-Forwarded-For")
-        .and_then(|value| value.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
-        .or_else(|| {
-            request
-                .headers()
-                .get("X-Real-IP")
-                .and_then(|value| value.to_str().ok())
-                .map(|s| s.to_string())
-        })
 }

@@ -1,14 +1,18 @@
 use async_trait::async_trait;
 use aws_sdk_s3::config::{Builder, Credentials, Region};
+use aws_sdk_s3::operation::get_object::GetObjectOutput;
+use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::Client;
 use aws_smithy_runtime_api::client::result::SdkError;
 use bytes::Bytes;
 use common::config::AppConfig;
 use common::error::Error;
+use md5::{Digest, Md5};
+use std::time::Duration;
 use tokio::fs;
-use tracing::error;
+use tracing::{error, info};
 
-use crate::{default_avatars, Oss};
+use crate::{calculate_md5, default_avatars, Oss};
 
 #[derive(Debug, Clone)]
 pub(crate) struct S3Client {
@@ -126,6 +130,23 @@ impl S3Client {
         }
         Ok(())
     }
+
+    // 获取对象的元数据信息
+    async fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<GetObjectOutput, Error> {
+        let resp = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                error!("Failed to get object metadata: {:?}", e);
+                Error::Internal(format!("Failed to get object metadata: {}", e))
+            })?;
+
+        Ok(resp)
+    }
 }
 
 #[async_trait]
@@ -149,11 +170,87 @@ impl Oss for S3Client {
     async fn upload_avatar(&self, key: &str, content: Vec<u8>) -> Result<(), Error> {
         self.upload(&self.avatar_bucket, key, content).await
     }
+
     async fn download_avatar(&self, key: &str) -> Result<Bytes, Error> {
         self.download(&self.avatar_bucket, key).await
     }
+
     async fn delete_avatar(&self, key: &str) -> Result<(), Error> {
         self.delete(&self.avatar_bucket, key).await
+    }
+
+    async fn generate_presigned_upload_url(
+        &self,
+        key: &str,
+        content_type: &str,
+        expiration: Duration,
+    ) -> Result<String, Error> {
+        // 创建预签名配置
+        let presigned_config = PresigningConfig::builder()
+            .expires_in(expiration)
+            .build()
+            .map_err(|e| Error::Internal(format!("Failed to build presigning config: {}", e)))?;
+
+        // 创建预签名上传URL
+        let presigned_req = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type(content_type)
+            .presigned(presigned_config)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to generate presigned URL: {}", e)))?;
+
+        info!("Generated presigned URL for {}", key);
+        Ok(presigned_req.uri().to_string())
+    }
+
+    async fn validate_upload(
+        &self,
+        key: &str,
+        expected_size: usize,
+        expected_md5: &str,
+    ) -> Result<bool, Error> {
+        // 检查文件是否存在
+        if !self.exists_by_name(&self.bucket, key).await {
+            return Ok(false);
+        }
+
+        // 获取对象元数据
+        let obj = self.get_object_metadata(&self.bucket, key).await?;
+
+        // 验证文件大小
+        let actual_size = match obj.content_length() {
+            Some(size) => size as usize,
+            None => {
+                error!("Failed to get content length for {}", key);
+                return Ok(false);
+            }
+        };
+
+        if actual_size != expected_size {
+            error!(
+                "Size mismatch for {}: expected {}, got {}",
+                key, expected_size, actual_size
+            );
+            return Ok(false);
+        }
+
+        // 下载文件内容并验证MD5
+        let content = self.download(&self.bucket, key).await?;
+        let actual_md5 = calculate_md5(&content);
+
+        if actual_md5 != expected_md5 {
+            error!(
+                "MD5 mismatch for {}: expected {}, got {}",
+                key, expected_md5, actual_md5
+            );
+            return Ok(false);
+        }
+
+        info!("Upload validation successful for {}", key);
+        Ok(true)
     }
 }
 

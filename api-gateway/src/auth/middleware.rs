@@ -1,29 +1,93 @@
 use axum::{
-    body::{Body, Bytes},
-    http::Request,
+    extract::Request,
+    http::{StatusCode, HeaderMap},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
+    Json,
 };
-use common::error::Error;
-use http_body_util::BodyExt;
+use common::config::ConfigLoader;
+use serde_json::json;
+use tracing::warn;
 
-/// 认证中间件处理函数
-pub async fn auth_middleware<B>(request: Request<B>, next: Next) -> Result<Response, Error>
-where
-    B: axum::body::HttpBody<Data = Bytes> + Send + 'static,
-    B::Error: std::fmt::Display + Send + Sync + 'static,
-{
-    // 收集请求体并创建新的请求实例
-    let (parts, body) = request.into_parts();
-    let bytes = body
-        .collect()
-        .await
-        .map_err(|e| Error::Internal(format!("无法读取请求体: {}", e)))?
-        .to_bytes();
+use crate::auth::jwt;
 
-    let new_body = Body::from(bytes);
-    let new_request = Request::from_parts(parts, new_body);
+/// 认证中间件
+pub async fn auth_middleware(
+    req: Request,
+    next: Next,
+) -> Response {
+    let config = match ConfigLoader::get_global() {
+        Some(config) => config,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "config_error",
+                    "message": "服务器配置错误"
+                })),
+            ).into_response();
+        }
+    };
 
-    // 调用统一认证入口
-    crate::auth::authenticate(new_request, next).await
+    // 手动提取 Authorization header
+    let auth_header = req.headers().get("authorization");
+    let token = match auth_header {
+        Some(header_value) => {
+            match header_value.to_str() {
+                Ok(header_str) => {
+                    if header_str.starts_with("Bearer ") {
+                        header_str.strip_prefix("Bearer ").unwrap_or("").to_string()
+                    } else {
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({
+                                "error": "unauthorized",
+                                "message": "无效的认证令牌格式"
+                            })),
+                        ).into_response();
+                    }
+                }
+                Err(_) => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({
+                            "error": "unauthorized",
+                            "message": "无效的认证令牌格式"
+                        })),
+                    ).into_response();
+                }
+            }
+        }
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "unauthorized",
+                    "message": "缺少认证令牌"
+                })),
+            ).into_response();
+        }
+    };
+
+    let jwt_config = &config.gateway.auth.jwt;
+
+    // 验证JWT token
+    match jwt::verify_token(token, jwt_config).await {
+        Ok(user_info) => {
+            // 将用户信息添加到请求扩展中
+            let mut request = req;
+            request.extensions_mut().insert(user_info);
+            next.run(request).await
+        }
+        Err(e) => {
+            warn!("JWT验证失败: {}", e);
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "unauthorized",
+                    "message": "无效的认证令牌"
+                })),
+            ).into_response()
+        }
+    }
 }

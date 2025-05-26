@@ -1,169 +1,120 @@
-use axum::http::HeaderValue;
-use axum::{
-    extract::connect_info::ConnectInfo,
-    http::{self, Method},
-    Router,
-};
-use axum_server::{self, Handle};
+use axum::{http::HeaderValue, Router};
+use axum_server::Handle;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
-use std::path::Path;
 use tokio::sync::oneshot;
-use tower_http::cors::CorsLayer;
-use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
-// 直接使用tracing宏
-use std::env;
-use common::config::{AppConfig, Component, ConfigLoader};
-use common::grpc_client::base::register_service;
+use tower_http::{
+    cors::CorsLayer,
+    limit::RequestBodyLimitLayer,
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
+};
 use tracing::{error, info};
-use api_utils::ip_region;
 
-mod api_doc;
+use common::{
+    config::{AppConfig, Component, ConfigLoader},
+    grpc_client::base::register_service,
+};
+use crate::api_utils::ip_region::ip_location::init_ip_location;
+
 mod api_utils;
 mod auth;
 mod circuit_breaker;
 mod metrics;
 mod middleware;
-pub mod proxy;
+mod proxy;
 mod rate_limit;
 mod router;
 
-pub use common::grpc_client::friend_client::FriendServiceGrpcClient;
-pub use common::grpc_client::group_client::GroupServiceGrpcClient;
-pub use common::grpc_client::user_client::UserServiceGrpcClient;
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 初始化rustls加密提供程序
+    // 初始化加密提供程序
     common::service::init_rustls();
 
-    // 从环境变量获取配置文件路径
-    let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
-    info!("使用配置文件: {}", config_path);
+    // 加载配置
+    let config_path = std::env::var("CONFIG_PATH")
+        .unwrap_or_else(|_| "./config/config.yaml".to_string());
     
-    // 使用指定的配置文件路径初始化全局配置
-    let app_config = AppConfig::from_file(Some(&config_path))
-        .expect(&format!("无法从路径加载配置: {}", config_path));
+    let app_config = AppConfig::from_file(Some(&config_path))?;
     ConfigLoader::set_global(app_config);
-
-    let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
+    let config = ConfigLoader::get_global().expect("未找到配置文件");
 
     // 初始化日志和链路追踪
-    // 根据配置判断是否启用链路追踪
     if config.telemetry.enabled {
-        // 启动带有分布式链路追踪的日志系统
         common::logging::init_telemetry(&config, "api-gateway")?;
-        info!(
-            "链路追踪功能已启用，追踪数据将发送到: {}",
-            config.telemetry.endpoint
-        );
+        info!("链路追踪已启用: {}", config.telemetry.endpoint);
     } else {
-        // 只初始化日志系统
         common::logging::init_from_config(&config)?;
-        info!("链路追踪功能未启用，仅初始化日志系统");
+        info!("仅启用日志系统");
     }
 
     info!("正在启动API网关服务...");
 
     // 初始化IP地理位置服务
-    // 在common/src/fixtures/xdb目录查找
-    let xdb_path = Path::new(&config.database.xdb);
-    if xdb_path.exists() {
-        match ip_region::ip_location::init_ip_location(xdb_path) {
-            Ok(_) => {
-                info!("IP地理位置数据库初始化成功: {:?}", xdb_path);
-            },
-            Err(e) => {
-                error!("初始化IP地理位置服务失败: {}", e);
-            }
-        }
-    } else {
-        error!("IP地理位置数据库文件不存在: {:?}, IP位置查询功能将使用基本功能",xdb_path);
+    if let Err(e) = init_ip_location((&config.database.xdb).as_ref()) {
+        error!("IP地理位置服务初始化失败: {}", e);
     }
-    
 
-    // 初始化Prometheus指标
+    // 初始化指标系统
     metrics::init_metrics();
 
-    // 初始化服务代理
-    let service_proxy = proxy::ServiceProxy::new().await;
+    // 构建应用
+    let app = build_app(&config).await?;
 
-    // 初始化 gRPC 客户端工厂
-    proxy::GrpcClientFactoryImpl::new();
-    info!("初始化 gRPC 客户端工厂完成，支持 HTTP 到 gRPC 的请求转发");
+    // 启动服务器
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
+    info!("API网关监听: https://{}:{}", config.server.host, config.server.port);
 
-    // 创建路由器
-    let router_builder = router::RouterBuilder::new(Arc::from(service_proxy.clone())).await;
-    let router = router_builder
-        .build(Arc::new(config.gateway.clone()))
-        .await?;
-
-    // 配置中间件
-    let app = configure_middleware(router).await;
-
-    // 输出API服务信息
-    info!("======================================================");
-    info!("RustIM API服务启动");
-    info!("======================================================");
-
-    let (host, port) = (config.server.host.clone(), config.server.port);
-    // 绑定地址
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("API网关服务监听: https://{}:{}", host, port);
-
-    // 注册到 Consul
+    // 注册服务
     let service_id = register_service(&config, Component::ApiGateway).await?;
+    info!("API网关已就绪, 服务ID: {}", service_id);
 
-    info!("API网关已准备就绪, 服务ID: {}", service_id);
-
-    // 创建服务器句柄
+    // 启动服务器
     let handle = Handle::new();
-
-    // 设置关闭通道
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel::<()>();
+    
     let config_clone = config.clone();
     let service_id_clone = service_id.clone();
-    let shutdown_signal_task = tokio::spawn(async move {
+    let shutdown_task = tokio::spawn(async move {
         common::service::shutdown_signal(shutdown_tx, service_id_clone, &config_clone).await
     });
 
-    // 启动服务
     if let Err(err) = axum_server::bind(addr)
         .handle(handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
     {
-        let _ = shutdown_rx.await;
         error!("服务器错误: {}", err);
     }
 
-    // 等待关闭信号处理完成
-    let _ = shutdown_signal_task.await?;
-    // 关闭链路追踪，确保所有数据都被发送
-    info!("正在关闭链路追踪...");
-
+    shutdown_task.await??;
     common::logging::shutdown_telemetry();
     info!("API网关服务已关闭");
 
     Ok(())
 }
 
-/// 配置中间件
-async fn configure_middleware(app: Router) -> Router {
-    // 添加链路追踪中间件
-    let app = app.layer(TraceLayer::new_for_http());
+/// 构建应用
+async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
+    // 创建服务代理
+    let service_proxy = proxy::ServiceProxy::new().await;
+    
+    // 构建路由
+    let router = router::build_routes(service_proxy, &config.gateway).await?;
+    
+    // 配置中间件栈
+    Ok(router
+        .layer(TraceLayer::new_for_http())
+        .layer(middleware::RequestLoggerLayer)
+        .layer(metrics::MetricsLayer)
+        .layer(build_cors_layer())
+        .layer(TimeoutLayer::new(Duration::from_secs(30)))
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)))
+}
 
-    // 添加请求路径日志中间件
-    let app = app.layer(middleware::RequestLoggerLayer);
-
-    // 添加指标中间件
-    let app = app.layer(metrics::MetricsLayer);
-
-    // 添加CORS中间件
-    let cors = CorsLayer::new()
+/// 构建CORS层
+fn build_cors_layer() -> CorsLayer {
+    CorsLayer::new()
         .allow_origin([
             "http://localhost:3000".parse::<HeaderValue>().unwrap(),
             "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
@@ -171,25 +122,20 @@ async fn configure_middleware(app: Router) -> Router {
             "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
         ])
         .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::DELETE,
-            Method::OPTIONS,
-            Method::PATCH,
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+            axum::http::Method::PATCH,
         ])
         .allow_headers([
-            http::header::CONTENT_TYPE,
-            http::header::AUTHORIZATION,
-            http::header::ACCEPT,
-            http::header::ORIGIN,
-            http::header::USER_AGENT,
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+            axum::http::header::ORIGIN,
+            axum::http::header::USER_AGENT,
         ])
         .allow_credentials(true)
-        .max_age(Duration::from_secs(3600));
-
-    // 添加请求体大小限制和超时
-    app.layer(cors)
-        .layer(TimeoutLayer::new(Duration::from_secs(30)))
-        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
+        .max_age(Duration::from_secs(3600))
 }

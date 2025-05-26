@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use common::config::ConfigLoader;
 use futures::future::BoxFuture;
 use parking_lot::RwLock;
 use serde_json::json;
@@ -13,7 +14,6 @@ use std::time::{Duration, Instant};
 use tower::layer::Layer;
 use tower::Service;
 use tracing::{info, warn};
-use common::config::ConfigLoader;
 
 /// 熔断器状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

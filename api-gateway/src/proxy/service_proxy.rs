@@ -15,6 +15,7 @@ use common::service_register_center::{service_register_center, ServiceRegister};
 use common::Error;
 
 /// 服务代理 - 负责转发请求到后端服务
+#[derive(Clone)]
 pub struct ServiceProxy {
     // 服务注册中心
     service_register: Arc<dyn ServiceRegister>,
@@ -66,35 +67,11 @@ impl ServiceProxy {
         match self.get_service_url(&service_name).await {
             Ok(service_url) => {
                 debug!("转发请求到服务: {}", service_url);
-
-                // 根据服务类型选择转发方式
-                match service_type {
-                    ServiceType::HttpService(_) | ServiceType::Static => {
-                        // 转发HTTP请求
-                        self.forward_http_request(req, &service_url).await
-                    }
-                    ServiceType::User
-                    | ServiceType::Friend
-                    | ServiceType::Group
-                    | ServiceType::Chat
-                    | ServiceType::GrpcService(_) => {
-                        // 转发gRPC请求
-                        self.forward_grpc_request(req, &service_url).await
-                    }
-                }
+                self.forward_http_request(req, &service_url).await
             }
             Err(e) => {
                 error!("无法获取服务地址: {}", e);
-
-                // 返回服务不可用错误
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    axum::Json(serde_json::json!({
-                        "error": "service_unavailable",
-                        "message": format!("服务暂时不可用: {}", service_name)
-                    })),
-                )
-                    .into_response()
+                self.service_unavailable_response(&service_name)
             }
         }
     }
@@ -133,103 +110,45 @@ impl ServiceProxy {
 
     /// 转发HTTP请求
     async fn forward_http_request(&self, req: Request<Body>, service_url: &str) -> Response<Body> {
-        // 获取路径
-        let path = req.uri().path().to_string();
-        let path_query = req
-            .uri()
+        let (parts, body) = req.into_parts();
+        let path_query = parts
+            .uri
             .path_and_query()
             .map(|v| v.as_str())
-            .unwrap_or(&path);
+            .unwrap_or(parts.uri.path());
 
-        // 简化路由匹配逻辑，直接使用原始路径
-        let target_path = path_query.to_string();
-
-        // 构建目标URL
-        let target_url = format!("{}{}", service_url, target_path);
-
-        debug!("转发HTTP请求: {} -> {}", path, target_url);
-
-        // 创建新的请求
-        let (parts, body) = req.into_parts();
+        let target_url = format!("{}{}", service_url, path_query);
+        debug!("转发HTTP请求: {} -> {}", parts.uri.path(), target_url);
 
         // 读取请求体
-        let body_bytes = axum::body::to_bytes(body, 1024 * 1024 * 10)
-            .await
-            .unwrap_or_default();
-
-        // 获取Content-Type和Content-Encoding头
-        let content_type = parts
-            .headers
-            .get("content-type")
-            .and_then(|v| v.to_str().ok());
-        let content_encoding = parts
-            .headers
-            .get("content-encoding")
-            .and_then(|v| v.to_str().ok());
-
-        // 处理请求体，如果是GZIP压缩的JSON则自动解压
-        let processed_body = match crate::proxy::utils::process_request_body(
-            &body_bytes,
-            content_type,
-            content_encoding,
-        ) {
-            Ok(data) => data,
+        let body_bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
+            Ok(bytes) => bytes,
             Err(e) => {
-                error!("处理请求体失败: {}", e);
-                return (
-                    StatusCode::BAD_REQUEST,
-                    axum::Json(serde_json::json!({
-                        "error": "invalid_request_body",
-                        "message": format!("处理请求体失败: {}", e)
-                    })),
-                )
-                    .into_response();
+                error!("读取请求体失败: {}", e);
+                return self.bad_request_response("无法读取请求体");
             }
         };
 
-        // 创建reqwest请求
+        // 构建reqwest请求
         let mut client_req = match parts.method.as_str() {
             "GET" => self.http_client.get(&target_url),
-            "POST" => self.http_client.post(&target_url).body(processed_body),
-            "PUT" => self.http_client.put(&target_url).body(processed_body),
+            "POST" => self.http_client.post(&target_url).body(body_bytes.to_vec()),
+            "PUT" => self.http_client.put(&target_url).body(body_bytes.to_vec()),
             "DELETE" => self.http_client.delete(&target_url),
-            "PATCH" => self.http_client.patch(&target_url).body(processed_body),
+            "PATCH" => self.http_client.patch(&target_url).body(body_bytes.to_vec()),
             "HEAD" => self.http_client.head(&target_url),
-            "OPTIONS" => self
-                .http_client
-                .request(reqwest::Method::OPTIONS, &target_url),
+            "OPTIONS" => self.http_client.request(reqwest::Method::OPTIONS, &target_url),
             _ => {
-                return (
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    axum::Json(serde_json::json!({
-                        "error": "method_not_allowed",
-                        "message": format!("不支持的HTTP方法: {}", parts.method)
-                    })),
-                )
-                    .into_response();
+                error!("不支持的HTTP方法: {}", parts.method);
+                return self.method_not_allowed_response();
             }
         };
 
-        // 转发请求头
-        let mut skip_content_encoding = false;
-        if let Some(encoding) = content_encoding {
-            skip_content_encoding = encoding.to_lowercase().contains("gzip");
-        }
-
-        for (name, value) in parts.headers {
-            if let Some(name) = name {
-                // 忽略一些特定的头
-                if name.as_str() == "host" || name.as_str() == "content-length" {
-                    continue;
-                }
-
-                // 如果已经解压过GZIP数据，不要转发content-encoding头
-                if skip_content_encoding && name.as_str() == "content-encoding" {
-                    continue;
-                }
-
-                if let Ok(value) = value.to_str() {
-                    client_req = client_req.header(name.as_str(), value);
+        // 复制请求头（排除某些不应转发的头）
+        for (name, value) in parts.headers.iter() {
+            if !should_skip_header(name.as_str()) {
+                if let Ok(value_str) = value.to_str() {
+                    client_req = client_req.header(name.as_str(), value_str);
                 }
             }
         }
@@ -245,62 +164,99 @@ impl ServiceProxy {
         }
 
         // 添加原始路径和方法到请求头
-        client_req = client_req.header("X-Original-Path", path);
+        client_req = client_req.header("X-Original-Path", parts.uri.path());
         client_req = client_req.header("X-Original-Method", parts.method.as_str());
 
         // 发送请求
         match client_req.send().await {
-            Ok(resp) => {
-                // 构建响应
-                let mut builder = Response::builder().status(resp.status());
+            Ok(resp) => self.convert_response(resp).await,
+            Err(e) => {
+                error!("转发请求失败: {}", e);
+                self.service_unavailable_response("目标服务")
+            }
+        }
+    }
 
-                // 转发响应头
-                let headers = builder.headers_mut().unwrap();
-                for (name, value) in resp.headers() {
-                    headers.insert(name, value.clone());
+    /// 转换reqwest响应为axum响应
+    async fn convert_response(&self, resp: reqwest::Response) -> Response<Body> {
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        
+        match resp.bytes().await {
+            Ok(body) => {
+                let mut response = Response::builder().status(status);
+                
+                // 复制响应头
+                for (name, value) in headers.iter() {
+                    if !should_skip_header(name.as_str()) {
+                        response = response.header(name, value);
+                    }
                 }
-
-                // 读取响应体
-                let body_bytes = resp.bytes().await.unwrap_or_default();
-
-                // 构建响应
-                builder.body(Body::from(body_bytes)).unwrap_or_else(|_| {
-                    Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::from("无法构建响应"))
-                        .unwrap()
+                
+                response.body(Body::from(body)).unwrap_or_else(|_| {
+                    self.internal_server_error_response("构建响应失败")
                 })
             }
             Err(e) => {
-                error!("转发HTTP请求失败: {}", e);
-
-                (
-                    StatusCode::BAD_GATEWAY,
-                    axum::Json(serde_json::json!({
-                        "error": "bad_gateway",
-                        "message": format!("无法转发请求到后端服务: {}", e)
-                    })),
-                )
-                    .into_response()
+                error!("读取响应体失败: {}", e);
+                self.internal_server_error_response("读取响应失败")
             }
         }
     }
 
-    /// 转发gRPC请求
-    async fn forward_grpc_request(&self, req: Request<Body>, service_url: &str) -> Response<Body> {
-        // 使用已创建的 GrpcClientFactoryImpl 实例处理 gRPC 请求
-        self.grpc_client_factory.forward_request(req, service_url.to_string()).await
+    /// 服务不可用响应
+    fn service_unavailable_response(&self, service_name: &str) -> Response<Body> {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "error": "service_unavailable",
+                "message": format!("服务暂时不可用: {}", service_name)
+            })),
+        )
+            .into_response()
+    }
+
+    /// 错误请求响应
+    fn bad_request_response(&self, message: &str) -> Response<Body> {
+        (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": "bad_request",
+                "message": message
+            })),
+        )
+            .into_response()
+    }
+
+    /// 方法不允许响应
+    fn method_not_allowed_response(&self) -> Response<Body> {
+        (
+            StatusCode::METHOD_NOT_ALLOWED,
+            axum::Json(serde_json::json!({
+                "error": "method_not_allowed",
+                "message": "不支持的HTTP方法"
+            })),
+        )
+            .into_response()
+    }
+
+    /// 内部服务器错误响应
+    fn internal_server_error_response(&self, message: &str) -> Response<Body> {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({
+                "error": "internal_server_error",
+                "message": message
+            })),
+        )
+            .into_response()
     }
 }
 
-// 在ServiceProxy结构体实现后添加Clone实现
-impl Clone for ServiceProxy {
-    fn clone(&self) -> Self {
-        Self {
-            service_register: self.service_register.clone(),
-            config: self.config.clone(),
-            http_client: self.http_client.clone(),
-            grpc_client_factory: self.grpc_client_factory.clone(),
-        }
-    }
+/// 检查是否应该跳过某个请求头
+fn should_skip_header(name: &str) -> bool {
+    matches!(
+        name.to_lowercase().as_str(),
+        "host" | "connection" | "transfer-encoding" | "content-length"
+    )
 }

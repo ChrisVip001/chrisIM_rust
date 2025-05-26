@@ -2,6 +2,7 @@ use axum::http::Request;
 use common::error::Error;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 用户信息
@@ -17,7 +18,7 @@ pub struct UserInfo {
     pub tenant_name: String,
     /// 额外信息
     #[serde(default)]
-    pub extra: std::collections::HashMap<String, String>,
+    pub extra: HashMap<String, String>,
 }
 
 /// JWT Token中的声明信息
@@ -39,7 +40,7 @@ pub struct Claims {
     pub tenant_name: String,
     /// 额外信息
     #[serde(default)]
-    pub extra: std::collections::HashMap<String, String>,
+    pub extra: HashMap<String, String>,
 }
 
 /// 从请求头中提取token
@@ -66,12 +67,13 @@ pub async fn verify_token(
     token: String,
     jwt_config: &common::configs::auth_config::JwtConfig,
 ) -> Result<UserInfo, Error> {
-    // 解码并验证token
+    // 设置验证参数
     let mut validation = Validation::new(Algorithm::HS256);
     if jwt_config.verify_issuer && !jwt_config.allowed_issuers.is_empty() {
         validation.iss = Some(jwt_config.allowed_issuers.clone().into_iter().collect());
     }
 
+    // 解码和验证token
     let token_data = decode::<Claims>(
         &token,
         &DecodingKey::from_secret(jwt_config.secret.as_bytes()),
@@ -115,7 +117,7 @@ pub fn generate_token(
     username: &str,
     tenant_id: i64,
     tenant_name: &str,
-    extra: std::collections::HashMap<String, String>,
+    extra: HashMap<String, String>,
     jwt_config: &common::configs::auth_config::JwtConfig,
 ) -> Result<String, Error> {
     // 获取当前时间戳
@@ -170,7 +172,7 @@ pub fn generate_refresh_token(
         username: username.to_string(),
         tenant_id,
         tenant_name: tenant_name.to_string(),
-        extra: std::collections::HashMap::new(),
+        extra: HashMap::new(),
     };
 
     // 生成token

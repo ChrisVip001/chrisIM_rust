@@ -1,16 +1,19 @@
 use crate::auth::jwt;
+use crate::proxy::services::common::{error_response, success_response};
 use axum::extract::Extension;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use common::config::ConfigLoader;
 use common::error::Error;
+use common::grpc_client::UserServiceGrpcClient;
+use common::proto::user::user_service_client::UserServiceClient;
 use common::proto::user::VerifyPasswordRequest;
+use common::service_discovery::LbWithServiceDiscovery;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info};
-use crate::proxy::services::common::{error_response,success_response};
-use common::grpc_client::UserServiceGrpcClient;
 
 /// 登录请求
 #[derive(Debug, Deserialize)]
@@ -78,26 +81,40 @@ pub struct UserInfoResponse {
 
 /// 用户服务共享实例
 #[derive(Clone)]
-pub struct SharedUserService(Arc<UserServiceGrpcClient>);
+pub struct SharedUserService(UserServiceClient<LbWithServiceDiscovery>);
 
 impl SharedUserService {
     /// 创建新的共享用户服务
-    pub fn new(client: Arc<UserServiceGrpcClient>) -> Self {
+    pub fn new(client: UserServiceClient<LbWithServiceDiscovery>) -> Self {
         Self(client)
     }
 
     /// 验证密码
-    pub async fn verify_password(&self, request: VerifyPasswordRequest) -> Result<common::proto::user::VerifyPasswordResponse, anyhow::Error> {
+    pub async fn verify_password(
+        &self,
+        request: VerifyPasswordRequest,
+    ) -> Result<common::proto::user::VerifyPasswordResponse, anyhow::Error> {
         // 克隆基础客户端
-        let mut client = (*self.0).clone();
-        client.verify_password(request).await.map_err(Into::into)
+        let mut client = self.0.clone();
+        client
+            .verify_password(request)
+            .await
+            .map(|response| response.into_inner())
+            .map_err(Into::into)
     }
-    
+
     /// 验证手机验证码登录
-    pub async fn verify_phone_code_login(&self, request: common::proto::user::VerifyPhoneCodeRequest) -> Result<common::proto::user::VerifyPasswordResponse, anyhow::Error> {
+    pub async fn verify_phone_code_login(
+        &self,
+        request: common::proto::user::VerifyPhoneCodeRequest,
+    ) -> Result<common::proto::user::VerifyPasswordResponse, anyhow::Error> {
         // 克隆基础客户端
-        let mut client = (*self.0).clone();
-        client.verify_phone_code_login(request).await.map_err(Into::into)
+        let mut client = self.0.clone();
+        client
+            .verify_phone_code_login(request)
+            .await
+            .map(|response| response.into_inner())
+            .map_err(Into::into)
     }
 }
 
@@ -120,7 +137,10 @@ pub async fn login_by_phone(
         Ok(resp) => resp,
         Err(e) => {
             error!("调用用户服务验证手机验证码失败: {}", e);
-            return Ok(error_response(&format!("验证手机验证码服务错误:{}", e), StatusCode::INTERNAL_SERVER_ERROR));
+            return Ok(error_response(
+                &format!("验证手机验证码服务错误:{}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
         }
     };
 
@@ -151,7 +171,8 @@ pub async fn login_by_phone(
         1,         // 示例租户ID
         "default", // 示例租户名称，实际应从用户信息中获取
         extra,
-    ).await?;
+    )
+    .await?;
 
     // 返回响应
     Ok(success_response(login_response, StatusCode::OK))
@@ -175,7 +196,10 @@ pub async fn login(
         Ok(resp) => resp,
         Err(e) => {
             error!("调用用户服务验证密码失败: {}", e);
-            return Ok(error_response(&format!("验证密码服务错误:{}", e), StatusCode::INTERNAL_SERVER_ERROR));
+            return Ok(error_response(
+                &format!("验证密码服务错误:{}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
         }
     };
 
@@ -206,7 +230,8 @@ pub async fn login(
         1,         // 示例租户ID
         "default", // 示例租户名称，实际应从用户信息中获取
         extra,
-    ).await?;
+    )
+    .await?;
 
     // 返回响应
     Ok(success_response(login_response, StatusCode::OK))
@@ -236,10 +261,11 @@ pub async fn refresh_token(
     let refresh_response = build_login_response(
         user_info.user_id,
         &user_info.username,
-        user_info.tenant_id,         
+        user_info.tenant_id,
         &user_info.tenant_name,
         extra,
-    ).await?;
+    )
+    .await?;
 
     info!("用户 {} 刷新令牌成功", username);
 
@@ -248,19 +274,19 @@ pub async fn refresh_token(
 }
 
 /// 从用户信息中提取额外数据
-fn extract_user_extra(user: &common::proto::user::User) -> std::collections::HashMap<String, String> {
-    let mut extra = std::collections::HashMap::new();
+fn extract_user_extra(user: &common::proto::user::User) -> HashMap<String, String> {
+    let mut extra = HashMap::new();
 
     // email在proto中是String类型，但我们需要考虑其可能为空的情况
     if !user.email.is_empty() {
         extra.insert("email".to_string(), user.email.clone());
     }
-    
+
     // 如果存在昵称，添加到额外信息中
     if let Some(nickname) = &user.nickname {
         extra.insert("nickname".to_string(), nickname.clone());
     }
-    
+
     // 如果存在头像URL，添加到额外信息中
     if let Some(avatar_url) = &user.avatar_url {
         extra.insert("avatar_url".to_string(), avatar_url.clone());
@@ -271,7 +297,6 @@ fn extract_user_extra(user: &common::proto::user::User) -> std::collections::Has
         extra.insert("custom_id".to_string(), user.custom_id.clone());
     }
 
-
     extra
 }
 
@@ -281,11 +306,11 @@ async fn build_login_response(
     username: &str,
     tenant_id: i64,
     tenant_name: &str,
-    extra: std::collections::HashMap<String, String>,
+    extra: HashMap<String, String>,
 ) -> Result<LoginResponse, Error> {
     // 读取JWT配置
     let config = ConfigLoader::get_global().expect("Failed to get global config");
-    
+
     let jwt_config = &config.gateway.auth.jwt;
 
     // 生成访问令牌
@@ -299,13 +324,8 @@ async fn build_login_response(
     )?;
 
     // 生成刷新令牌
-    let refresh_token = jwt::generate_refresh_token(
-        user_id,
-        username,
-        tenant_id,
-        tenant_name,
-        jwt_config,
-    )?;
+    let refresh_token =
+        jwt::generate_refresh_token(user_id, username, tenant_id, tenant_name, jwt_config)?;
 
     // 构建用户信息响应
     let user_info = UserInfoResponse {

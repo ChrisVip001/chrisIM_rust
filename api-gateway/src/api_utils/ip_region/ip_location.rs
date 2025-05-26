@@ -1,6 +1,6 @@
+use once_cell::sync::OnceCell;
 use std::path::Path;
 use std::sync::Arc;
-use once_cell::sync::OnceCell;
 use tracing::{error, info};
 
 // ip2region相关导入
@@ -69,21 +69,19 @@ pub fn init_ip_location(xdb_path: &Path) -> anyhow::Result<()> {
     }
 
     info!("正在初始化IP地理位置服务，数据库路径: {:?}", xdb_path);
-    
+
     // ip2region 0.1.0中，使用Searcher::new
     match Searcher::new(xdb_path.to_str().unwrap()) {
-        Ok(searcher) => {
-            match IP_SEARCHER.set(Arc::new(searcher)) {
-                Ok(_) => {
-                    info!("IP地理位置服务初始化成功");
-                    Ok(())
-                }
-                Err(_) => {
-                    error!("设置IP查询实例失败");
-                    Err(anyhow::anyhow!("设置IP查询实例失败"))
-                }
+        Ok(searcher) => match IP_SEARCHER.set(Arc::new(searcher)) {
+            Ok(_) => {
+                info!("IP地理位置服务初始化成功");
+                Ok(())
             }
-        }
+            Err(_) => {
+                error!("设置IP查询实例失败");
+                Err(anyhow::anyhow!("设置IP查询实例失败"))
+            }
+        },
         Err(e) => {
             error!("加载IP地理位置数据库失败: {}", e);
             Err(anyhow::anyhow!("加载IP地理位置数据库失败: {}", e))
@@ -94,7 +92,7 @@ pub fn init_ip_location(xdb_path: &Path) -> anyhow::Result<()> {
 /// 解析地理位置信息
 fn parse_region(region: &str) -> (String, String, String, String, String) {
     let parts: Vec<&str> = region.split('|').collect();
-    
+
     if parts.len() >= 5 {
         (
             parts[0].to_string(), // 国家
@@ -137,7 +135,7 @@ pub fn get_ip_info(ip: &str) -> IpLocationInfo {
 
     // 判断是否是内网IP
     let is_internal = is_internal_ip(ip);
-    
+
     // 如果是内网IP，不需要查询地理位置
     if is_internal {
         return IpLocationInfo {
@@ -159,7 +157,7 @@ pub fn get_ip_info(ip: &str) -> IpLocationInfo {
         match searcher.search(ip) {
             Ok(region) => {
                 let (country, region, province, city, isp) = parse_region(&region);
-                
+
                 return IpLocationInfo {
                     is_internal,
                     ip_type,
@@ -196,10 +194,10 @@ fn is_internal_ip(ip: &str) -> bool {
     }
 
     // 检查IPv4内网范围
-    if ip.starts_with("10.") || 
-       ip.starts_with("192.168.") ||
-       ip.starts_with("169.254.") || 
-       (ip.starts_with("172.") && {
+    if ip.starts_with("10.")
+        || ip.starts_with("192.168.")
+        || ip.starts_with("169.254.")
+        || (ip.starts_with("172.") && {
             if let Some(second_part) = ip.split('.').nth(1) {
                 if let Ok(num) = second_part.parse::<u8>() {
                     (16..=31).contains(&num)
@@ -209,7 +207,7 @@ fn is_internal_ip(ip: &str) -> bool {
             } else {
                 false
             }
-       })
+        })
     {
         return true;
     }
@@ -227,18 +225,22 @@ pub fn format_ip_location(info: &IpLocationInfo) -> String {
     if info.is_internal {
         return "内网IP".to_string();
     }
-    
+
     if info.ip_type == IpType::Unknown {
         return "未知IP".to_string();
     }
-    
+
     let mut result = String::new();
-    
+
     // 添加国家信息（如果不是中国，显示国家名）
-    if info.country != "中国" && info.country != "未知" && !info.country.is_empty() && info.country != "0" {
+    if info.country != "中国"
+        && info.country != "未知"
+        && !info.country.is_empty()
+        && info.country != "0"
+    {
         result.push_str(&info.country);
     }
-    
+
     // 添加省份信息
     if info.province != "未知" && !info.province.is_empty() && info.province != "0" {
         if !result.is_empty() {
@@ -246,15 +248,19 @@ pub fn format_ip_location(info: &IpLocationInfo) -> String {
         }
         result.push_str(&info.province);
     }
-    
+
     // 添加城市信息
-    if info.city != "未知" && !info.city.is_empty() && info.city != "0" && info.city != info.province {
+    if info.city != "未知"
+        && !info.city.is_empty()
+        && info.city != "0"
+        && info.city != info.province
+    {
         if !result.is_empty() {
             result.push(' ');
         }
         result.push_str(&info.city);
     }
-    
+
     // 添加ISP信息
     if info.isp != "未知" && !info.isp.is_empty() && info.isp != "0" {
         if !result.is_empty() {
@@ -262,7 +268,7 @@ pub fn format_ip_location(info: &IpLocationInfo) -> String {
         }
         result.push_str(&info.isp);
     }
-    
+
     // 如果没有任何地理位置信息，则返回IP地址和类型
     if result.is_empty() {
         let ip_type = match info.ip_type {
@@ -270,7 +276,7 @@ pub fn format_ip_location(info: &IpLocationInfo) -> String {
             IpType::IPv6 => "IPv6",
             _ => "",
         };
-        
+
         if !ip_type.is_empty() {
             format!("{} ({})", info.ip, ip_type)
         } else {
@@ -280,4 +286,3 @@ pub fn format_ip_location(info: &IpLocationInfo) -> String {
         result
     }
 }
-
