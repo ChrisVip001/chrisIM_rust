@@ -199,7 +199,8 @@ pub async fn login(
     let login_response = build_login_response(
         user_id,
         &user.username,
-        login_req.tenant_id,
+        // 简化示例，在实际应用中应从用户信息中获取租户ID和名称
+        1,         // 示例租户ID
         "default", // 示例租户名称，实际应从用户信息中获取
         extra,
     ).await?;
@@ -232,7 +233,8 @@ pub async fn refresh_token(
     let refresh_response = build_login_response(
         user_info.user_id,
         &user_info.username,
-        user_info.tenant_id,
+        // 简化示例，在实际应用中应从用户信息中获取租户ID和名称
+        1,         // 示例租户ID
         &user_info.tenant_name,
         extra,
     ).await?;
