@@ -63,6 +63,39 @@ impl UserServiceImpl {
             }
         };
         
+        // 根据验证码用途判断是否需要验证用户存在性
+        match action {
+            // 这些操作需要验证用户存在
+            VerificationAction::Login | 
+            VerificationAction::ResetPassword | 
+            VerificationAction::BindPhone | 
+            VerificationAction::ChangePhone => {
+                // 通过手机号检查用户是否存在
+                match self.repository.get_user_by_phone(phone).await {
+                    Ok(_) => {}, // 用户存在，继续处理
+                    Err(err) => {
+                        error!("手机号对应用户不存在: {}, 错误: {}", phone, err);
+                        return Err(Status::not_found(format!("用户不存在: {}", phone)));
+                    }
+                }
+            },
+            // 注册操作不需要验证用户存在
+            VerificationAction::Register => {
+                // 注册时，反而应该确保用户不存在
+                match self.repository.get_user_by_phone(phone).await {
+                    Ok(_) => {
+                        // 用户已存在，返回错误
+                        error!("手机号已注册: {}", phone);
+                        return Err(Status::already_exists(format!("手机号已注册: {}", phone)));
+                    },
+                    Err(_) => {
+                        // 用户不存在，可以发送注册验证码
+                        debug!("手机号未注册，可以发送注册验证码: {}", phone);
+                    }
+                }
+            }
+        }
+        
         // 添加国家代码前缀（假设都是中国号码）
         let phone_with_prefix = if phone.starts_with("+") {
             phone.to_string()
