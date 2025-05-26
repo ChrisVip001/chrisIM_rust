@@ -6,6 +6,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tonic::transport::Server;
+use tonic_health::server::health_reporter;
 use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::{error, info};
 use common::grpc_client::base::register_service;
@@ -71,7 +72,7 @@ async fn main() -> Result<()> {
     };
 
     // 初始化群组服务
-    let group_service = GroupServiceImpl::new(db_pool);
+    let group_service = GroupServiceImpl::new(db_pool.clone());
 
     // 创建并注册到服务注册中心
     let service_id = register_service(&config, Component::GroupServer).await?;
@@ -97,11 +98,47 @@ async fn main() -> Result<()> {
     // 创建日志拦截器
     let logging_interceptor = LoggingInterceptor::new();
 
+    // 创建gRPC健康检查服务
+    let (mut health_reporter, health_service) = health_reporter();
+    
+    // 设置服务健康状态
+    health_reporter
+        .set_serving::<GroupServiceServer<GroupServiceImpl>>()
+        .await;
+
+    // 启动一个后台任务来定期检查数据库连接并更新健康状态
+    let db_pool_health = db_pool.clone();
+    let mut health_reporter_clone = health_reporter.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            
+            // 检查数据库连接
+            match sqlx::query("SELECT 1").fetch_one(&db_pool_health).await {
+                Ok(_) => {
+                    // 数据库连接正常，设置为serving状态
+                    let _ = health_reporter_clone
+                        .set_serving::<GroupServiceServer<GroupServiceImpl>>()
+                        .await;
+                }
+                Err(e) => {
+                    error!("数据库健康检查失败: {}", e);
+                    // 数据库连接失败，设置为not serving状态
+                    let _ = health_reporter_clone
+                        .set_not_serving::<GroupServiceServer<GroupServiceImpl>>()
+                        .await;
+                }
+            }
+        }
+    });
+
     // 启动gRPC服务
     info!("群组服务启动，监听地址: {}", addr);
 
     // 创建服务器并运行
     let server = Server::builder()
+        .add_service(health_service) // 添加健康检查服务
         .add_service(reflection_service) // 添加反射服务
         .add_service(GroupServiceServer::with_interceptor(
             group_service, 

@@ -9,6 +9,8 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
 use tonic::transport::Server;
 use tracing::{error, info, warn};
+// 添加gRPC健康检查相关导入
+use tonic_health::server::HealthReporter;
 
 use common::config::{AppConfig, Component};
 use common::grpc::LoggingInterceptor;
@@ -69,7 +71,45 @@ impl ChatRpcService {
             .expect("服务注册失败");
         info!("<chat> RPC服务已注册到服务注册中心");
 
-        // TODO 创建tonic健康检查服务
+        // 创建gRPC健康检查服务
+        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        
+        // 设置服务健康状态
+        health_reporter
+            .set_serving::<ChatServiceServer<ChatRpcService>>()
+            .await;
+
+        // 启动一个后台任务来定期检查Kafka连接并更新健康状态
+        let producer_health = producer.clone();
+        let mut health_reporter_clone = health_reporter.clone();
+        let topic_health = config.kafka.topic.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                
+                // 检查Kafka连接 - 尝试发送一个测试消息
+                let test_record = FutureRecord::to(&topic_health)
+                    .payload("health_check")
+                    .key("health");
+                
+                match producer_health.send(test_record, Duration::from_secs(1)).await {
+                    Ok(_) => {
+                        // Kafka连接正常，设置为serving状态
+                        let _ = health_reporter_clone
+                            .set_serving::<ChatServiceServer<ChatRpcService>>()
+                            .await;
+                    }
+                    Err((e, _)) => {
+                        error!("Kafka健康检查失败: {}", e);
+                        // Kafka连接失败，设置为not serving状态
+                        let _ = health_reporter_clone
+                            .set_not_serving::<ChatServiceServer<ChatRpcService>>()
+                            .await;
+                    }
+                }
+            }
+        });
 
         // 创建日志拦截器
         // 用于记录和跟踪所有RPC请求
@@ -86,6 +126,7 @@ impl ChatRpcService {
 
         // 启动RPC服务器，添加健康检查和聊天服务
         Server::builder()
+            .add_service(health_service) // 添加健康检查服务
             .add_service(service)
             .serve(config.rpc.chat.rpc_server_url().parse().unwrap())
             .await

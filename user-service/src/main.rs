@@ -8,6 +8,8 @@ use tokio::sync::oneshot;
 use tonic::transport::Server;
 use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::{error, info};
+// 添加gRPC健康检查相关导入
+use tonic_health::server::HealthReporter;
 
 mod model;
 mod repository;
@@ -75,7 +77,7 @@ async fn main() -> Result<()> {
     };
 
     // 初始化用户服务
-    let user_service = UserServiceImpl::new(db_pool);
+    let user_service = UserServiceImpl::new(db_pool.clone());
 
     // 创建并注册到服务注册中心
     let service_id =
@@ -100,11 +102,47 @@ async fn main() -> Result<()> {
     // 创建日志拦截器
     let logging_interceptor = LoggingInterceptor::new();
 
+    // 创建gRPC健康检查服务
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    
+    // 设置服务健康状态
+    health_reporter
+        .set_serving::<UserServiceServer<UserServiceImpl>>()
+        .await;
+
+    // 启动一个后台任务来定期检查数据库连接并更新健康状态
+    let db_pool_health = db_pool.clone();
+    let mut health_reporter_clone = health_reporter.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            
+            // 检查数据库连接
+            match sqlx::query("SELECT 1").fetch_one(&db_pool_health).await {
+                Ok(_) => {
+                    // 数据库连接正常，设置为serving状态
+                    let _ = health_reporter_clone
+                        .set_serving::<UserServiceServer<UserServiceImpl>>()
+                        .await;
+                }
+                Err(e) => {
+                    error!("数据库健康检查失败: {}", e);
+                    // 数据库连接失败，设置为not serving状态
+                    let _ = health_reporter_clone
+                        .set_not_serving::<UserServiceServer<UserServiceImpl>>()
+                        .await;
+                }
+            }
+        }
+    });
+
     // 启动gRPC服务
     info!("用户服务启动，监听地址: {}", addr);
 
-    // 创建服务器并运行，添加反射服务和拦截器
-    let server = Server::builder()
+    // 创建服务器并运行，添加反射服务、健康检查服务和拦截器
+    let grpc_server = Server::builder()
+        .add_service(health_service) // 添加健康检查服务
         .add_service(UserServiceServer::with_interceptor(
             user_service,
             logging_interceptor,
@@ -112,11 +150,14 @@ async fn main() -> Result<()> {
         .add_service(reflection_service) // 添加反射服务
         .serve_with_shutdown(addr, async {
             let _ = shutdown_rx.await;
-            info!("接收到关闭信号，gRPC服务准备关闭");
+            info!("接收到关闭信号，gRPC服务器准备关闭");
         });
 
-    // 等待服务器关闭
-    server.await?;
+    // 运行gRPC服务器
+    if let Err(e) = grpc_server.await {
+        error!("gRPC服务器错误: {}", e);
+    }
+    
     info!("gRPC服务已关闭");
 
     // 等待关闭信号处理完成

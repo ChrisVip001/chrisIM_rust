@@ -223,7 +223,7 @@ rpc:
       - api
       - grpc
     health_check:
-      health_type: "ttl"
+      health_type: "http"
       name: "api"
       url: "/health"
       interval: 15
@@ -238,9 +238,9 @@ rpc:
       - ws
       - grpc
     health_check:
-      health_type: "ttl"
+      health_type: "grpc"
       name: "ws"
-      url: "/health"
+      url: ""
       interval: 15
       timeout: 60
       deregister_after: 60
@@ -253,9 +253,9 @@ rpc:
       - chat
       - grpc
     health_check:
-      health_type: "ttl"
+      health_type: "grpc"
       name: "chat"
-      url: "/health"
+      url: ""
       interval: 15
       timeout: 60
       deregister_after: 60
@@ -268,9 +268,9 @@ rpc:
       - pusher
       - grpc
     health_check:
-      health_type: "ttl"
+      health_type: "grpc"
       name: "pusher"
-      url: "/health"
+      url: ""
       interval: 15
       timeout: 60
       deregister_after: 60
@@ -283,9 +283,9 @@ rpc:
       - user
       - grpc
     health_check:
-      health_type: "ttl"
+      health_type: "grpc"
       name: "user"
-      url: "/health"
+      url: ""
       interval: 15
       timeout: 60
       deregister_after: 60
@@ -298,9 +298,9 @@ rpc:
       - friend
       - grpc
     health_check:
-      health_type: "ttl"
+      health_type: "grpc"
       name: "friend"
-      url: "/health"
+      url: ""
       interval: 15
       timeout: 60
       deregister_after: 60
@@ -313,9 +313,9 @@ rpc:
       - group
       - grpc
     health_check:
-      health_type: "ttl"
+      health_type: "grpc"
       name: "group"
-      url: "/health"
+      url: ""
       interval: 15
       timeout: 60
       deregister_after: 60

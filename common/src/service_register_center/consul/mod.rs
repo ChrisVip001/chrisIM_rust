@@ -179,28 +179,43 @@ impl ServiceRegister for Consul {
         let ttl_interval;
         // 根据健康检查类型添加相应配置
         if let Some(check) = &registration.check {
-            if check.health_type == "http" {
-                // HTTP健康检查
-                let check_json = json!({
-                    "Name": check.name,
-                    "HTTP": check.url,
-                    "Interval": check.interval.clone() + "s",
-                    "Timeout": check.timeout.clone() + "s",
-                    "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
-                });
-                payload["Check"] = check_json;
-                info!("Using HTTP health check for service: {}", registration.name);
-            } else {
-                // gRPC服务使用TTL健康检查
-                let check_json = json!({
-                    "Name": check.name,
-                    "Notes": "TTL health check for gRPC service",
-                    "TTL": check.interval.clone() + "s", // 15秒TTL
-                    "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
-                });
-                payload["Check"] = check_json;
-                info!("Using TTL health check for service: {}", registration.name);
-                is_ttl = true;
+            match check.health_type.as_str() {
+                "http" => {
+                    // HTTP健康检查
+                    let check_json = json!({
+                        "Name": check.name,
+                        "HTTP": check.url,
+                        "Interval": check.interval.clone() + "s",
+                        "Timeout": check.timeout.clone() + "s",
+                        "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
+                    });
+                    payload["Check"] = check_json;
+                    info!("Using HTTP health check for service: {}", registration.name);
+                }
+                "grpc" => {
+                    // gRPC健康检查
+                    let check_json = json!({
+                        "Name": check.name,
+                        "GRPC": format!("{}:{}", registration.host, registration.port),
+                        "Interval": check.interval.clone() + "s",
+                        "Timeout": check.timeout.clone() + "s",
+                        "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
+                    });
+                    payload["Check"] = check_json;
+                    info!("Using gRPC health check for service: {}", registration.name);
+                }
+                _ => {
+                    // 默认使用TTL健康检查
+                    let check_json = json!({
+                        "Name": check.name,
+                        "Notes": "TTL health check for service",
+                        "TTL": check.interval.clone() + "s",
+                        "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
+                    });
+                    payload["Check"] = check_json;
+                    info!("Using TTL health check for service: {}", registration.name);
+                    is_ttl = true;
+                }
             }
             ttl_interval = check.interval.parse::<u64>().unwrap_or(15);
         } else {

@@ -13,6 +13,7 @@ dashmap = "5.5.3"
 futures = "0.3.30"
 tokio = { workspace = true, features = ["full"] }
 tonic = { workspace = true }
+tonic-health = { workspace = true }
 axum = { workspace = true, features = ["macros", "ws"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
