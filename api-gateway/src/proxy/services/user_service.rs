@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use tracing::{error, debug, info};
 
 use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
+use crate::auth::jwt::UserInfo;
 
 /// 用户服务处理器
 #[derive(Clone)]
@@ -27,6 +28,7 @@ impl UserServiceHandler {
         method: &Method,
         path: &str,
         body: Value,
+        jwt_user_info: Option<UserInfo>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理用户服务请求: {} {}", method, path);
 
@@ -320,6 +322,21 @@ impl UserServiceHandler {
                         Ok(error_response(&format!("验证码验证失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
                     }
                 }
+            }
+
+            //根据token获取用户信息(用户id等信息已经在jwt_user_info里了用id查找用户详细信息)
+            (&Method::GET, "getUserInfo") => {
+                let user_id = match &jwt_user_info {
+                    Some(user_info) => {
+                        user_info.user_id.to_string()
+                    },
+                    None => return Ok(error_response("未授权", StatusCode::UNAUTHORIZED))
+                };
+
+                let response = self.client.get_user(&user_id).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+
+                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
             }
 
             // 其他未知方法

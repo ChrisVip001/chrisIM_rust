@@ -13,7 +13,7 @@ use common::config::{AppConfig, ConfigLoader};
 use common::service_discovery::LbWithServiceDiscovery;
 use common::grpc_client::base::{service_register_center, get_rpc_client};
 use std::sync::{Arc, RwLock};
-
+use crate::auth::jwt::UserInfo;
 use crate::proxy::services::{
     UserServiceHandler, FriendServiceHandler, GroupServiceHandler,
     common::error_response
@@ -170,11 +170,13 @@ impl GrpcClientFactoryImpl {
         (service_name, grpc_service, method_name)
     }
 
-    /// 将请求体和URL参数合并到一个Value中
-    async fn extract_request_body(req: Request<Body>) -> Result<(Method, String, Value), anyhow::Error> {
+    /// 将请求体和URL参数合并到一个Value中，并提取用户信息
+    async fn extract_request_body(req: Request<Body>) -> Result<(Method, String, Value, Option<UserInfo>), anyhow::Error> {
         let method = req.method().clone();
         let path = req.uri().path().to_string();
         let query = req.uri().query().map(|q| q.to_string());
+        // 从请求扩展获取用户信息
+        let user_info = req.extensions().get::<UserInfo>().cloned();
 
         // 提取请求体
         let body_bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
@@ -198,7 +200,7 @@ impl GrpcClientFactoryImpl {
             }
         };
 
-        Ok((method, path, body))
+        Ok((method, path, body, user_info))
     }
 }
 
@@ -214,7 +216,7 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
             debug!("收到gRPC转发请求，目标: {}", target_url);
 
             // 提取请求信息
-            let (method, path, body) = match Self::extract_request_body(req).await {
+            let (method, path, body, user_info) = match Self::extract_request_body(req).await {
                 Ok(data) => data,
                 Err(err) => {
                     error!("请求解析失败: {}", err);
@@ -230,7 +232,7 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                 "users" => {
                     // 延迟初始化获取用户服务处理器
                     let mut user_service = self_clone.user_service.get();
-                    user_service.handle_request(&method, &path, body).await
+                    user_service.handle_request(&method, &path, body, user_info.clone()).await
                         .unwrap_or_else(|err| {
                             error!("处理用户服务请求失败: {}", err);
                             error_response(&format!("处理用户服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
@@ -239,7 +241,7 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                 "friends" => {
                     // 延迟初始化获取好友服务处理器
                     let mut friend_service = self_clone.friend_service.get();
-                    friend_service.handle_request(&method, &path, body).await
+                    friend_service.handle_request(&method, &path, body, user_info.clone()).await
                         .unwrap_or_else(|err| {
                             error!("处理好友服务请求失败: {}", err);
                             error_response(&format!("处理好友服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
@@ -248,7 +250,7 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                 "groups" => {
                     // 延迟初始化获取群组服务处理器
                     let mut group_service = self_clone.group_service.get();
-                    group_service.handle_request(&method, &path, body).await
+                    group_service.handle_request(&method, &path, body, user_info.clone()).await
                         .unwrap_or_else(|err| {
                             error!("处理群组服务请求失败: {}", err);
                             error_response(&format!("处理群组服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)

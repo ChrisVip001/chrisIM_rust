@@ -8,7 +8,7 @@ gateway:
         name: "用户服务"
         path_prefix: "/api/users"
         service_type: "User"
-        require_auth: false
+        require_auth: true
         methods: []
         rewrite_headers: {}
 
@@ -99,8 +99,13 @@ gateway:
     # 路径白名单
     path_whitelist:
       - "/api/health"
-      - "/api/user/login"
       - "/metrics"
+      - "/api/user/login"
+      - "/api/user/loginByPhone"
+      - "/api/user/loginByPhone"
+      - "/api/users/registerByPhone"
+      - "/api/users/registerByUsername"
+      - "/api/users/sendVerificationCode"
 
   # Metrics暴露端点 指标配置
   metrics_endpoint: "/metrics"

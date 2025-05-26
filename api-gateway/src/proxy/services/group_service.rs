@@ -11,6 +11,7 @@ use super::common::{
     success_response, extract_string_param, get_optional_string, 
     get_i64_param, timestamp_to_datetime_string,
 };
+use crate::auth::jwt::UserInfo;
 
 /// 群组服务处理器
 #[derive(Clone)]
@@ -30,6 +31,7 @@ impl GroupServiceHandler {
         method: &Method,
         path: &str,
         body: Value,
+        jwt_user_info: Option<UserInfo>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理群组服务请求: {} {}", method, path);
 

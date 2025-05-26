@@ -9,6 +9,7 @@ use tracing::{error, debug};
 
 use super::common::{success_response, extract_string_param, timestamp_to_datetime_string,
                     get_i64_param, get_optional_string};
+use crate::auth::jwt::UserInfo;
 
 /// 好友服务处理器
 #[derive(Clone)]
@@ -28,6 +29,7 @@ impl FriendServiceHandler {
         method: &Method,
         path: &str,
         body: Value,
+        jwt_user_info: Option<UserInfo>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理好友服务请求: {} {}", method, path);
 
