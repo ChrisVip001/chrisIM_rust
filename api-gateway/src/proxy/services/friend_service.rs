@@ -116,7 +116,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.delete_friend(&user_id, &friend_id).await?;
 
-                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+                Ok(success_response(response.success, StatusCode::OK))
             }
 
             // 检查好友关系

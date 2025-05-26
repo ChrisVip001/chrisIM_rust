@@ -9,7 +9,7 @@ use common::proto::user::VerifyPasswordRequest;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, error, info};
-use crate::proxy::services::common::error_response;
+use crate::proxy::services::common::{error_response,success_response};
 use common::grpc_client::UserServiceGrpcClient;
 
 /// 登录请求
@@ -154,7 +154,7 @@ pub async fn login_by_phone(
     ).await?;
 
     // 返回响应
-    Ok((StatusCode::OK, Json(login_response)).into_response())
+    Ok(success_response(login_response, StatusCode::OK))
 }
 
 /// 处理登录请求
@@ -209,7 +209,7 @@ pub async fn login(
     ).await?;
 
     // 返回响应
-    Ok((StatusCode::OK, Json(login_response)).into_response())
+    Ok(success_response(login_response, StatusCode::OK))
 }
 
 /// 处理令牌刷新请求
@@ -244,7 +244,7 @@ pub async fn refresh_token(
     info!("用户 {} 刷新令牌成功", username);
 
     // 返回响应
-    Ok((StatusCode::OK, Json(refresh_response)).into_response())
+    Ok(success_response(refresh_response, StatusCode::OK))
 }
 
 /// 从用户信息中提取额外数据
