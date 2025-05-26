@@ -59,8 +59,8 @@ impl UserRepository {
             password_hash = hash_password(&data.password)?;
         }
         // 生成用户ID
-        // let id = Uuid::new_v4().simple();
-        let id = generate_user_id();
+        let id = generate_user_id()
+            .map_err(|e| Error::Internal(format!("生成用户ID失败: {}", e)))?;
         // 插入用户数据
         let row = sqlx::query!(
             r#"
@@ -182,8 +182,8 @@ impl UserRepository {
             password_hash = hash_password(&data.password)?;
         }
         // 生成用户ID
-        // let id = Uuid::new_v4().simple();
-        let id = generate_user_id();
+        let id = generate_user_id()
+            .map_err(|e| Error::Internal(format!("生成用户ID失败: {}", e)))?;
         // 插入用户数据
         let row = sqlx::query!(
             r#"

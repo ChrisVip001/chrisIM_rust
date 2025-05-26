@@ -76,7 +76,7 @@ impl UserServiceHandler {
                 Ok(success_with_message(
                     self.convert_user_to_json(&user),
                     "用户创建成功",
-                    StatusCode::CREATED
+                    StatusCode::OK
                 ))
             }
 
@@ -145,7 +145,7 @@ impl UserServiceHandler {
                         Ok(success_with_message(
                             self.convert_user_to_json(&user),
                             "用户注册成功",
-                            StatusCode::CREATED
+                            StatusCode::OK
                         ))
                     }
                     Err(err) => {
@@ -180,7 +180,7 @@ impl UserServiceHandler {
                         Ok(success_with_message(
                             self.convert_user_to_json(&user),
                             "用户注册成功",
-                            StatusCode::CREATED
+                            StatusCode::OK
                         ))
                     }
                     Err(err) => {

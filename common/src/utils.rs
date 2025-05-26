@@ -7,6 +7,9 @@ use rand::Rng;
 use uuid::Uuid;
 use regex::Regex;
 
+// 导入雪花ID模块
+use crate::snowflake::SNOWFLAKE;
+
 /// 生成随机盐值用于密码哈希
 pub fn generate_salt() -> String {
     SaltString::generate(&mut OsRng).to_string()
@@ -90,18 +93,18 @@ mod tests {
     }
 }
 
-
-pub fn generate_user_id() -> String {
-    let uuid = Uuid::new_v4().simple(); // 生成32位的UUID（无连字符）
-    let mut rng = rand::rng();
-
-    // 取UUID的前16位，并补充6位随机字母和数字
-    let prefix = &uuid.to_string()[..16];
-    let suffix: String = (0..6)
-        .map(|_| rng.sample(Alphanumeric) as char)
-        .collect();
-
-    format!("{}{}", prefix, suffix)
+/// 使用雪花算法生成用户ID
+pub fn generate_user_id() -> Result<String> {
+    // 最多重试3次
+    for _ in 0..3 {
+        match SNOWFLAKE.generate() {
+            Ok(id) => return Ok(id.to_string()),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)), // 短暂延迟后重试
+        }
+    }
+    
+    // 如果多次重试仍然失败，返回错误
+    Err(Error::Internal("无法生成雪花ID，请检查系统时钟".to_string()))
 }
 
 

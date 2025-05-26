@@ -244,10 +244,10 @@ impl UserService for UserServiceImpl {
         // 生成用户自定义ID
         reg_data.custom_id = self.generate_unique_user_id().await;
         
-        // // 如果没有指定用户名，则使用自定义ID作为用户名
-        // if reg_data.username.is_empty() {
-        //     reg_data.username = user_data.custom_id.clone();
-        // }
+        // 如果没有指定用户名，则使用自定义ID作为用户名
+        if reg_data.username.is_empty() {
+            reg_data.username = reg_data.custom_id.clone();
+        }
 
         // 手机号格式校验
         if !validate_phone(&reg_data.phone) {
@@ -259,7 +259,18 @@ impl UserService for UserServiceImpl {
         if req.verify_code.is_empty() {
             return Err(Status::invalid_argument("验证码不能为空"));
         }
-        
+
+        // 注册时，应该确保用户不存在
+        match self.repository.get_user_by_phone(&reg_data.phone).await {
+            Ok(_) => {
+                error!("手机号已注册: {}", reg_data.phone);
+                return Err(Status::already_exists(format!("手机号已注册: {}", reg_data.phone)));
+            },
+            Err(_) => {
+                debug!("手机号未注册，可以继续注册流程: {}", reg_data.phone);
+            }
+        }
+
         let verify_result = self.verify_phone_code(&reg_data.phone, &req.verify_code, "register").await?;
         if !verify_result {
             return Err(Status::invalid_argument("验证码不正确或已过期"));

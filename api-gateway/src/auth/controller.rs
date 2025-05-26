@@ -59,11 +59,11 @@ pub struct RefreshTokenRequest {
 #[derive(Debug, Serialize)]
 pub struct UserInfoResponse {
     /// 用户ID
-    pub user_id: i64,
+    pub user_id: String,
     /// 用户名
     pub username: String,
     /// 租户ID
-    pub tenant_id: i64,
+    pub tenant_id: String,
     /// 租户名称
     pub tenant_name: String,
     /// 用户邮箱
@@ -72,6 +72,8 @@ pub struct UserInfoResponse {
     pub nickname: Option<String>,
     /// 头像URL
     pub avatar_url: Option<String>,
+    /// 密信id
+    pub custom_id: Option<String>,
 }
 
 /// 用户服务共享实例
@@ -264,6 +266,12 @@ fn extract_user_extra(user: &common::proto::user::User) -> std::collections::Has
         extra.insert("avatar_url".to_string(), avatar_url.clone());
     }
 
+    // 如果存在密信id，添加到额外信息中
+    if !user.custom_id.is_empty() {
+        extra.insert("custom_id".to_string(), user.custom_id.clone());
+    }
+
+
     extra
 }
 
@@ -301,11 +309,12 @@ async fn build_login_response(
 
     // 构建用户信息响应
     let user_info = UserInfoResponse {
-        user_id,
+        user_id: user_id.to_string(),
         username: username.to_string(),
-        tenant_id,
+        tenant_id: tenant_id.to_string(),
         tenant_name: tenant_name.to_string(),
         email: extra.get("email").cloned(),
+        custom_id: extra.get("custom_id").cloned(),
         nickname: extra.get("nickname").cloned(),
         avatar_url: extra.get("avatar_url").cloned(),
     };

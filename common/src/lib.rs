@@ -12,5 +12,6 @@ pub mod types;
 pub mod service_discovery;
 pub mod service_register_center;
 pub mod sms;
+pub mod snowflake;
 
 pub use error::{Error, Result};

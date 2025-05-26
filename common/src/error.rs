@@ -150,6 +150,10 @@ impl IntoResponse for Error {
             Error::InvalidToken => (StatusCode::UNAUTHORIZED, "Token无效".to_string()),
             Error::InvalidIssuer => (StatusCode::UNAUTHORIZED, "签发者无效".to_string()),
             Error::InsufficientPermissions => (StatusCode::FORBIDDEN, "没有足够的权限".to_string()),
+            Error::Authentication(msg) => (
+                StatusCode::UNAUTHORIZED,
+                format!("认证失败: {}", msg),
+            ),
             Error::Internal(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("内部服务错误: {}", msg),
@@ -165,8 +169,9 @@ impl IntoResponse for Error {
         };
 
         let json = Json(json!({
-            "error": status.as_u16(),
+            "code": status.as_u16(),
             "message": message,
+            "success": false
         }));
 
         (status, json).into_response()
