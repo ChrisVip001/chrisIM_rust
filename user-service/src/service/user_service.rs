@@ -395,7 +395,7 @@ impl UserService for UserServiceImpl {
         request: Request<VerifyPasswordRequest>,
     ) -> std::result::Result<Response<VerifyPasswordResponse>, Status> {
         let req = request.into_inner();
-        debug!("验证用户密码请求，用户名: {}", req.username);
+        debug!("验证用户密码请求，用户名/手机号: {}", req.username);
 
         // 验证密码
         match self
@@ -427,6 +427,44 @@ impl UserService for UserServiceImpl {
                 Err(err.into())
             }
         }
+    }
+
+    // 验证手机号登录验证码（用于登录）
+    async fn verify_phone_code_login(&self, request: Request<VerifyPhoneCodeRequest>) -> Result<Response<VerifyPasswordResponse>, Status> {
+        let req = request.into_inner();
+        debug!("验证用户验证码登录，手机号: {}", req.phone);
+
+        // 验证手机号
+        if !validate_phone(&req.phone) {
+            return Err(Status::invalid_argument("手机号格式不正确"));
+        }
+
+        // 验证验证码
+        if req.code.is_empty() {
+            return Err(Status::invalid_argument("验证码不能为空"));
+        }
+        
+        let verify_result = self.verify_phone_code(&req.phone, &req.code, "login").await?;
+        if !verify_result {
+            return Err(Status::invalid_argument("验证码不正确或已过期"));
+        }
+        
+        // 通过手机号获取用户
+        let user = match self.repository.get_user_by_phone(&req.phone).await {
+            Ok(user) => user,
+            Err(err) => {
+                error!("通过手机号获取用户失败: {}", err);
+                return Err(err.into());
+            }
+        };
+        
+        debug!("手机验证码登录成功，用户ID: {}", user.id);
+        
+        // 返回响应
+        Ok(Response::new(VerifyPasswordResponse {
+            valid: true,
+            user: Some(ProtoUser::from(user)),
+        }))
     }
 
     /// 搜索用户

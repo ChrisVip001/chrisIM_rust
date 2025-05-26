@@ -321,6 +321,51 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// 根据用户名或手机号查询用户
+    pub async fn get_user_by_username_phone(&self, username: &str) -> Result<User> {
+        let row = sqlx::query!(
+            r#"
+            SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            FROM users
+            WHERE username = $1 or phone =$1
+            "#,
+            username
+        )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|err| {
+                if let sqlx::Error::RowNotFound = err {
+                    Error::NotFound(format!("用户名或手机号 {} 不存在", username))
+                } else {
+                    error!("查询用户失败: {}", err);
+                    Error::Database(err)
+                }
+            })?;
+
+        let user = User {
+            id: row.id,
+            username: row.username.unwrap_or_default(),
+            email: row.email,
+            password: row.password,
+            nickname: row.nickname,
+            avatar_url: row.avatar_url,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone,
+            address: row.address,
+            head_image: row.head_image,
+            head_image_thumb: row.head_image_thumb,
+            sex: row.sex.map(|x| x as i32),
+            user_stat: row.user_stat.unwrap_or_default() as i32,
+            tenant_id: row.tenant_id.unwrap_or_default(),
+            last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
+        };
+
+        Ok(user)
+    }
+
     /// 根据邮箱查询用户
     pub async fn get_user_by_email(&self, email: &str) -> Result<User> {
         let row = sqlx::query!(
@@ -501,7 +546,7 @@ impl UserRepository {
     /// 验证用户密码
     pub async fn verify_user_password(&self, username: &str, password: &str) -> Result<User> {
         // 查询用户
-        let user = self.get_user_by_username(username).await?;
+        let user = self.get_user_by_username_phone(username).await?;
 
         // 验证密码
         let is_valid = verify_password(password, &user.password)?;

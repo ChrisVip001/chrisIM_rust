@@ -35,7 +35,7 @@ impl RouterBuilder {
         let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
         let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
             &config,
-            "user-service".to_string(),
+            "user".to_string(),
         )
         .await
         .expect("无法连接用户服务");
@@ -126,6 +126,7 @@ impl RouterBuilder {
         // 添加登录路由
         router
             .route("/api/user/login", post(controller::login))
+            .route("/api/user/loginByPhone", post(controller::login_by_phone))
             .route("/api/user/refresh", post(controller::refresh_token))
     }
 

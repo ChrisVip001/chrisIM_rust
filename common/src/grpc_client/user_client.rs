@@ -60,6 +60,12 @@ impl UserServiceGrpcClient {
         Ok(response.into_inner())
     }
 
+    /// 验证手机号登录
+    pub async fn verify_phone_code_login(&mut self, request: VerifyPhoneCodeRequest) -> Result<VerifyPasswordResponse> {
+
+        let response = self.service_client.verify_phone_code_login(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
     /// 搜索用户
     pub async fn search_users(&mut self, query: &str, page: i32, page_size: i32) -> Result<SearchUsersResponse> {
 

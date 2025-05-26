@@ -21,6 +21,9 @@ service UserService {
   // 验证用户密码（用于登录）
   rpc VerifyPassword (VerifyPasswordRequest) returns (VerifyPasswordResponse);
   
+  // 验证手机号登录验证码（用于登录）
+  rpc VerifyPhoneCodeLogin (VerifyPhoneCodeRequest) returns (VerifyPasswordResponse);
+  
   // 搜索用户
   rpc SearchUsers (SearchUsersRequest) returns (SearchUsersResponse);
 
