@@ -358,5 +358,5 @@ sms:
     code_length: 6                                     # 验证码长度
     region: ap-guangzhou                               # 地域，如ap-guangzhou
     throttle_enabled: true                             # 是否启用防重复发送限制
-    throttle_seconds: 300                              # 限制时间内不允许重复发送（秒）
+    throttle_seconds: 20                              # 限制时间内不允许重复发送（秒）
 

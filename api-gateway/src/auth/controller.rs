@@ -20,7 +20,7 @@ pub struct LoginRequest {
     /// 密码
     pub password: String,
     /// 租户ID
-    pub tenant_id: i64,
+    pub tenant_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,7 +30,7 @@ pub struct LoginByPhoneRequest {
     /// 验证码
     pub verify_code: String,
     /// 租户ID
-    pub tenant_id: i64,
+    pub tenant_id: String,
 }
 
 /// 登录响应
