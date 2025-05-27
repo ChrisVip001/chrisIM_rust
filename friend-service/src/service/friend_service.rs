@@ -576,7 +576,7 @@ impl FriendService for FriendServiceImpl {
             .into_iter()
             .map(|(id, username, nickname, avatar_url, phone, friendship_status)| {
                 let friend = PotentialFriend::from_tuple(
-                    id, username, nickname, avatar_url, phone, friendship_status
+                    id, username, nickname, avatar_url, phone, friendship_status.parse::<i32>().unwrap_or(-1)
                 );
                 friend.to_proto()
             })
