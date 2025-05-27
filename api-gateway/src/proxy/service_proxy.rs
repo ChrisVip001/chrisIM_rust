@@ -60,17 +60,60 @@ impl ServiceProxy {
         req: Request<Body>,
         service_type: &ServiceType,
     ) -> Response<Body> {
-        // 获取目标服务名称
+        // 根据服务类型决定转发方式
+        match service_type {
+            // 核心业务服务使用gRPC转发
+            ServiceType::User | ServiceType::Friend | ServiceType::Group => {
+                self.forward_grpc_request(req, service_type).await
+            }
+            // HTTP服务或静态服务使用HTTP转发
+            ServiceType::HttpService(_) | ServiceType::Static | ServiceType::Chat => {
+                self.forward_http_request_by_type(req, service_type).await
+            }
+            // gRPC服务使用gRPC转发
+            ServiceType::GrpcService(_) => {
+                self.forward_grpc_request(req, service_type).await
+            }
+        }
+    }
+
+    /// 转发gRPC请求
+    async fn forward_grpc_request(
+        &self,
+        req: Request<Body>,
+        service_type: &ServiceType,
+    ) -> Response<Body> {
+        let service_name = self.get_service_name(service_type);
+        
+        // 获取目标服务地址
+        match self.get_service_url(&service_name).await {
+            Ok(service_url) => {
+                debug!("转发gRPC请求到服务: {}", service_url);
+                self.grpc_client_factory.forward_request(req, service_url).await
+            }
+            Err(e) => {
+                error!("无法获取gRPC服务地址: {}", e);
+                self.service_unavailable_response(&service_name)
+            }
+        }
+    }
+
+    /// 转发HTTP请求（根据服务类型）
+    async fn forward_http_request_by_type(
+        &self,
+        req: Request<Body>,
+        service_type: &ServiceType,
+    ) -> Response<Body> {
         let service_name = self.get_service_name(service_type);
 
         // 获取目标服务地址
         match self.get_service_url(&service_name).await {
             Ok(service_url) => {
-                debug!("转发请求到服务: {}", service_url);
+                debug!("转发HTTP请求到服务: {}", service_url);
                 self.forward_http_request(req, &service_url).await
             }
             Err(e) => {
-                error!("无法获取服务地址: {}", e);
+                error!("无法获取HTTP服务地址: {}", e);
                 self.service_unavailable_response(&service_name)
             }
         }
