@@ -9,7 +9,7 @@ use crate::proto::friend::{
     SendFriendRequestRequest, BlockUserRequest, BlockUserResponse, UnblockUserRequest, UnblockUserResponse,
     CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
     DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
-    GetGroupFriendsRequest, GetGroupFriendsResponse,
+    GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse,
 };
 
 use crate::service_discovery::LbWithServiceDiscovery;
@@ -210,6 +210,21 @@ impl FriendServiceGrpcClient {
         });
 
         let response = self.service_client.get_group_friends(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 搜索潜在好友
+    pub async fn search_potential_friends(
+        &mut self,
+        user_id: &str,
+        search_term: &str,
+    ) -> Result<SearchPotentialFriendsResponse> {
+        let request = Request::new(SearchPotentialFriendsRequest {
+            user_id: user_id.to_string(),
+            search_term: search_term.to_string(),
+        });
+
+        let response = self.service_client.search_potential_friends(request).await?;
         Ok(response.into_inner())
     }
 }

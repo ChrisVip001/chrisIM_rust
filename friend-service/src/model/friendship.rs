@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use common::proto::friend::{Friendship as ProtoFriendship, FriendshipStatus};
+use common::proto::friend::{Friendship as ProtoFriendship, FriendshipStatus, PotentialFriend as ProtoPotentialFriend};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgRow, FromRow, Row};
 use std::time::SystemTime;
@@ -113,6 +113,47 @@ impl FriendGroup {
             created_at: Some(prost_types::Timestamp::from(SystemTime::from(self.created_at))),
             updated_at: Some(prost_types::Timestamp::from(SystemTime::from(self.updated_at))),
             friend_count: self.friend_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PotentialFriend {
+    pub id: String,
+    pub username: String,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub phone: Option<String>,
+    pub friendship_status: i32,
+}
+
+impl PotentialFriend {
+    pub fn to_proto(&self) -> ProtoPotentialFriend {
+        ProtoPotentialFriend {
+            id: self.id.clone(),
+            username: self.username.clone(),
+            nickname: self.nickname.clone(),
+            avatar_url: self.avatar_url.clone(),
+            phone: self.phone.clone(),
+            friendship_status: self.friendship_status,
+        }
+    }
+    
+    pub fn from_tuple(
+        id: String,
+        username: String,
+        nickname: Option<String>,
+        avatar_url: Option<String>,
+        phone: Option<String>,
+        friendship_status: i32,
+    ) -> Self {
+        Self {
+            id,
+            username,
+            nickname,
+            avatar_url,
+            phone,
+            friendship_status,
         }
     }
 }

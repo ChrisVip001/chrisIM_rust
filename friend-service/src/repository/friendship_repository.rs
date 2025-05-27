@@ -433,13 +433,74 @@ impl FriendshipRepository {
         }
     }
 
+    /// 搜索潜在好友
+    /// 
+    /// 根据custom_id或手机号搜索用户，并返回与当前用户的好友关系
+    pub async fn search_potential_friends(
+        &self,
+        user_id: &str,
+        search_term: &str,
+    ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, i32)>> {
+        // 构建SQL查询，自动匹配custom_id或手机号
+        let query = r#"
+            SELECT 
+                u.id, 
+                u.username, 
+                u.nickname, 
+                u.avatar_url, 
+                u.phone,
+                COALESCE(f.status, -1) as friendship_status
+            FROM 
+                users u
+            LEFT JOIN 
+                (
+                    SELECT 
+                        CASE 
+                            WHEN user_id = $1 THEN friend_id 
+                            WHEN friend_id = $1 THEN user_id 
+                        END as related_user_id,
+                        status
+                    FROM 
+                        friendships
+                    WHERE 
+                        user_id = $1 OR friend_id = $1
+                ) f ON u.id = f.related_user_id
+            WHERE 
+                u.id != $1 AND (u.custom_id = $2 OR u.phone = $2)
+            ORDER BY 
+                u.id
+        "#;
+        
+        // 执行查询
+        let rows = sqlx::query(query)
+            .bind(user_id)
+            .bind(search_term)
+            .fetch_all(&self.pool)
+            .await?;
+            
+        // 提取结果
+        let results = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("id"),
+                    row.get::<String, _>("username"),
+                    row.get::<Option<String>, _>("nickname"),
+                    row.get::<Option<String>, _>("avatar_url"),
+                    row.get::<Option<String>, _>("phone"),
+                    row.get::<i32, _>("friendship_status"),
+                )
+            })
+            .collect();
+            
+        Ok(results)
+    }
+    
     // 检查用户是否存在
     pub async fn check_user_exists(&self, user_id: &str) -> Result<bool> {
         let result = sqlx::query!(
             r#"
-            SELECT EXISTS(
-                SELECT 1 FROM users WHERE id = $1
-            ) AS "exists!"
+            SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) as "exists!"
             "#,
             user_id
         )

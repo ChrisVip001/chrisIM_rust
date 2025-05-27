@@ -7,13 +7,15 @@ use common::proto::friend::{
     UnblockUserRequest,BlockUserRequest,UnblockUserResponse,BlockUserResponse,
     CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
     DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
-    GetGroupFriendsRequest, GetGroupFriendsResponse,
+    GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, 
+    SearchPotentialFriendsResponse,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use crate::repository::friendship_repository::FriendshipRepository;
+use crate::model::friendship::PotentialFriend;
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
@@ -544,6 +546,44 @@ impl FriendService for FriendServiceImpl {
         Ok(Response::new(GetGroupFriendsResponse {
             friends: friend_protos,
             total,
+        }))
+    }
+
+    // 搜索潜在好友
+    async fn search_potential_friends(
+        &self,
+        request: Request<SearchPotentialFriendsRequest>,
+    ) -> Result<Response<SearchPotentialFriendsResponse>, Status> {
+        let req = request.into_inner();
+        
+        let user_id = req.user_id.clone();
+        let search_term = req.search_term.clone();
+        
+        // 进行搜索
+        let users = match self.repository.search_potential_friends(
+            &user_id,
+            &search_term
+        ).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("搜索潜在好友失败: {}", e);
+                return Err(Status::internal("搜索潜在好友失败"));
+            }
+        };
+        
+        // 转换为PotentialFriend对象
+        let potential_friends: Vec<_> = users
+            .into_iter()
+            .map(|(id, username, nickname, avatar_url, phone, friendship_status)| {
+                let friend = PotentialFriend::from_tuple(
+                    id, username, nickname, avatar_url, phone, friendship_status
+                );
+                friend.to_proto()
+            })
+            .collect();
+        
+        Ok(Response::new(SearchPotentialFriendsResponse {
+            users: potential_friends,
         }))
     }
 }

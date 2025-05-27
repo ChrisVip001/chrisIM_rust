@@ -216,6 +216,29 @@ impl FriendServiceHandler {
                     "total": response.total
                 }), StatusCode::OK))
             }
+            
+            // 搜索潜在好友（通过custom_id或手机号精确搜索）
+            (&Method::POST, "searchFriends") => {
+                let search_term = extract_string_param(&body, "searchTerm", Some("search_term"))?;
+                
+                // 调用搜索接口，如果出错则返回空列表
+                let response = match self.client.search_potential_friends(
+                    &user_id, 
+                    &search_term
+                ).await {
+                    Ok(response) => response,
+                    Err(e) => {
+                        error!("搜索潜在好友失败: {}", e);
+                        // 返回空数组，而不是错误
+                        return Ok(success_response(json!([]), StatusCode::OK));
+                    }
+                };
+                
+                let users = response.users.iter().map(|u| self.convert_potential_friend_to_json(u)).collect::<Vec<_>>();
+                
+                // 直接返回用户数组，不用对象包裹
+                Ok(success_response(json!(users), StatusCode::OK))
+            }
 
             // 其他未实现的方法
             _ => {
@@ -274,6 +297,28 @@ impl FriendServiceHandler {
             "createdAt": timestamp_to_datetime_string(&group.created_at),
             "updatedAt": timestamp_to_datetime_string(&group.updated_at),
             "friendCount": group.friend_count,
+        })
+    }
+    
+    /// 将潜在好友消息转换为JSON
+    fn convert_potential_friend_to_json(&self, friend: &proto::friend::PotentialFriend) -> Value {
+        let status_text = match friend.friendship_status {
+            0 => "PENDING",
+            1 => "ACCEPTED",
+            2 => "REJECTED",
+            3 => "BLOCKED",
+            4 => "EXPIRED",
+            _ => "UNKNOWN"
+        };
+        
+        json!({
+            "id": friend.id,
+            "username": friend.username,
+            "nickname": friend.nickname,
+            "avatarUrl": friend.avatar_url,
+            "phone": friend.phone,
+            "friendshipStatus": friend.friendship_status,
+            "friendshipStatusText": status_text
         })
     }
 } 
