@@ -155,6 +155,7 @@ pub fn generate_refresh_token(
     username: &str,
     tenant_id: i64,
     tenant_name: &str,
+    extra: HashMap<String, String>,
     jwt_config: &common::configs::auth_config::JwtConfig,
 ) -> Result<String, Error> {
     // 获取当前时间戳
@@ -172,7 +173,7 @@ pub fn generate_refresh_token(
         username: username.to_string(),
         tenant_id,
         tenant_name: tenant_name.to_string(),
-        extra: HashMap::new(),
+        extra,
     };
 
     // 生成token

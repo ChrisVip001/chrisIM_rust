@@ -325,7 +325,7 @@ async fn build_login_response(
 
     // 生成刷新令牌
     let refresh_token =
-        jwt::generate_refresh_token(user_id, username, tenant_id, tenant_name, jwt_config)?;
+        jwt::generate_refresh_token(user_id, username, tenant_id, tenant_name, extra.clone(),jwt_config)?;
 
     // 构建用户信息响应
     let user_info = UserInfoResponse {
