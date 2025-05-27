@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use common::proto::friend::{Friendship as ProtoFriendship, FriendshipStatus, PotentialFriend as ProtoPotentialFriend};
+use common::proto::friend::{Friendship as ProtoFriendship, FriendshipStatus, PotentialFriend as ProtoPotentialFriend,
+                          DetailedFriend as ProtoDetailedFriend, FriendType};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgRow, FromRow, Row};
 use std::time::SystemTime;
@@ -154,6 +155,68 @@ impl PotentialFriend {
             avatar_url,
             phone,
             friendship_status,
+        }
+    }
+}
+
+/// 好友详细信息，包含扩展字段
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetailedFriend {
+    pub id: String,
+    pub username: Option<String>,
+    pub nickname: Option<String>,
+    pub avatar_url: Option<String>,
+    pub friendship_created_at: DateTime<Utc>,
+    pub remark: Option<String>,
+    pub is_online: bool,
+    pub is_starred: bool,
+    pub is_top: bool,
+    pub relation_status: i32,
+    pub friend_type: i32,  // 好友类型: 0-普通好友 1-官方账号 2-系统账号
+}
+
+impl DetailedFriend {
+    pub fn to_proto(&self) -> ProtoDetailedFriend {
+        let created_system_time = SystemTime::from(self.friendship_created_at);
+
+        ProtoDetailedFriend {
+            id: self.id.clone(),
+            username: self.username.clone(),
+            nickname: self.nickname.clone(),
+            avatar_url: self.avatar_url.clone(),
+            friendship_created_at: Some(prost_types::Timestamp::from(created_system_time)),
+            remark: self.remark.clone(),
+            is_online: self.is_online,
+            is_starred: self.is_starred,
+            is_top: self.is_top,
+            relation_status: self.relation_status,
+            friend_type: self.get_friend_type().into(),
+        }
+    }
+    
+    // 将内部的friend_type整数转换为proto的枚举类型
+    fn get_friend_type(&self) -> FriendType {
+        match self.friend_type {
+            1 => FriendType::Official,
+            2 => FriendType::System,
+            _ => FriendType::Friend,
+        }
+    }
+    
+    // 从基本Friend转换，使用整数类型的星标和置顶状态
+    pub fn from_friend(friend: Friend, is_online: bool, is_starred: i32, is_top: i32, relation_status: i32, friend_type: i32) -> Self {
+        Self {
+            id: friend.id.clone(),
+            username: friend.username.clone(),
+            nickname: friend.nickname.clone(),
+            avatar_url: friend.avatar_url.clone(),
+            friendship_created_at: friend.friendship_created_at,
+            remark: friend.remark.clone(),
+            is_online,
+            is_starred: is_starred == 1,
+            is_top: is_top == 1,
+            relation_status,
+            friend_type,
         }
     }
 }

@@ -4,7 +4,7 @@ use common::proto::friend::FriendshipStatus;
 use sqlx::{PgPool, Row, FromRow, types::chrono::NaiveDateTime};
 use uuid::Uuid;
 
-use crate::model::friendship::{Friend, Friendship, FriendGroup};
+use crate::model::friendship::{Friend, Friendship, FriendGroup, PotentialFriend, DetailedFriend};
 
 pub struct FriendshipRepository {
     pool: PgPool,
@@ -846,5 +846,121 @@ impl FriendshipRepository {
         };
 
         Ok(exists)
+    }
+
+    /// 获取好友详细列表（无分页）
+    pub async fn get_all_friend_detail_list(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<DetailedFriend>> {
+        // 直接查询所有好友关系
+        let query = r#"
+            SELECT 
+                u.id::text, 
+                u.username, 
+                u.nickname, 
+                u.avatar_url, 
+                fr.created_at as friendship_created_at, 
+                fr.remark,
+                fr.status as relation_status,
+                fr.friend_type,
+                COALESCE(fr.is_starred, 0) as is_starred,
+                COALESCE(fr.is_top, 0) as is_top
+            FROM users u
+            JOIN friend_relation fr ON (fr.user_id = $1 AND fr.friend_id = u.id)
+            WHERE fr.status = 1
+            ORDER BY fr.is_top DESC, fr.is_starred DESC, fr.created_at DESC
+            "#;
+        
+        // 创建一个用于接收数据库结果的结构体
+        #[derive(sqlx::FromRow)]
+        struct FriendDetailRow {
+            id: String,
+            username: Option<String>,
+            nickname: Option<String>,
+            avatar_url: Option<String>,
+            friendship_created_at: NaiveDateTime,
+            remark: Option<String>,
+            relation_status: i32,
+            friend_type: i32,
+            is_starred: i32,
+            is_top: i32,
+        }
+        
+        // 执行查询
+        let rows = sqlx::query_as::<_, FriendDetailRow>(query)
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await?;
+        
+        // 转换结果
+        let detailed_friends = rows
+            .into_iter()
+            .map(|row| DetailedFriend {
+                id: row.id,
+                username: row.username,
+                nickname: row.nickname,
+                avatar_url: row.avatar_url,
+                friendship_created_at: Utc.from_utc_datetime(&row.friendship_created_at),
+                remark: row.remark,
+                is_online: false, // 默认离线状态
+                is_starred: row.is_starred == 1,
+                is_top: row.is_top == 1,
+                relation_status: row.relation_status,
+                friend_type: row.friend_type,
+            })
+            .collect();
+        
+        Ok(detailed_friends)
+    }
+
+    /// 更新好友星标状态
+    pub async fn update_friend_star(&self, user_id: &str, friend_id: &str, is_starred: bool) -> Result<bool> {
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+        
+        // 将布尔值转换为整数 (0/1)
+        let is_starred_int = if is_starred { 1 } else { 0 };
+
+        let result = sqlx::query!(
+            r#"
+            UPDATE friend_relation
+            SET is_starred = $1, updated_at = $2
+            WHERE user_id = $3 AND friend_id = $4 AND status = 1
+            "#,
+            is_starred_int,
+            now_naive,
+            user_id,
+            friend_id
+        )
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 更新好友置顶状态
+    pub async fn update_friend_top(&self, user_id: &str, friend_id: &str, is_top: bool) -> Result<bool> {
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+        
+        // 将布尔值转换为整数 (0/1)
+        let is_top_int = if is_top { 1 } else { 0 };
+
+        let result = sqlx::query!(
+            r#"
+            UPDATE friend_relation
+            SET is_top = $1, updated_at = $2
+            WHERE user_id = $3 AND friend_id = $4 AND status = 1
+            "#,
+            is_top_int,
+            now_naive,
+            user_id,
+            friend_id
+        )
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(result.rows_affected() > 0)
     }
 }

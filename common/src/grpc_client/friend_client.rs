@@ -10,6 +10,7 @@ use crate::proto::friend::{
     CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
     DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
     GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse,
+    GetAllFriendDetailListRequest, GetAllFriendDetailListResponse,
 };
 
 use crate::service_discovery::LbWithServiceDiscovery;
@@ -225,6 +226,53 @@ impl FriendServiceGrpcClient {
         });
 
         let response = self.service_client.search_potential_friends(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 获取所有好友详细列表（无分页）
+    pub async fn get_all_friend_detail_list(
+        &mut self,
+        user_id: &str,
+    ) -> Result<GetAllFriendDetailListResponse> {
+        let request = Request::new(GetAllFriendDetailListRequest {
+            user_id: user_id.to_string(),
+        });
+
+        let response = self.service_client.get_all_friend_detail_list(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 设置好友星标状态
+    pub async fn toggle_friend_star(
+        &mut self,
+        user_id: &str,
+        friend_id: &str,
+        is_starred: bool,
+    ) -> Result<crate::proto::friend::ToggleFriendStarResponse> {
+        let request = Request::new(crate::proto::friend::ToggleFriendStarRequest {
+            user_id: user_id.to_string(),
+            friend_id: friend_id.to_string(),
+            is_starred,
+        });
+        
+        let response = self.service_client.toggle_friend_star(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 设置好友置顶状态
+    pub async fn toggle_friend_top(
+        &mut self,
+        user_id: &str,
+        friend_id: &str,
+        is_top: bool,
+    ) -> Result<crate::proto::friend::ToggleFriendTopResponse> {
+        let request = Request::new(crate::proto::friend::ToggleFriendTopRequest {
+            user_id: user_id.to_string(),
+            friend_id: friend_id.to_string(),
+            is_top,
+        });
+        
+        let response = self.service_client.toggle_friend_top(request).await?;
         Ok(response.into_inner())
     }
 }

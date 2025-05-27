@@ -107,6 +107,19 @@ impl FriendServiceHandler {
                 }), StatusCode::OK))
             }
 
+            // 获取好友列表（包含详细信息）
+            (&Method::POST, "getDetailList") | (&Method::GET, "getAllFriends") => {
+                // 调用无分页好友详细列表接口
+                let response = self.client.get_all_friend_detail_list(&user_id).await?;
+
+                // 将好友数据转换为JSON
+                let detailed_friends = response.friends.iter()
+                    .map(|f| self.convert_detailed_friend_to_json(f))
+                    .collect::<Vec<_>>();
+
+                Ok(success_response(detailed_friends, StatusCode::OK))
+            }
+
             // 删除好友
             (&Method::DELETE, "delete") => {
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
@@ -240,6 +253,26 @@ impl FriendServiceHandler {
                 Ok(success_response(json!(users), StatusCode::OK))
             }
 
+            // 设置好友星标状态
+            (&Method::POST, "toggleStar") => {
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
+                let is_starred = body.get("isStarred").and_then(|v| v.as_bool()).unwrap_or(true);
+
+                let response = self.client.toggle_friend_star(&user_id, &friend_id, is_starred).await?;
+
+                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+            }
+
+            // 设置好友置顶状态
+            (&Method::POST, "toggleTop") => {
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
+                let is_top = body.get("isTop").and_then(|v| v.as_bool()).unwrap_or(true);
+
+                let response = self.client.toggle_friend_top(&user_id, &friend_id, is_top).await?;
+
+                Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+            }
+
             // 其他未实现的方法
             _ => {
                 error!("好友服务不支持的方法: {} {}", method, method_name);
@@ -317,6 +350,31 @@ impl FriendServiceHandler {
             "phone": friend.phone,
             "friendshipStatus": friend.friendship_status,
             "friendshipStatusText": status_text
+        })
+    }
+
+    /// 将详细好友信息转换为JSON
+    fn convert_detailed_friend_to_json(&self, friend: &proto::friend::DetailedFriend) -> Value {
+        // 转换好友类型为文本
+        let friend_type_text = match friend.friend_type {
+            0 => "friend",     // 普通好友
+            1 => "official",   // 官方账号
+            2 => "system",     // 系统账号
+            _ => "friend",     // 默认普通好友
+        };
+        
+        json!({
+            "id": friend.id,
+            "username": friend.username,
+            "nickname": friend.nickname,
+            "avatarUrl": friend.avatar_url,
+            "friendshipCreatedAt": timestamp_to_datetime_string(&friend.friendship_created_at),
+            "remark": friend.remark,
+            "isOnline": friend.is_online,
+            "isStarred": friend.is_starred,
+            "isTop": friend.is_top,
+            "relationStatus": friend.relation_status,
+            "friendType": friend_type_text
         })
     }
 } 
