@@ -238,7 +238,7 @@ rpc:
       - ws
       - grpc
     health_check:
-      health_type: "grpc"
+      health_type: "ttl"
       name: "ws"
       url: ""
       interval: 15
@@ -253,7 +253,7 @@ rpc:
       - chat
       - grpc
     health_check:
-      health_type: "grpc"
+      health_type: "ttl"
       name: "chat"
       url: ""
       interval: 15
@@ -268,7 +268,7 @@ rpc:
       - pusher
       - grpc
     health_check:
-      health_type: "grpc"
+      health_type: "ttl"
       name: "pusher"
       url: ""
       interval: 15
@@ -283,7 +283,7 @@ rpc:
       - user
       - grpc
     health_check:
-      health_type: "grpc"
+      health_type: "ttl"
       name: "user"
       url: ""
       interval: 15
@@ -298,7 +298,7 @@ rpc:
       - friend
       - grpc
     health_check:
-      health_type: "grpc"
+      health_type: "ttl"
       name: "friend"
       url: ""
       interval: 15
@@ -313,7 +313,7 @@ rpc:
       - group
       - grpc
     health_check:
-      health_type: "grpc"
+      health_type: "ttl"
       name: "group"
       url: ""
       interval: 15
