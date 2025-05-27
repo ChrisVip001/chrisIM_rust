@@ -1,188 +1,235 @@
 syntax = "proto3";
 package messages;
 
-/// user platform which login the system
+/// 用户登录系统时使用的平台类型
+/// 用于区分不同设备类型，支持多端登录和消息推送策略
 enum PlatformType {
-  Desktop = 0;
-  Mobile = 1;
+  Desktop = 0;  // 桌面端（Windows、macOS、Linux）
+  Mobile = 1;   // 移动端（iOS、Android）
 }
 
-/// message content type
+/// 消息内容类型枚举
+/// 定义了系统支持的各种消息内容格式
 enum ContentType {
-  Default = 0;
-  Text = 1;
-  Image = 2;
-  Video = 3;
-  Audio = 4;
-  File = 5;
-  Emoji = 6;
-  VideoCall = 7;
-  AudioCall = 8;
-  Error = 9;
+  Default = 0;    // 默认类型
+  Text = 1;       // 文本消息
+  Image = 2;      // 图片消息
+  Video = 3;      // 视频消息
+  Audio = 4;      // 音频消息
+  File = 5;       // 文件消息
+  Emoji = 6;      // 表情消息
+  VideoCall = 7;  // 视频通话
+  AudioCall = 8;  // 音频通话
+  Error = 9;      // 错误消息
 }
 
+/// 消息类型枚举
+/// 定义了系统中所有可能的消息类型，包括聊天消息、系统消息、通话消息等
 enum MsgType {
+  /// 单聊消息
   MsgTypeSingleMsg = 0;
 
+  /// 群聊消息
   MsgTypeGroupMsg = 1;
 
-  /// group operation
-  MsgTypeGroupInvitation = 2;
-  MsgTypeGroupInviteNew = 3;
-  MsgTypeGroupMemberExit = 4;
-  MsgTypeGroupRemoveMember = 5;
-  MsgTypeGroupDismiss = 6;
-  MsgTypeGroupDismissOrExitReceived = 7;
-  MsgTypeGroupInvitationReceived = 8;
-  MsgTypeGroupUpdate = 9;
+  /// 群组操作相关消息类型
+  MsgTypeGroupInvitation = 2;        // 群组邀请
+  MsgTypeGroupInviteNew = 3;         // 邀请新成员加入群组
+  MsgTypeGroupMemberExit = 4;        // 群成员退出
+  MsgTypeGroupRemoveMember = 5;      // 移除群成员
+  MsgTypeGroupDismiss = 6;           // 解散群组
+  MsgTypeGroupDismissOrExitReceived = 7;  // 群组解散或退出确认
+  MsgTypeGroupInvitationReceived = 8;     // 群组邀请确认
+  MsgTypeGroupUpdate = 9;            // 群组信息更新
 
-  /// friend operation
-  MsgTypeFriendApplyReq = 10;
-  MsgTypeFriendApplyResp = 11;
-  MsgTypeFriendBlack = 12;
-  MsgTypeFriendDelete = 13;
+  /// 好友操作相关消息类型
+  MsgTypeFriendApplyReq = 10;   // 好友申请请求
+  MsgTypeFriendApplyResp = 11;  // 好友申请响应
+  MsgTypeFriendBlack = 12;      // 拉黑好友
+  MsgTypeFriendDelete = 13;     // 删除好友
 
-  /// single call operation
-  MsgTypeSingleCallInvite = 14;
-  MsgTypeRejectSingleCall = 15;
-  MsgTypeAgreeSingleCall = 16;
-  MsgTypeSingleCallInviteNotAnswer = 17;
-  MsgTypeSingleCallInviteCancel = 18;
-  MsgTypeSingleCallOffer = 19;
-  MsgTypeHangup = 20;
-  MsgTypeConnectSingleCall = 21;
-  MsgTypeCandidate = 22;
+  /// 单人通话操作相关消息类型
+  MsgTypeSingleCallInvite = 14;         // 发起单人通话邀请
+  MsgTypeRejectSingleCall = 15;         // 拒绝单人通话
+  MsgTypeAgreeSingleCall = 16;          // 同意单人通话
+  MsgTypeSingleCallInviteNotAnswer = 17; // 单人通话邀请无应答
+  MsgTypeSingleCallInviteCancel = 18;   // 取消单人通话邀请
+  MsgTypeSingleCallOffer = 19;          // 单人通话Offer
+  MsgTypeHangup = 20;                   // 挂断通话
+  MsgTypeConnectSingleCall = 21;        // 连接单人通话
+  MsgTypeCandidate = 22;                // WebRTC候选者信息
 
-  MsgTypeRead = 23;
-  MsgTypeMsgRecResp = 24;
-  MsgTypeNotification = 25;
-  MsgTypeService = 26;
-  MsgTypeFriendshipReceived = 27;
+  /// 系统消息类型
+  MsgTypeRead = 23;           // 消息已读
+  MsgTypeMsgRecResp = 24;     // 消息接收响应
+  MsgTypeNotification = 25;   // 系统通知
+  MsgTypeService = 26;        // 服务消息
+  MsgTypeFriendshipReceived = 27;  // 好友关系确认
 }
 
-/// decode message content by content type
-/// the content is candidate, when message type is Candidate
-/// the content is sustain, when message type is Hangup
-/// the content is String::to_vec(), when message type is SingleMsg/GroupMsg
-/// other message type, the content is bincode::serialize(&T)
+/// 消息结构体
+/// 
+/// 这是系统中最核心的数据结构，包含了一条消息的所有信息。
+/// 根据content_type字段来解码消息内容：
+/// - 当消息类型是Candidate时，content是candidate信息
+/// - 当消息类型是Hangup时，content是通话持续时间
+/// - 当消息类型是SingleMsg/GroupMsg时，content是String::to_vec()
+/// - 其他消息类型，content是bincode::serialize(&T)的结果
 message Msg {
-  // must have
-  string send_id = 1;
-  // must have
-  string receiver_id = 2;
-  // must have
-  string local_id = 3;
-  string server_id = 4;
-  // timestamp
-  int64 create_time = 5;
-  int64 send_time = 6;
+  // 必填字段
+  string send_id = 1;      // 发送者ID
+  string receiver_id = 2;  // 接收者ID（单聊时是用户ID，群聊时是群组ID）
+  string local_id = 3;     // 客户端生成的本地消息ID
+  string server_id = 4;    // 服务器生成的全局唯一消息ID
+  
+  // 时间戳字段
+  int64 create_time = 5;   // 消息创建时间（客户端时间戳）
+  int64 send_time = 6;     // 消息发送时间（服务器时间戳）
 
-  // receiver sequence
-  int64 seq = 7;
-  MsgType msg_type = 8;
-  ContentType content_type = 9;
-  bytes content = 10;
-  bool is_read = 11;
+  // 序列号和类型字段
+  int64 seq = 7;           // 接收者序列号，用于消息排序和去重
+  MsgType msg_type = 8;    // 消息类型
+  ContentType content_type = 9;  // 内容类型
+  bytes content = 10;      // 消息内容（根据content_type解码）
+  bool is_read = 11;       // 是否已读
 
-  string group_id = 15;
+  string group_id = 15;    // 群组ID（群聊消息时使用）
 
-  // platform of the sender
-  PlatformType platform = 16;
+  // 发送者信息
+  PlatformType platform = 16;  // 发送者平台类型
+  string avatar = 17;      // 发送者头像URL
+  string nickname = 18;    // 发送者昵称
 
-  // user avatar
-  string avatar = 17;
-  // user nickname
-  string nickname = 18;
-
-  // related message id
+  // 关联消息ID（用于回复、引用等功能）
   optional string related_msg_id = 19;
 
-  /// send sequence
+  /// 发送序列号，用于发送者的消息排序
   int64 send_seq = 20;
 }
 
+/// 消息已读信息
 message MsgRead {
-  repeated int64 msg_seq = 1;
-  string user_id = 2;
+  repeated int64 msg_seq = 1;  // 已读消息的序列号列表
+  string user_id = 2;          // 用户ID
 }
 
-message MsgReadReq { MsgRead msg_read = 1; }
+/// 消息已读请求
+message MsgReadReq { 
+  MsgRead msg_read = 1; 
+}
 
+/// 消息已读响应
 message MsgReadResp {}
 
+/// WebRTC候选者信息
+/// 用于WebRTC连接建立过程中的网络协商
 message Candidate {
-  string candidate = 1;
-  optional string sdp_mid = 2;
-  optional int32 sdp_m_index = 3;
+  string candidate = 1;           // 候选者信息字符串
+  optional string sdp_mid = 2;    // SDP媒体标识符
+  optional int32 sdp_m_index = 3; // SDP媒体索引
 }
 
+/// 单人通话邀请类型
 enum SingleCallInviteType {
-  SingleAudio = 0;
-  SingleVideo = 1;
+  SingleAudio = 0;  // 音频通话
+  SingleVideo = 1;  // 视频通话
 }
 
-message AgreeSingleCall { string sdp = 1; }
+/// 同意单人通话消息
+message AgreeSingleCall { 
+  string sdp = 1;  // SDP会话描述协议信息
+}
 
-message SingleCallInvite { SingleCallInviteType invite_type = 1; }
+/// 单人通话邀请消息
+message SingleCallInvite { 
+  SingleCallInviteType invite_type = 1;  // 邀请类型（音频/视频）
+}
 
+/// 单人通话邀请应答消息
 message SingleCallInviteAnswer {
-  bool agree = 1;
-  SingleCallInviteType invite_type = 2;
+  bool agree = 1;                        // 是否同意通话
+  SingleCallInviteType invite_type = 2;  // 通话类型
 }
 
-message SingleCallInviteNotAnswer { SingleCallInviteType invite_type = 1; }
+/// 单人通话邀请无应答消息
+message SingleCallInviteNotAnswer { 
+  SingleCallInviteType invite_type = 1;  // 通话类型
+}
 
-message SingleCallInviteCancel { SingleCallInviteType invite_type = 2; }
+/// 取消单人通话邀请消息
+message SingleCallInviteCancel { 
+  SingleCallInviteType invite_type = 2;  // 通话类型
+}
 
-message SingleCallOffer { string sdp = 1; }
+/// 单人通话Offer消息
+message SingleCallOffer { 
+  string sdp = 1;  // SDP会话描述协议信息
+}
 
+/// 挂断通话消息
 message Hangup {
-  SingleCallInviteType invite_type = 1;
-  int64 sustain = 2;
+  SingleCallInviteType invite_type = 1;  // 通话类型
+  int64 sustain = 2;                     // 通话持续时间（秒）
 }
 
-/// user and group id
+/// 用户和群组ID组合
+/// 用于需要同时指定用户和群组的场景
 message UserAndGroupID {
-  string user_id = 1;
-  string group_id = 2;
+  string user_id = 1;   // 用户ID
+  string group_id = 2;  // 群组ID
 }
 
+/// 群组邀请新成员消息
 message GroupInviteNew {
-  string user_id = 1;
-  string group_id = 2;
-  repeated string members = 3;
+  string user_id = 1;          // 邀请者用户ID
+  string group_id = 2;         // 群组ID
+  repeated string members = 3; // 被邀请的成员ID列表
 }
 
-message SendMsgRequest { Msg message = 1; }
+/// 发送消息请求
+message SendMsgRequest { 
+  Msg message = 1;  // 要发送的消息
+}
 
+/// 发送群聊消息请求
 message SendGroupMsgRequest {
-  Msg message = 1;
-  repeated GroupMemSeq members = 2;
+  Msg message = 1;                    // 要发送的群聊消息
+  repeated GroupMemSeq members = 2;   // 群成员序列号信息列表
 }
 
+/// 消息响应
 message MsgResponse {
-  string local_id = 1;
-  string server_id = 2;
-  int64 send_time = 3;
-  string err = 4;
+  string local_id = 1;   // 客户端本地消息ID
+  string server_id = 2;  // 服务器生成的消息ID
+  int64 send_time = 3;   // 服务器处理时间戳
+  string err = 4;        // 错误信息（空字符串表示成功）
 }
 
+/// 群成员序列号信息
+/// 用于群聊消息的序列号管理和推送控制
 message GroupMemSeq {
-  string mem_id = 1;
-  int64 cur_seq = 2;
-  int64 max_seq = 3;
-  bool need_update = 4;
+  string mem_id = 1;     // 群成员ID
+  int64 cur_seq = 2;     // 当前序列号
+  int64 max_seq = 3;     // 最大序列号
+  bool need_update = 4;  // 是否需要更新到数据库
 }
 
+/// 消息服务接口
+/// 提供消息发送和推送的gRPC服务
 service MsgService {
-  // send message through rpc
+  /// 通过RPC发送消息
   rpc SendMessage(SendMsgRequest) returns (MsgResponse);
-  // send single message to user by websocket
+  
+  /// 通过WebSocket向用户发送单聊消息
   rpc SendMsgToUser(SendMsgRequest) returns (MsgResponse);
-  // send group message to user by websocket
+  
+  /// 通过WebSocket向用户发送群聊消息
   rpc SendGroupMsgToUser(SendGroupMsgRequest) returns (MsgResponse);
 }
 
-/// chat service, receive message then generate message id and send message to
-/// mq; response operation result;
-service ChatService { rpc SendMsg(SendMsgRequest) returns (MsgResponse); }
+/// 聊天服务接口
+/// 接收消息，生成消息ID并发送到消息队列，返回操作结果
+service ChatService { 
+  /// 发送消息到Kafka队列
+  rpc SendMsg(SendMsgRequest) returns (MsgResponse); 
+}

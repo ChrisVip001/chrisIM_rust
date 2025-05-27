@@ -344,18 +344,18 @@ impl ConsumerService {
                 // 但不是在这里处理，而是在handle_group_seq中处理
                 msg_type = MsgType2::Group;
             }
-            // 其他消息类型...
+            // 群组操作消息类型
             MsgType::GroupInvitation
             | MsgType::GroupInviteNew
             | MsgType::GroupMemberExit
             | MsgType::GroupRemoveMember
             | MsgType::GroupDismiss
             | MsgType::GroupUpdate => {
-                // group message and need to increase seq
+                // 群组消息，需要增加序列号
                 msg_type = MsgType2::Group;
                 need_history = false;
             }
-            // single call data exchange and don't need to increase seq
+            // 单聊通话数据交换和其他不需要增加序列号的消息
             MsgType::GroupDismissOrExitReceived
             | MsgType::GroupInvitationReceived
             | MsgType::FriendBlack
@@ -376,32 +376,64 @@ impl ConsumerService {
         return (msg_type, need_increase_seq, need_history);
     }
 
-    /// query members id from cache
-    /// if not found, query from db
+    /// 从缓存查询群组成员ID列表
+    /// 
+    /// 首先尝试从Redis缓存中获取群组成员列表，如果缓存中没有数据，
+    /// 则从数据库查询并更新缓存。这种策略可以减少数据库访问，提高性能。
+    /// 
+    /// # 参数
+    /// * `group_id` - 群组ID
+    /// 
+    /// # 返回值
+    /// * `Ok(Vec<String>)` - 群组成员ID列表
+    /// * `Err(Error)` - 查询失败的错误信息
     async fn get_members_id(&self, group_id: &str) -> Result<Vec<String>, Error> {
         match self.cache.query_group_members_id(group_id).await {
             Ok(list) if !list.is_empty() => Ok(list),
             Ok(_) => {
-                warn!("group members id is empty from cache");
-                // query from db
+                warn!("缓存中群组成员ID列表为空");
+                // 从数据库查询
                 self.query_group_members_id_from_db(group_id).await
             }
             Err(err) => {
-                error!("failed to query group members id from cache: {:?}", err);
+                error!("从缓存查询群组成员ID失败: {:?}", err);
                 Err(err)
             }
         }
     }
 
+    /// 处理发送者的发送序列号
+    /// 
+    /// 检查用户的发送序列号是否需要更新到数据库。
+    /// 当缓存中的序列号达到步长阈值时，将最新序列号同步到数据库。
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 处理成功
+    /// * `Err(Error)` - 处理失败的错误信息
     async fn handle_send_seq(&self, user_id: &str) -> Result<(), Error> {
         let send_seq = self.cache.get_send_seq(user_id).await?;
 
+        // 如果当前序列号已达到步长阈值，需要同步到数据库
         if send_seq.0 == send_seq.1 - self.seq_step as i64 {
             self.db.seq.save_max_seq(user_id).await?;
         }
         Ok(())
     }
 
+    /// 为用户增加消息接收序列号
+    /// 
+    /// 为指定用户分配一个新的消息接收序列号，用于消息排序和去重。
+    /// 如果序列号发生了更新（达到步长阈值），则同步到数据库。
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `Ok(i64)` - 新分配的序列号
+    /// * `Err(Error)` - 分配失败的错误信息
     async fn increase_message_seq(&self, user_id: &str) -> Result<i64, Error> {
         let (cur_seq, _, updated) = self.cache.increase_seq(user_id).await?;
         if updated {
@@ -410,13 +442,39 @@ impl ConsumerService {
         Ok(cur_seq)
     }
 
+    /// 处理消息已读状态更新
+    /// 
+    /// 解析已读消息的内容，并更新MongoDB中对应消息的已读状态。
+    /// 这个操作只影响消息盒子中的离线消息，不影响历史消息。
+    /// 
+    /// # 参数
+    /// * `msg` - 包含已读信息的消息对象
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 更新成功
+    /// * `Err(Error)` - 更新失败的错误信息
     async fn handle_msg_read(&self, msg: Msg) -> Result<(), Error> {
-        let data: MsgRead = bincode::deserialize(&msg.content).map_err(|_| Error::Internal("failed to deserialize MsgRead".to_string()))?;
+        let data: MsgRead = bincode::deserialize(&msg.content)
+            .map_err(|_| Error::Internal("反序列化MsgRead失败".to_string()))?;
 
         self.msg_box.msg_read(&data.user_id, &data.msg_seq).await?;
         Ok(())
     }
 
+    /// 处理群聊消息的序列号分配
+    /// 
+    /// 对于群聊消息，需要为每个群成员分配序列号，并处理群组状态变更：
+    /// - 群解散：删除缓存中的群成员信息
+    /// - 成员退出：从缓存中移除特定成员
+    /// - 移除成员：批量移除多个成员
+    /// 
+    /// # 参数
+    /// * `msg_type` - 消息类型分类
+    /// * `msg` - 消息对象（可变引用，可能会修改）
+    /// 
+    /// # 返回值
+    /// * `Ok(Vec<GroupMemSeq>)` - 群成员序列号列表
+    /// * `Err(Error)` - 处理失败的错误信息
     async fn handle_group_seq(
         &self,
         msg_type: &MsgType2,
@@ -425,20 +483,20 @@ impl ConsumerService {
         if *msg_type != MsgType2::Group {
             return Ok(vec![]);
         }
-        // query group members id from the cache
+        // 从缓存查询群组成员ID
         let mut members = self.get_members_id(&msg.receiver_id).await?;
 
-        // retain the members id
+        // 排除发送者自己（发送者不需要接收自己的消息）
         members.retain(|id| id != &msg.send_id);
 
-        // increase the members seq
+        // 为所有群成员增加序列号
         let seq = self.cache.incr_group_seq(members).await?;
 
-        // we should send the whole list to db module and db module will handle the data
+        // 我们应该将完整的列表发送到数据库模块，由数据库模块处理数据
 
-        // judge the message type;
-        // we should delete the cache data if the type is group dismiss
-        // update the cache if the type is group member exit
+        // 根据消息类型判断是否需要更新缓存
+        // 如果是群解散，应该删除缓存数据
+        // 如果是成员退出，应该更新缓存
         if msg.msg_type == MsgType::GroupDismiss as i32 {
             self.cache.del_group_members(&msg.receiver_id).await?;
         } else if msg.msg_type == MsgType::GroupMemberExit as i32 {
@@ -458,8 +516,17 @@ impl ConsumerService {
         Ok(seq)
     }
 
-    /// there is no need to send to db
-    /// if the message type is related to call protocol
+    /// 判断消息是否需要存储到数据库
+    /// 
+    /// 某些消息类型（如音视频通话协议相关的消息）不需要持久化存储，
+    /// 因为它们只是实时通信的控制信息，没有保存价值。
+    /// 
+    /// # 参数
+    /// * `msg_type` - 消息类型
+    /// 
+    /// # 返回值
+    /// * `true` - 需要存储到数据库
+    /// * `false` - 不需要存储到数据库
     #[inline]
     fn get_send_to_db_flag(msg_type: &MsgType) -> bool {
         !matches!(
@@ -472,6 +539,23 @@ impl ConsumerService {
         )
     }
 
+    /// 将消息存储到数据库
+    /// 
+    /// 根据消息类型选择不同的存储策略：
+    /// - 单聊消息：存储到PostgreSQL历史表和MongoDB消息盒子
+    /// - 群聊消息：为每个群成员创建消息副本并存储
+    /// 
+    /// # 参数
+    /// * `db` - 数据库仓库实例
+    /// * `msg_box` - MongoDB消息盒子仓库
+    /// * `msg` - 要存储的消息
+    /// * `msg_type` - 消息类型分类
+    /// * `need_to_history` - 是否需要存储历史记录
+    /// * `members` - 群成员序列号列表（仅群聊消息使用）
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 存储成功
+    /// * `Err(Error)` - 存储失败的错误信息
     async fn send_to_db(
         db: Arc<DbRepo>,
         msg_box: Arc<dyn MsgRecBoxRepo>,
@@ -480,7 +564,7 @@ impl ConsumerService {
         need_to_history: bool,
         members: Vec<GroupMemSeq>,
     ) -> Result<(), Error> {
-        // match the message type to procedure the different method
+        // 根据消息类型选择不同的处理方法
         match msg_type {
             MsgType2::Single => {
                 Self::handle_message(db, msg_box, msg, need_to_history).await?;
@@ -493,69 +577,113 @@ impl ConsumerService {
         Ok(())
     }
 
-    /// query members id from database
-    /// and set it to cache
+    /// 从数据库查询群组成员ID
+    /// 并将结果设置到缓存中
+    /// 
+    /// 当缓存中没有群组成员信息时，从数据库查询并更新缓存。
+    /// 注意：当前实现为TODO状态，需要实际的数据库查询逻辑。
+    /// 
+    /// # 参数
+    /// * `group_id` - 群组ID
+    /// 
+    /// # 返回值
+    /// * `Ok(Vec<String>)` - 群组成员ID列表
+    /// * `Err(Error)` - 查询失败的错误信息
     async fn query_group_members_id_from_db(&self, group_id: &str) -> Result<Vec<String>, Error> {
-        /// TODO query members id from database
+        /// TODO 从数据库查询成员ID
         // let members_id = self.db.group.query_group_members_id(group_id).await?;
         let members_id = Vec::new();
 
-        // save it to cache
+        // 将查询结果保存到缓存
         if let Err(e) = self
             .cache
             .save_group_members_id(group_id, members_id.clone())
             .await
         {
-            error!("failed to save group members id to cache: {:?}", e);
+            error!("保存群组成员ID到缓存失败: {:?}", e);
         }
 
         Ok(members_id)
     }
 
+    /// 处理单聊消息的存储
+    /// 
+    /// 并行执行两个存储任务：
+    /// 1. 如果需要历史记录，存储到PostgreSQL
+    /// 2. 存储到MongoDB消息盒子（用于离线消息）
+    /// 
+    /// 对于某些特殊消息类型（如群组操作确认、好友关系确认），
+    /// 会从MongoDB中删除而不是保存。
+    /// 
+    /// # 参数
+    /// * `db` - 数据库仓库实例
+    /// * `msg_box` - MongoDB消息盒子仓库
+    /// * `message` - 要处理的消息
+    /// * `need_to_history` - 是否需要存储历史记录
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 处理成功
+    /// * `Err(Error)` - 处理失败的错误信息
     async fn handle_message(
         db: Arc<DbRepo>,
         msg_box: Arc<dyn MsgRecBoxRepo>,
         message: Msg,
         need_to_history: bool,
     ) -> Result<(), Error> {
-        // task 1 save message to postgres
+        // 任务1：保存消息到PostgreSQL
 
         let mut tasks = Vec::with_capacity(2);
-        if !need_to_history {
+        if need_to_history {
             let cloned_msg = message.clone();
             let db_task = tokio::spawn(async move {
                 if let Err(e) = db.msg.save_message(cloned_msg).await {
-                    tracing::error!("save message to db failed: {}", e);
+                    tracing::error!("保存消息到数据库失败: {}", e);
                 }
             });
             tasks.push(db_task);
         }
 
-        // task 2 save message to mongodb
+        // 任务2：保存消息到MongoDB
         let msg_rec_box_task = tokio::spawn(async move {
-            // if the message type is friendship/group-operation delivery, we should delete it from mongodb
+            // 如果消息类型是好友关系/群组操作确认，我们应该从MongoDB中删除它
             if message.msg_type == MsgType::GroupDismissOrExitReceived as i32
                 || message.msg_type == MsgType::GroupInvitationReceived as i32
                 || message.msg_type == MsgType::FriendshipReceived as i32
             {
                 if let Err(e) = msg_box.delete_message(&message.server_id).await {
-                    tracing::error!("delete message from mongodb failed: {}", e);
+                    tracing::error!("从MongoDB删除消息失败: {}", e);
                 }
                 return;
             }
             if let Err(e) = msg_box.save_message(&message).await {
-                tracing::error!("save message to mongodb failed: {}", e);
+                tracing::error!("保存消息到MongoDB失败: {}", e);
             }
         });
         tasks.push(msg_rec_box_task);
 
-        // wait all tasks
+        // 等待所有任务完成
         futures::future::try_join_all(tasks)
             .await
             .map_err(|e| Error::Internal(e.to_string()))?;
         Ok(())
     }
 
+    /// 处理群聊消息的存储
+    /// 
+    /// 并行执行两个主要任务：
+    /// 1. 更新PostgreSQL中的用户序列号，如果需要则保存消息历史
+    /// 2. 为每个群成员在MongoDB中创建消息副本
+    /// 
+    /// # 参数
+    /// * `db` - 数据库仓库实例
+    /// * `msg_box` - MongoDB消息盒子仓库
+    /// * `message` - 要处理的群聊消息
+    /// * `need_to_history` - 是否需要存储历史记录
+    /// * `members` - 群成员序列号列表
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 处理成功
+    /// * `Err(Error)` - 处理失败的错误信息
     async fn handle_group_message(
         db: Arc<DbRepo>,
         msg_box: Arc<dyn MsgRecBoxRepo>,
@@ -563,8 +691,8 @@ impl ConsumerService {
         need_to_history: bool,
         members: Vec<GroupMemSeq>,
     ) -> Result<(), Error> {
-        // task 1 save message to postgres
-        // update the user's seq in postgres
+        // 任务1：保存消息到PostgreSQL
+        // 更新用户在PostgreSQL中的序列号
         let need_update = members
             .iter()
             .enumerate()
@@ -586,30 +714,30 @@ impl ConsumerService {
         let db_task = tokio::spawn(async move {
             if !need_update.is_empty() {
                 if let Err(err) = db.seq.save_max_seq_batch(&need_update).await {
-                    tracing::error!("save max seq batch failed: {}", err);
+                    tracing::error!("批量保存最大序列号失败: {}", err);
                     return Err(err);
                 };
             }
 
             if let Some(cloned_msg) = cloned_msg {
                 if let Err(e) = db.msg.save_message(cloned_msg).await {
-                    tracing::error!("save message to db failed: {}", e);
+                    tracing::error!("保存消息到数据库失败: {}", e);
                     return Err(e);
                 }
             }
             Ok(())
         });
 
-        // task 2 save message to mongodb
+        // 任务2：保存消息到MongoDB
         let msg_rec_box_task = tokio::spawn(async move {
             if let Err(e) = msg_box.save_group_msg(message, members).await {
-                tracing::error!("save message to mongodb failed: {}", e);
+                tracing::error!("保存消息到MongoDB失败: {}", e);
                 return Err(e);
             }
             Ok(())
         });
 
-        // wait all tasks complete
+        // 等待所有任务完成
         let (db_result, msg_rec_box_result) = tokio::try_join!(db_task, msg_rec_box_task)
             .map_err(|e| Error::Internal(e.to_string()))?;
 
