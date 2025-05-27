@@ -16,7 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "friend.proto",
         "group.proto",
         "messages.proto",
-        "message_gateway.proto",
     ];
 
     // 编译所有proto文件并生成文件描述符集
