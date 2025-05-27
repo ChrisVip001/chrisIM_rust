@@ -45,10 +45,6 @@ pub enum ServiceType {
     Chat,
     /// 静态资源服务
     Static,
-    /// 自定义HTTP服务
-    HttpService(String),
-    /// 自定义gRPC服务
-    GrpcService(String),
 }
 
 /// 路径重写规则
