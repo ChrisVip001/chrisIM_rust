@@ -440,7 +440,7 @@ impl FriendshipRepository {
         &self,
         user_id: &str,
         search_term: &str,
-    ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, String)>> {
+    ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, i32)>> {
         // 构建SQL查询，自动匹配custom_id或手机号
         let query = r#"
             SELECT 
@@ -449,22 +449,11 @@ impl FriendshipRepository {
                 u.nickname, 
                 u.avatar_url, 
                 u.phone,
-                COALESCE(f.status, '-1') as friendship_status
+                COALESCE(fr.status, -1) as friendship_status
             FROM 
                 users u
             LEFT JOIN 
-                (
-                    SELECT 
-                        CASE 
-                            WHEN user_id = $1 THEN friend_id 
-                            WHEN friend_id = $1 THEN user_id 
-                        END as related_user_id,
-                        status
-                    FROM 
-                        friendships
-                    WHERE 
-                        user_id = $1 OR friend_id = $1
-                ) f ON u.id = f.related_user_id
+                friend_relation fr ON (fr.user_id = $1 AND fr.friend_id = u.id)
             WHERE 
                 u.id != $1 AND (u.custom_id = $2 OR u.phone = $2)
             ORDER BY 
@@ -488,7 +477,7 @@ impl FriendshipRepository {
                     row.get::<Option<String>, _>("nickname"),
                     row.get::<Option<String>, _>("avatar_url"),
                     row.get::<Option<String>, _>("phone"),
-                    row.get::<String, _>("friendship_status"),
+                    row.get::<i32, _>("friendship_status"),
                 )
             })
             .collect();

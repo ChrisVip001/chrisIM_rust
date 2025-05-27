@@ -303,12 +303,10 @@ impl FriendServiceHandler {
     /// 将潜在好友消息转换为JSON
     fn convert_potential_friend_to_json(&self, friend: &proto::friend::PotentialFriend) -> Value {
         let status_text = match friend.friendship_status {
-            0 => "PENDING",
-            1 => "ACCEPTED",
-            2 => "REJECTED",
-            3 => "BLOCKED",
-            4 => "EXPIRED",
-            _ => "UNKNOWN"
+            -1 => "NONE",      // 无关系
+            1 => "ACCEPTED",   // 已接受/已是好友
+            2 => "REJECTED",   // 已拒绝
+            _ => "UNKNOWN"     // 未知状态
         };
         
         json!({
