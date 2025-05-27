@@ -301,37 +301,36 @@ impl FriendService for FriendServiceImpl {
         request: Request<GetFriendListRequest>,
     ) -> Result<Response<GetFriendListResponse>, Status> {
         let req = request.into_inner();
-
         let user_id = req.user_id;
 
         // 解析可选参数
-        let page = if req.page > 0 { Some(req.page) } else { None };
-        let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
+        let page = (req.page > 0).then_some(req.page);
+        let page_size = (req.page_size > 0).then_some(req.page_size);
         
-        // 解析排序方式
-        let sort_by = if !req.sort_by.is_empty() {
-            Some(req.sort_by)
-        } else {
-            None
-        };
+        // 解析排序方式和搜索关键词
+        let sort_by = (!req.sort_by.is_empty()).then_some(req.sort_by.clone());
+        let keyword = (!req.keyword.is_empty()).then_some(req.keyword.clone());
 
-        // 获取好友总数
-        let total = self.repository.count_friends(&user_id).await.map_err(|e| {
+        // 获取总数
+        let total = self.repository.count_friends(&user_id, keyword.clone()).await.map_err(|e| {
             error!("获取好友总数失败: {}", e);
             Status::internal("获取好友总数失败")
         })?;
 
         // 获取好友列表
-        let friends = self.repository.get_friend_list(&user_id, page, page_size, sort_by).await.map_err(|e| {
-            error!("获取好友列表失败: {}", e);
-            Status::internal("获取好友列表失败")
-        })?;
+        let friends = self.repository
+            .get_friend_list(&user_id, page, page_size, sort_by, keyword.clone())
+            .await
+            .map_err(|e| {
+                error!("获取好友列表失败: {}", e);
+                Status::internal("获取好友列表失败")
+            })?;
 
         // 转换为proto对象
         let friend_protos = friends.into_iter().map(|f| f.to_proto()).collect();
 
         Ok(Response::new(GetFriendListResponse {
-            total: total,
+            total,
             friends: friend_protos,
         }))
     }
@@ -342,11 +341,11 @@ impl FriendService for FriendServiceImpl {
         request: Request<GetFriendRequestsRequest>,
     ) -> Result<Response<GetFriendRequestsResponse>, Status> {
         let req = request.into_inner();
-
         let user_id = req.user_id;
 
-        let page = if req.page > 0 { Some(req.page) } else { None };
-        let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
+        // 解析可选参数
+        let page = (req.page > 0).then_some(req.page);
+        let page_size = (req.page_size > 0).then_some(req.page_size);
 
         // 获取请求总数
         let total = self.repository.count_friend_requests(&user_id).await.map_err(|e| {
@@ -355,16 +354,19 @@ impl FriendService for FriendServiceImpl {
         })?;
 
         // 获取请求列表
-        let requests = self.repository.get_friend_requests(&user_id, page, page_size).await.map_err(|e| {
-            error!("获取好友请求列表失败: {}", e);
-            Status::internal("获取好友请求列表失败")
-        })?;
+        let requests = self.repository
+            .get_friend_requests(&user_id, page, page_size)
+            .await
+            .map_err(|e| {
+                error!("获取好友请求列表失败: {}", e);
+                Status::internal("获取好友请求列表失败")
+            })?;
 
         // 转换为proto对象
         let request_protos = requests.into_iter().map(|r| r.to_proto()).collect();
 
         Ok(Response::new(GetFriendRequestsResponse {
-            total: total,
+            total,
             requests: request_protos,
         }))
     }

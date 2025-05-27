@@ -194,4 +194,73 @@ impl GroupRepository {
 
         Ok(result)
     }
+
+    
+    // 搜索用户加入的群组（按关键字）
+    pub async fn search_user_groups(
+        &self,
+        user_id: Uuid,
+        keyword: &str,
+        page: i32,
+        page_size: i32,
+    ) -> Result<(Vec<UserGroup>, i64)> {
+        // 计算偏移量
+        let offset = (page - 1) * page_size;
+        
+        // 获取匹配关键字的群组
+        let groups = sqlx::query!(
+            r#"
+            SELECT 
+                g.id,
+                g.name,
+                g.avatar_url,
+                m.role,
+                m.joined_at,
+                (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
+            FROM groups g
+            JOIN group_members m ON g.id = m.group_id
+            WHERE m.user_id = $1
+            AND (g.name ILIKE $2 OR g.description ILIKE $2)
+            ORDER BY g.name
+            LIMIT $3 OFFSET $4
+            "#,
+            user_id.to_string(),
+            format!("%{}%", keyword),
+            page_size as i64,
+            offset as i64
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        // 获取总数
+        let total = sqlx::query!(
+            r#"
+            SELECT COUNT(*) as count
+            FROM groups g
+            JOIN group_members m ON g.id = m.group_id
+            WHERE m.user_id = $1
+            AND (g.name ILIKE $2 OR g.description ILIKE $2)
+            "#,
+            user_id.to_string(),
+            format!("%{}%", keyword)
+        )
+        .fetch_one(&self.pool)
+        .await?
+        .count
+        .unwrap_or(0);
+
+        let result = groups
+            .into_iter()
+            .map(|g| UserGroup {
+                id: Uuid::parse_str(&g.id).unwrap(),
+                name: g.name,
+                avatar_url: g.avatar_url.unwrap_or_default(),
+                member_count: g.member_count.unwrap_or(0) as i32,
+                role: g.role.parse::<i32>().unwrap_or(0),
+                joined_at: Utc.from_utc_datetime(&g.joined_at),
+            })
+            .collect();
+
+        Ok((result, total))
+    }
 }

@@ -76,10 +76,6 @@ impl FriendServiceGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// 获取好友列表
-    pub async fn get_friend_list(&mut self, user_id: &str) -> Result<GetFriendListResponse> {
-        self.get_friend_list_with_params(user_id, 1, 20, "").await
-    }
 
     /// 获取好友列表（带参数）
     pub async fn get_friend_list_with_params(
@@ -88,12 +84,14 @@ impl FriendServiceGrpcClient {
         page: i64,
         page_size: i64,
         sort_by: &str,
+        keyword: &str,
     ) -> Result<GetFriendListResponse> {
         let request = GetFriendListRequest {
             user_id: user_id.to_string(),
             page,
             page_size,
             sort_by: sort_by.to_string(),
+            keyword: keyword.to_string(),
         };
 
         let response = self.service_client.get_friend_list(request).await?;

@@ -78,12 +78,15 @@ impl FriendServiceHandler {
                 let page = get_i64_param(&body, "page", 1);
                 let page_size = get_i64_param(&body, "pageSize", 20);
                 let sort_by = body.get("sortBy").and_then(|v| v.as_str()).unwrap_or("");
+                // 提取搜索关键词
+                let keyword = get_optional_string(&body, "keyword", None).unwrap_or_default();
 
                 let response = self.client.get_friend_list_with_params(
                     &user_id,
                     page,
                     page_size,
-                    sort_by
+                    sort_by,
+                    &keyword
                 ).await?;
 
                 let friends = response.friends.iter().map(|f| self.convert_friend_to_json(f)).collect::<Vec<_>>();
@@ -250,7 +253,7 @@ impl FriendServiceHandler {
                 let users = response.users.iter().map(|u| self.convert_potential_friend_to_json(u)).collect::<Vec<_>>();
                 
                 // 直接返回用户数组，不用对象包裹
-                Ok(success_response(json!(users), StatusCode::OK))
+                Ok(success_response(json!({"users": users}), StatusCode::OK))
             }
 
             // 设置好友星标状态

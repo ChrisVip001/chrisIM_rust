@@ -4,7 +4,7 @@ use common::proto::group::{
     DeleteGroupRequest, DeleteGroupResponse, GetGroupRequest, GetMembersRequest,
     GetMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupResponse, MemberResponse,
     MemberRole, RemoveMemberRequest, RemoveMemberResponse, UpdateGroupRequest,
-    UpdateMemberRoleRequest,
+    UpdateMemberRoleRequest, SearchUserGroupsRequest, SearchUserGroupsResponse,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -491,6 +491,44 @@ impl GroupService for GroupServiceImpl {
             Err(e) => {
                 error!("检查成员资格失败: {}", e);
                 Err(Status::internal("检查成员资格失败"))
+            }
+        }
+    }
+
+    // 搜索用户加入的群组（按关键字）
+    async fn search_user_groups(
+        &self,
+        request: Request<SearchUserGroupsRequest>,
+    ) -> Result<Response<SearchUserGroupsResponse>, Status> {
+        let req = request.into_inner();
+
+        let user_id = req
+            .user_id
+            .parse::<Uuid>()
+            .map_err(|e| Status::invalid_argument(format!("无效的用户ID: {}", e)))?;
+
+        // 设置默认值
+        let page = if req.page <= 0 { 1 } else { req.page };
+        let page_size = if req.page_size <= 0 || req.page_size > 100 { 10 } else { req.page_size };
+
+        match self
+            .group_repository
+            .search_user_groups(user_id, &req.keyword, page, page_size)
+            .await
+        {
+            Ok((groups, total)) => {
+                let proto_groups = groups.into_iter().map(|g| g.to_proto()).collect();
+
+                Ok(Response::new(SearchUserGroupsResponse {
+                    groups: proto_groups,
+                    total: total as i32,
+                    page,
+                    page_size,
+                }))
+            }
+            Err(e) => {
+                error!("搜索用户群组失败: {}", e);
+                Err(Status::internal("搜索用户群组失败"))
             }
         }
     }

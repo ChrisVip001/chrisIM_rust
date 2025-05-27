@@ -35,6 +35,9 @@ service GroupService {
   
   // 检查用户是否在群组中
   rpc CheckMembership (CheckMembershipRequest) returns (CheckMembershipResponse);
+  
+  // 搜索用户的群组
+  rpc SearchUserGroups (SearchUserGroupsRequest) returns (SearchUserGroupsResponse);
 }
 
 // 创建群组请求
@@ -179,4 +182,20 @@ enum MemberRole {
   MEMBER = 0;
   ADMIN = 1;
   OWNER = 2;
+}
+
+// 搜索用户群组请求
+message SearchUserGroupsRequest {
+  string user_id = 1;
+  string keyword = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+// 搜索用户群组响应
+message SearchUserGroupsResponse {
+  repeated UserGroup groups = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
 } 

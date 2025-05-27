@@ -84,6 +84,7 @@ message GetFriendListRequest {
   int64 page = 2;         // 页码，从1开始，0表示使用默认值
   int64 page_size = 3;    // 每页数量，0表示使用默认值
   string sort_by = 4;     // 排序方式: username_asc, username_desc, created_at_asc, created_at_desc
+  string keyword = 5;     // 搜索关键词，用于搜索好友名称、昵称或备注
 }
 
 // 获取好友列表响应

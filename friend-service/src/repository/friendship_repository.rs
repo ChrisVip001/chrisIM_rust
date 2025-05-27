@@ -186,6 +186,7 @@ impl FriendshipRepository {
         page: Option<i64>,
         page_size: Option<i64>,
         sort_by: Option<String>,
+        keyword: Option<String>,
     ) -> Result<Vec<Friend>> {
         // 默认分页参数
         let page = page.unwrap_or(1);
@@ -201,8 +202,8 @@ impl FriendshipRepository {
             _ => "fr.created_at DESC", // 默认按创建时间降序
         };
 
-        // 构建SQL查询字符串
-        let query = format!(
+        // 构建基础SQL查询
+        let mut base_query = format!(
             r#"
             SELECT 
                 u.id::text, 
@@ -214,10 +215,7 @@ impl FriendshipRepository {
             FROM users u
             JOIN friend_relation fr ON fr.friend_id = u.id 
             WHERE fr.user_id = $1 AND fr.status = 1
-            ORDER BY {}
-            LIMIT $2 OFFSET $3
-            "#,
-            order_by
+            "#
         );
         
         // 创建一个中间结构体用于接收数据库结果
@@ -231,13 +229,49 @@ impl FriendshipRepository {
             remark: Option<String>,
         }
         
-        // 使用query_as执行查询并映射结果
-        let rows = sqlx::query_as::<_, FriendRow>(&query)
-            .bind(user_id)
-            .bind(page_size)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = if let Some(keyword) = &keyword {
+            // 如果有关键词，使用参数化查询
+            let search_query = format!(
+                r#"
+                {}
+                AND (
+                    u.username ILIKE $4 OR 
+                    u.nickname ILIKE $4 OR 
+                    fr.remark ILIKE $4
+                )
+                ORDER BY {}
+                LIMIT $2 OFFSET $3
+                "#, 
+                base_query, order_by
+            );
+            
+            let search_pattern = format!("%{}%", keyword);
+            
+            sqlx::query_as::<_, FriendRow>(&search_query)
+                .bind(user_id)
+                .bind(page_size)
+                .bind(offset)
+                .bind(search_pattern)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            // 没有关键词，使用基本查询
+            let query = format!(
+                r#"
+                {}
+                ORDER BY {}
+                LIMIT $2 OFFSET $3
+                "#, 
+                base_query, order_by
+            );
+            
+            sqlx::query_as::<_, FriendRow>(&query)
+                .bind(user_id)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(&self.pool)
+                .await?
+        };
         
         // 将FriendRow转换为Friend
         let friends = rows
@@ -500,19 +534,44 @@ impl FriendshipRepository {
     }
 
     // 获取好友总数
-    pub async fn count_friends(&self, user_id: &str) -> Result<i64> {
-        let result = sqlx::query!(
-            r#"
-            SELECT COUNT(*) as "count!"
-            FROM friend_relation
-            WHERE user_id = $1 AND status = 1
-            "#,
-            user_id
-        )
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(result.count)
+    pub async fn count_friends(&self, user_id: &str, keyword: Option<String>) -> Result<i64> {
+        if let Some(keyword) = keyword {
+            // 有关键词时使用LIKE查询
+            let search_pattern = format!("%{}%", keyword);
+            let result = sqlx::query!(
+                r#"
+                SELECT COUNT(*) as "count!"
+                FROM friend_relation fr
+                JOIN users u ON fr.friend_id = u.id
+                WHERE fr.user_id = $1 AND fr.status = 1
+                AND (
+                    u.username ILIKE $2 OR 
+                    u.nickname ILIKE $2 OR 
+                    fr.remark ILIKE $2
+                )
+                "#,
+                user_id,
+                search_pattern
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            
+            Ok(result.count)
+        } else {
+            // 无关键词时的常规查询
+            let result = sqlx::query!(
+                r#"
+                SELECT COUNT(*) as "count!"
+                FROM friend_relation
+                WHERE user_id = $1 AND status = 1
+                "#,
+                user_id
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            
+            Ok(result.count)
+        }
     }
 
     // 拉黑用户

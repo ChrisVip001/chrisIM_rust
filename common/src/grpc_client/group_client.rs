@@ -7,6 +7,7 @@ use crate::proto::group::{
     DeleteGroupRequest, DeleteGroupResponse, GetGroupRequest, GetMembersRequest, GetMembersResponse,
     GetUserGroupsRequest, GetUserGroupsResponse, GroupResponse, MemberResponse, MemberRole,
     RemoveMemberRequest, RemoveMemberResponse, UpdateGroupRequest, UpdateMemberRoleRequest,
+    SearchUserGroupsRequest, SearchUserGroupsResponse,
 };
 
 use crate::service_discovery::LbWithServiceDiscovery;
@@ -152,6 +153,41 @@ impl GroupServiceGrpcClient {
 
     /// 获取用户加入的群组列表
     pub async fn get_user_groups(&mut self, user_id: &str) -> Result<GetUserGroupsResponse> {
+        let request = Request::new(GetUserGroupsRequest {
+            user_id: user_id.to_string(),
+        });
+
+        let response = self.service_client.get_user_groups(request).await?;
+        Ok(response.into_inner())
+    }
+    
+    /// 搜索用户加入的群组 (按关键字)
+    pub async fn search_user_groups(
+        &mut self,
+        user_id: &str,
+        keyword: &str,
+        page: i32,
+        page_size: i32,
+    ) -> Result<SearchUserGroupsResponse> {
+        let request = Request::new(SearchUserGroupsRequest {
+            user_id: user_id.to_string(),
+            keyword: keyword.to_string(),
+            page,
+            page_size,
+        });
+
+        let response = self.service_client.search_user_groups(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 根据关键字筛选用户加入的群组
+    /// 注意：由于proto中没有定义search_user_groups方法，这里使用get_user_groups替代
+    /// 调用者需要在客户端进行关键字过滤
+    pub async fn search_user_groups_by_keyword(
+        &mut self,
+        user_id: &str,
+    ) -> Result<GetUserGroupsResponse> {
+        // 先获取所有群组，然后在应用层面进行过滤
         let request = Request::new(GetUserGroupsRequest {
             user_id: user_id.to_string(),
         });

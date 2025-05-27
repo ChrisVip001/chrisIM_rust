@@ -15,7 +15,7 @@ use common::grpc_client::base::{service_register_center, get_rpc_client};
 use std::sync::{Arc, RwLock};
 use crate::auth::jwt::UserInfo;
 use crate::proxy::services::{
-    UserServiceHandler, FriendServiceHandler, GroupServiceHandler,
+    UserServiceHandler, FriendServiceHandler, GroupServiceHandler, CommonServiceHandler,
     common::error_response
 };
 
@@ -89,6 +89,7 @@ pub struct GrpcClientFactoryImpl {
     user_service: LazyServiceHandler<UserServiceHandler>,
     friend_service: LazyServiceHandler<FriendServiceHandler>,
     group_service: LazyServiceHandler<GroupServiceHandler>,
+    common_service: LazyServiceHandler<CommonServiceHandler>,
 }
 
 impl GrpcClientFactoryImpl {
@@ -141,6 +142,32 @@ impl GrpcClientFactoryImpl {
             
             GroupServiceHandler::new(client)
         });
+        
+        // 创建通用服务的延迟初始化处理器
+        let config_clone4 = config.clone();
+        let common_service = LazyServiceHandler::new(move || {
+            let config_clone = config_clone4.clone();
+            // 获取各服务客户端
+            let user_client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config_clone, "user".to_string()).await
+                })
+            }).map(|client| UserServiceGrpcClient::new(client)).expect("无法连接用户服务");
+            
+            let friend_client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&config_clone, "friend".to_string()).await
+                })
+            }).map(|client| FriendServiceGrpcClient::new(client)).expect("无法连接好友服务");
+            
+            let group_client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&config_clone, "group".to_string()).await
+                })
+            }).map(|client| GroupServiceGrpcClient::new(client)).expect("无法连接群组服务");
+            
+            CommonServiceHandler::new(user_client, friend_client, group_client)
+        });
 
         Self {
             config,
@@ -148,6 +175,7 @@ impl GrpcClientFactoryImpl {
             user_service,
             friend_service,
             group_service,
+            common_service,
         }
     }
 
@@ -164,6 +192,7 @@ impl GrpcClientFactoryImpl {
             "users" => "user".to_string(),
             "friends" => "friend".to_string(),
             "groups" => "group".to_string(),
+            "common" => "common".to_string(),
             _ => service_name.clone(),
         };
 
@@ -256,6 +285,15 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                             error_response(&format!("处理群组服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
                         })
                 },
+                "common" => {
+                    // 延迟初始化获取通用服务处理器
+                    let mut common_service = self_clone.common_service.get();
+                    common_service.handle_request(&method, &path, body, user_info.clone()).await
+                        .unwrap_or_else(|err| {
+                            error!("处理通用服务请求失败: {}", err);
+                            error_response(&format!("处理通用服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                        })
+                },
                 // 将来可以添加其他服务的处理分支
                 _ => {
                     error!("不支持的服务类型: {}", service_name);
@@ -292,6 +330,7 @@ impl Clone for GrpcClientFactoryImpl {
             user_service: self.user_service.clone(),
             friend_service: self.friend_service.clone(),
             group_service: self.group_service.clone(),
+            common_service: self.common_service.clone(),
         }
     }
 }

@@ -45,6 +45,8 @@ pub enum ServiceType {
     Chat,
     /// 静态资源服务
     Static,
+    /// 通用服务
+    Common,
 }
 
 /// 路径重写规则
@@ -100,6 +102,17 @@ impl Default for RoutesConfig {
                     name: "聊天服务".to_string(),
                     path_prefix: "/api/chat".to_string(),
                     service_type: ServiceType::Chat,
+                    require_auth: true,
+                    methods: vec![],
+                    rewrite_headers: HashMap::new(),
+                    path_rewrite: None,
+                },
+                // 通用服务路由
+                RouteRule {
+                    id: "common-service".to_string(),
+                    name: "通用服务".to_string(),
+                    path_prefix: "/api/common".to_string(),
+                    service_type: ServiceType::Common,
                     require_auth: true,
                     methods: vec![],
                     rewrite_headers: HashMap::new(),
