@@ -63,16 +63,12 @@ impl ServiceProxy {
         // 根据服务类型决定转发方式
         match service_type {
             // 核心业务服务使用gRPC转发
-            ServiceType::User | ServiceType::Friend | ServiceType::Group => {
+            ServiceType::User | ServiceType::Friend | ServiceType::Group | ServiceType::Chat => {
                 self.forward_grpc_request(req, service_type).await
             }
             // HTTP服务或静态服务使用HTTP转发
-            ServiceType::HttpService(_) | ServiceType::Static | ServiceType::Chat => {
+            ServiceType::Static => {
                 self.forward_http_request_by_type(req, service_type).await
-            }
-            // gRPC服务使用gRPC转发
-            ServiceType::GrpcService(_) => {
-                self.forward_grpc_request(req, service_type).await
             }
         }
     }
@@ -146,8 +142,6 @@ impl ServiceProxy {
             ServiceType::Group => "group".to_string(),
             ServiceType::Chat => "chat".to_string(),
             ServiceType::Static => "static".to_string(),
-            ServiceType::HttpService(name) => name.clone(),
-            ServiceType::GrpcService(name) => name.clone(),
         }
     }
 
