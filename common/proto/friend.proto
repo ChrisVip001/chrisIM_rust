@@ -47,6 +47,15 @@ service FriendService {
   
   // 搜索潜在好友
   rpc SearchPotentialFriends (SearchPotentialFriendsRequest) returns (SearchPotentialFriendsResponse);
+  
+  // 获取所有好友详细列表（无分页）
+  rpc GetAllFriendDetailList (GetAllFriendDetailListRequest) returns (GetAllFriendDetailListResponse);
+  
+  // 设置好友星标状态
+  rpc ToggleFriendStar (ToggleFriendStarRequest) returns (ToggleFriendStarResponse);
+  
+  // 设置好友置顶状态
+  rpc ToggleFriendTop (ToggleFriendTopRequest) returns (ToggleFriendTopResponse);
 }
 
 // 发送好友请求
@@ -257,4 +266,60 @@ message PotentialFriend {
   optional string avatar_url = 4;     // 头像地址
   optional string phone = 5;          // 手机号（可能会根据隐私设置处理）
   FriendshipStatus friendship_status = 6; // 好友关系状态，如果有的话
+}
+
+// 好友类型
+enum FriendType {
+  FRIEND = 0;    // 普通好友
+  OFFICIAL = 1;  // 官方账号
+  SYSTEM = 2;    // 系统账号
+}
+
+// 详细好友信息
+message DetailedFriend {
+  string id = 1;
+  optional string username = 2;
+  optional string nickname = 3;
+  optional string avatar_url = 4;
+  google.protobuf.Timestamp friendship_created_at = 5;
+  optional string remark = 6;    // 好友备注名称
+  bool is_online = 7;            // 是否在线
+  bool is_starred = 8;           // 是否星标
+  bool is_top = 9;               // 是否置顶
+  int32 relation_status = 10;    // 关系状态：1-正常好友 2-已拉黑
+  FriendType friend_type = 11;   // 好友类型：0-普通好友 1-官方账号 2-系统账号
+}
+
+// 获取所有好友详细列表请求（无分页）
+message GetAllFriendDetailListRequest {
+  string user_id = 1;           // 用户ID
+}
+
+// 获取所有好友详细列表响应（无分页）
+message GetAllFriendDetailListResponse {
+  repeated DetailedFriend friends = 1;  // 好友列表
+}
+
+// 设置好友星标状态请求
+message ToggleFriendStarRequest {
+  string user_id = 1;        // 用户ID
+  string friend_id = 2;      // 好友ID
+  bool is_starred = 3;       // 是否星标
+}
+
+// 设置好友星标状态响应
+message ToggleFriendStarResponse {
+  bool success = 1;          // 操作是否成功
+}
+
+// 设置好友置顶状态请求
+message ToggleFriendTopRequest {
+  string user_id = 1;        // 用户ID
+  string friend_id = 2;      // 好友ID
+  bool is_top = 3;           // 是否置顶
+}
+
+// 设置好友置顶状态响应
+message ToggleFriendTopResponse {
+  bool success = 1;          // 操作是否成功
 }

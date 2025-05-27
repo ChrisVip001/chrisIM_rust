@@ -9,13 +9,16 @@ use common::proto::friend::{
     DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
     GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, 
     SearchPotentialFriendsResponse,
+    GetAllFriendDetailListRequest, GetAllFriendDetailListResponse,
+    ToggleFriendStarRequest, ToggleFriendStarResponse,
+    ToggleFriendTopRequest, ToggleFriendTopResponse,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use crate::repository::friendship_repository::FriendshipRepository;
-use crate::model::friendship::PotentialFriend;
+use crate::model::friendship::{PotentialFriend, DetailedFriend};
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
@@ -40,6 +43,80 @@ impl FriendServiceImpl {
             Err(e) => {
                 error!("检查用户是否存在失败: {}", e);
                 Err(Status::internal("内部服务错误"))
+            }
+        }
+    }
+
+    // 添加好友星标状态辅助方法
+    async fn toggle_friend_star_helper(&self, user_id: &str, friend_id: &str, is_starred: bool) -> Result<bool, Status> {
+        // 检查用户是否存在
+        match self.check_user_exists(user_id).await {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
+        
+        // 检查好友关系
+        match self.repository.check_friendship(user_id, friend_id).await {
+            Ok(status) => {
+                if status != Some(FriendshipStatus::Accepted) {
+                    return Err(Status::failed_precondition("不是好友关系，无法设置星标状态"));
+                }
+            },
+            Err(e) => {
+                error!("检查好友关系失败: {}", e);
+                return Err(Status::internal("内部服务错误"));
+            }
+        }
+        
+        // 更新星标状态
+        match self.repository.update_friend_star(user_id, friend_id, is_starred).await {
+            Ok(success) => {
+                if success {
+                    Ok(true)
+                } else {
+                    Err(Status::internal("设置星标状态失败"))
+                }
+            },
+            Err(e) => {
+                error!("设置好友星标状态失败: {}", e);
+                Err(Status::internal("设置星标状态失败"))
+            }
+        }
+    }
+
+    // 添加好友置顶状态辅助方法
+    async fn toggle_friend_top_helper(&self, user_id: &str, friend_id: &str, is_top: bool) -> Result<bool, Status> {
+        // 检查用户是否存在
+        match self.check_user_exists(user_id).await {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
+        
+        // 检查好友关系
+        match self.repository.check_friendship(user_id, friend_id).await {
+            Ok(status) => {
+                if status != Some(FriendshipStatus::Accepted) {
+                    return Err(Status::failed_precondition("不是好友关系，无法设置置顶状态"));
+                }
+            },
+            Err(e) => {
+                error!("检查好友关系失败: {}", e);
+                return Err(Status::internal("内部服务错误"));
+            }
+        }
+        
+        // 更新置顶状态
+        match self.repository.update_friend_top(user_id, friend_id, is_top).await {
+            Ok(success) => {
+                if success {
+                    Ok(true)
+                } else {
+                    Err(Status::internal("设置置顶状态失败"))
+                }
+            },
+            Err(e) => {
+                error!("设置好友置顶状态失败: {}", e);
+                Err(Status::internal("设置置顶状态失败"))
             }
         }
     }
@@ -576,7 +653,7 @@ impl FriendService for FriendServiceImpl {
             .into_iter()
             .map(|(id, username, nickname, avatar_url, phone, friendship_status)| {
                 let friend = PotentialFriend::from_tuple(
-                    id, username, nickname, avatar_url, phone, friendship_status.parse::<i32>().unwrap_or(-1)
+                    id, username, nickname, avatar_url, phone, friendship_status
                 );
                 friend.to_proto()
             })
@@ -585,5 +662,90 @@ impl FriendService for FriendServiceImpl {
         Ok(Response::new(SearchPotentialFriendsResponse {
             users: potential_friends,
         }))
+    }
+
+    /// 获取所有好友详细列表（无分页）
+    async fn get_all_friend_detail_list(
+        &self,
+        request: Request<GetAllFriendDetailListRequest>,
+    ) -> Result<Response<GetAllFriendDetailListResponse>, Status> {
+        let user_id = request.into_inner().user_id;
+        
+        // 基本参数验证
+        if user_id.is_empty() {
+            return Err(Status::invalid_argument("用户ID不能为空"));
+        }
+        
+        // 检查用户是否存在
+        match self.check_user_exists(&user_id).await {
+            Ok(_) => {},
+            Err(e) => return Err(e),
+        }
+        
+        // 获取所有好友详细列表
+        match self.repository.get_all_friend_detail_list(&user_id).await {
+            Ok(friends) => {
+                // 转换为proto消息
+                let proto_friends = friends.into_iter()
+                    .map(|f| f.to_proto())
+                    .collect();
+                
+                Ok(Response::new(GetAllFriendDetailListResponse {
+                    friends: proto_friends,
+                }))
+            },
+            Err(e) => {
+                error!("获取好友详细列表失败: {}", e);
+                Err(Status::internal("获取好友详细列表失败"))
+            }
+        }
+    }
+
+    // 添加好友星标状态
+    async fn toggle_friend_star(
+        &self,
+        request: Request<ToggleFriendStarRequest>,
+    ) -> Result<Response<ToggleFriendStarResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = req.user_id.clone();
+        let friend_id = req.friend_id.clone();
+        let is_starred = req.is_starred;
+        
+        // 更新星标状态
+        match self.toggle_friend_star_helper(&user_id, &friend_id, is_starred).await {
+            Ok(success) => {
+                Ok(Response::new(ToggleFriendStarResponse {
+                    success: success,
+                }))
+            },
+            Err(e) => {
+                error!("设置好友星标状态失败: {:?}", e);
+                Err(e)
+            }
+        }
+    }
+
+    // 添加好友置顶状态
+    async fn toggle_friend_top(
+        &self,
+        request: Request<ToggleFriendTopRequest>,
+    ) -> Result<Response<ToggleFriendTopResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = req.user_id.clone();
+        let friend_id = req.friend_id.clone();
+        let is_top = req.is_top;
+        
+        // 更新置顶状态
+        match self.toggle_friend_top_helper(&user_id, &friend_id, is_top).await {
+            Ok(success) => {
+                Ok(Response::new(ToggleFriendTopResponse {
+                    success: success,
+                }))
+            },
+            Err(e) => {
+                error!("设置好友置顶状态失败: {:?}", e);
+                Err(e)
+            }
+        }
     }
 }
