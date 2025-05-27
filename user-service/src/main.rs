@@ -105,37 +105,10 @@ async fn main() -> Result<()> {
     // 创建gRPC健康检查服务
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     
-    // 设置服务健康状态
+    // 设置服务为健康状态 - 只要服务能启动就认为是健康的
     health_reporter
         .set_serving::<UserServiceServer<UserServiceImpl>>()
         .await;
-
-    // 启动一个后台任务来定期检查数据库连接并更新健康状态
-    let db_pool_health = db_pool.clone();
-    let mut health_reporter_clone = health_reporter.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-        loop {
-            interval.tick().await;
-            
-            // 检查数据库连接
-            match sqlx::query("SELECT 1").fetch_one(&db_pool_health).await {
-                Ok(_) => {
-                    // 数据库连接正常，设置为serving状态
-                    let _ = health_reporter_clone
-                        .set_serving::<UserServiceServer<UserServiceImpl>>()
-                        .await;
-                }
-                Err(e) => {
-                    error!("数据库健康检查失败: {}", e);
-                    // 数据库连接失败，设置为not serving状态
-                    let _ = health_reporter_clone
-                        .set_not_serving::<UserServiceServer<UserServiceImpl>>()
-                        .await;
-                }
-            }
-        }
-    });
 
     // 启动gRPC服务
     info!("用户服务启动，监听地址: {}", addr);

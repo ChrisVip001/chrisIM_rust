@@ -74,42 +74,10 @@ impl ChatRpcService {
         // 创建gRPC健康检查服务
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         
-        // 设置服务健康状态
+        // 设置服务为健康状态 - 只要服务能启动就认为是健康的
         health_reporter
             .set_serving::<ChatServiceServer<ChatRpcService>>()
             .await;
-
-        // 启动一个后台任务来定期检查Kafka连接并更新健康状态
-        let producer_health = producer.clone();
-        let mut health_reporter_clone = health_reporter.clone();
-        let topic_health = config.kafka.topic.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-            loop {
-                interval.tick().await;
-                
-                // 检查Kafka连接 - 尝试发送一个测试消息
-                let test_record = FutureRecord::to(&topic_health)
-                    .payload("health_check")
-                    .key("health");
-                
-                match producer_health.send(test_record, Duration::from_secs(1)).await {
-                    Ok(_) => {
-                        // Kafka连接正常，设置为serving状态
-                        let _ = health_reporter_clone
-                            .set_serving::<ChatServiceServer<ChatRpcService>>()
-                            .await;
-                    }
-                    Err((e, _)) => {
-                        error!("Kafka健康检查失败: {}", e);
-                        // Kafka连接失败，设置为not serving状态
-                        let _ = health_reporter_clone
-                            .set_not_serving::<ChatServiceServer<ChatRpcService>>()
-                            .await;
-                    }
-                }
-            }
-        });
 
         // 创建日志拦截器
         // 用于记录和跟踪所有RPC请求

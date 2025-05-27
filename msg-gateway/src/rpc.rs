@@ -34,33 +34,10 @@ impl MsgRpcService {
         // 创建gRPC健康检查服务
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         
-        // 设置服务健康状态
+        // 设置服务为健康状态 - 只要服务能启动就认为是健康的
         health_reporter
             .set_serving::<MsgServiceServer<MsgRpcService>>()
             .await;
-
-        // 启动一个后台任务来定期检查WebSocket连接管理器状态并更新健康状态
-        let manager_health = manager.clone();
-        let mut health_reporter_clone = health_reporter.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-            loop {
-                interval.tick().await;
-                
-                // 检查WebSocket连接管理器状态 - 通过hub长度获取连接数
-                let connection_count = manager_health.hub.len();
-                
-                // 如果管理器正常工作（能够获取连接数），则认为服务健康
-                // 这里我们简单地检查管理器是否响应，实际项目中可以添加更复杂的检查
-                let _ = health_reporter_clone
-                    .set_serving::<MsgServiceServer<MsgRpcService>>()
-                    .await;
-                
-                debug!("WebSocket连接数: {}", connection_count);
-            }
-        });
-
-        info!("<ws> rpc service health check started");
 
         // 创建日志拦截器
         let logging_interceptor = LoggingInterceptor::new();

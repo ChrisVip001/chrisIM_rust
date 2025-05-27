@@ -1,6 +1,6 @@
 use axum::{
     extract::Request,
-    http::{StatusCode, HeaderMap},
+    http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -10,12 +10,10 @@ use serde_json::json;
 use tracing::warn;
 
 use crate::auth::jwt;
+use crate::middleware::get_client_ip;
 
 /// 认证中间件
-pub async fn auth_middleware(
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn auth_middleware(req: Request, next: Next) -> Response {
     let config = match ConfigLoader::get_global() {
         Some(config) => config,
         None => {
@@ -25,39 +23,37 @@ pub async fn auth_middleware(
                     "error": "config_error",
                     "message": "服务器配置错误"
                 })),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
-    // 手动提取 Authorization header
-    let auth_header = req.headers().get("authorization");
-    let token = match auth_header {
-        Some(header_value) => {
-            match header_value.to_str() {
-                Ok(header_str) => {
-                    if header_str.starts_with("Bearer ") {
-                        header_str.strip_prefix("Bearer ").unwrap_or("").to_string()
-                    } else {
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({
-                                "error": "unauthorized",
-                                "message": "无效的认证令牌格式"
-                            })),
-                        ).into_response();
-                    }
-                }
-                Err(_) => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(json!({
-                            "error": "unauthorized",
-                            "message": "无效的认证令牌格式"
-                        })),
-                    ).into_response();
-                }
-            }
-        }
+    // 检查路径是否在白名单中
+    let path = req.uri().path().to_string();
+    if config
+        .gateway
+        .auth
+        .path_whitelist
+        .iter()
+        .any(|p| path.starts_with(p))
+    {
+        // 白名单路径，直接放行
+        return next.run(req).await;
+    }
+
+    // 检查IP是否在白名单中
+    let client_ip = get_client_ip(&req);
+    if config.gateway.auth.ip_whitelist.contains(&client_ip) {
+        // IP白名单，直接放行
+        return next.run(req).await;
+    }
+
+    // 获取JWT配置
+    let jwt_config = &config.gateway.auth.jwt;
+
+    // 使用jwt::extract_token函数提取token
+    let token = match jwt::extract_token(&req, &jwt_config.header_name, &jwt_config.header_prefix) {
+        Some(token) => token,
         None => {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -65,11 +61,10 @@ pub async fn auth_middleware(
                     "error": "unauthorized",
                     "message": "缺少认证令牌"
                 })),
-            ).into_response();
+            )
+                .into_response();
         }
     };
-
-    let jwt_config = &config.gateway.auth.jwt;
 
     // 验证JWT token
     match jwt::verify_token(token, jwt_config).await {
@@ -87,7 +82,8 @@ pub async fn auth_middleware(
                     "error": "unauthorized",
                     "message": "无效的认证令牌"
                 })),
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }
