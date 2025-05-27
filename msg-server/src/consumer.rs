@@ -303,7 +303,6 @@ impl ConsumerService {
             .await
             .map_err(|e| Error::Internal(format!("消息处理任务执行失败: {}", e)))?;
 
-        debug!("消息处理完成: server_id={}", msg.server_id);
         Ok(())
     }
 

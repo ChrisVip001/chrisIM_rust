@@ -61,10 +61,6 @@
 
 pub mod productor;
 pub mod consumer;
-pub mod storage_service;
+mod pusher;
 
-/// 推送服务模块
-/// 负责将消息推送到在线用户
-pub mod pusher {
-    pub mod service;
-}
+pub use pusher::push_service;
