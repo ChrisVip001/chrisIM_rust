@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tracing::{error, debug};
 
 use super::common::{success_response, extract_string_param, timestamp_to_datetime_string,
-                    get_i64_param, get_optional_string};
+                    get_i64_param, get_optional_string, get_user_id_from_jwt};
 use crate::auth::jwt::UserInfo;
 
 /// 好友服务处理器
@@ -33,6 +33,9 @@ impl FriendServiceHandler {
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理好友服务请求: {} {}", method, path);
 
+        // 从JWT中获取用户ID
+        let user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+
         // 从路径提取方法名 - 格式: /api/friends/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
 
@@ -40,7 +43,6 @@ impl FriendServiceHandler {
             // 发送好友请求
             (&Method::POST, "sendRequest") => {
                 let message = extract_string_param(&body, "message", Some("message"))?;
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let response = self.client.send_friend_request(&user_id, &friend_id,&message).await?;
@@ -51,7 +53,6 @@ impl FriendServiceHandler {
 
             // 接受好友请求
             (&Method::POST, "acceptRequest") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let response = self.client.accept_friend_request(&user_id, &friend_id).await?;
@@ -62,7 +63,6 @@ impl FriendServiceHandler {
 
             // 拒绝好友请求
             (&Method::POST, "rejectRequest") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
                 let reason = extract_string_param(&body, "rejectReason", Some("reject_reason"))?;
 
@@ -74,7 +74,6 @@ impl FriendServiceHandler {
 
             // 获取好友列表
             (&Method::POST, "getList") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 // 提取分页和排序参数
                 let page = get_i64_param(&body, "page", 1);
                 let page_size = get_i64_param(&body, "pageSize", 20);
@@ -97,7 +96,6 @@ impl FriendServiceHandler {
 
             // 获取好友请求列表
             (&Method::POST, "getRequests") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let page = get_i64_param(&body, "page", 1);
                 let page_size = get_i64_param(&body, "pageSize", 20);
                 let response = self.client.get_friend_requests_with_params(&user_id, page, page_size).await?;
@@ -111,7 +109,6 @@ impl FriendServiceHandler {
 
             // 删除好友
             (&Method::DELETE, "delete") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let response = self.client.delete_friend(&user_id, &friend_id).await?;
@@ -121,7 +118,6 @@ impl FriendServiceHandler {
 
             // 检查好友关系
             (&Method::GET, "checkFriendship") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let response = self.client.check_friendship(&user_id, &friend_id).await?;
@@ -146,7 +142,6 @@ impl FriendServiceHandler {
 
             // 拉黑用户
             (&Method::POST, "block") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let blocked_user_id = extract_string_param(&body, "blockedUserId", Some("blocked_user_id"))?;
 
                 let response = self.client.block_user(&user_id, &blocked_user_id).await?;
@@ -156,7 +151,6 @@ impl FriendServiceHandler {
 
             // 解除拉黑
             (&Method::POST, "unblock") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let blocked_user_id = extract_string_param(&body, "blockedUserId", Some("blocked_user_id"))?;
 
                 let response = self.client.unblock_user(&user_id, &blocked_user_id).await?;
@@ -167,7 +161,6 @@ impl FriendServiceHandler {
             // 创建或更新好友分组
             (&Method::POST, "createOrUpdateGroup") => {
                 let id = get_optional_string(&body, "id",None);
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let group_name = extract_string_param(&body, "groupName", Some("group_name"))?;
                 let sort_order = body.get("sortOrder").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 let friend_ids = body.get("friendIds")
@@ -197,7 +190,6 @@ impl FriendServiceHandler {
             // 删除好友分组
             (&Method::POST, "deleteGroup") => {
                 let id = extract_string_param(&body, "id", Some("id"))?;
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.client.delete_friend_group(&id, &user_id).await?;
 
@@ -206,8 +198,6 @@ impl FriendServiceHandler {
 
             // 获取好友分组列表
             (&Method::GET, "getGroups") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-
                 let response = self.client.get_friend_groups(&user_id).await?;
                 let groups = response.groups.iter().map(|g| self.convert_friend_group_to_json(g)).collect::<Vec<_>>();
 
@@ -217,7 +207,6 @@ impl FriendServiceHandler {
             // 获取分组好友列表
             (&Method::POST, "getGroupFriends") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.client.get_group_friends(&group_id, &user_id).await?;
                 let friends = response.friends.iter().map(|f| self.convert_friend_to_json(f)).collect::<Vec<_>>();
