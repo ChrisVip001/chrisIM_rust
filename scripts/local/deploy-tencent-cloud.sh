@@ -27,8 +27,11 @@ CONFIG_DIR="/etc/rustim"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # Git 配置
-GIT_REPO="https://gitee.com/chrisvip/rust-im.git"
+GIT_REPO="git@gitee.com:chrisvip/rust-im.git"  # 改为SSH方式
 GIT_BRANCH="master-feature"
+# 添加SSH配置选项
+USE_SSH="true"  # 默认使用SSH
+SSH_KEY_PATH="$HOME/.ssh/id_rsa"  # SSH密钥路径
 
 # 服务配置
 declare -A SERVICES=(
@@ -73,10 +76,18 @@ show_help() {
     echo "  --build-profile PROFILE  构建配置 (debug|release) [默认: $BUILD_PROFILE]"
     echo "  --git-repo URL           Git 仓库地址 [默认: $GIT_REPO]"
     echo "  --git-branch BRANCH      Git 分支 [默认: $GIT_BRANCH]"
+    echo "  --use-ssh                使用SSH方式克隆Git仓库 (推荐)"
+    echo "  --use-https              使用HTTPS方式克隆Git仓库"
+    echo "  --ssh-key PATH           SSH密钥路径 [默认: $SSH_KEY_PATH]"
     echo "  -h, --help              显示此帮助信息"
     echo ""
+    echo "Git认证说明:"
+    echo "  SSH方式 (推荐): 配置一次SSH密钥后无需再输入密码"
+    echo "  HTTPS方式: 需要输入用户名密码，可通过环境变量GITEE_USERNAME和GITEE_PASSWORD设置"
+    echo ""
     echo "示例:"
-    echo "  $0 deploy                        # 完整部署"
+    echo "  $0 deploy                        # 完整部署 (默认使用SSH)"
+    echo "  $0 --use-https deploy            # 使用HTTPS方式部署"
     echo "  $0 -e staging deploy             # 部署到staging环境"
     echo "  $0 build                         # 仅构建项目"
     echo "  $0 restart                       # 重启所有服务"
@@ -114,6 +125,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --git-branch)
             GIT_BRANCH="$2"
+            shift 2
+            ;;
+        --use-ssh)
+            USE_SSH="true"
+            shift
+            ;;
+        --use-https)
+            USE_SSH="false"
+            shift
+            ;;
+        --ssh-key)
+            SSH_KEY_PATH="$2"
             shift 2
             ;;
         -h|--help)
@@ -170,6 +193,10 @@ show_deploy_config() {
     echo "  - 构建配置: $BUILD_PROFILE"
     echo "  - Git 仓库: $GIT_REPO"
     echo "  - Git 分支: $GIT_BRANCH"
+    echo "  - Git 认证方式: $(if [[ "$USE_SSH" == "true" ]]; then echo "SSH"; else echo "HTTPS"; fi)"
+    if [[ "$USE_SSH" == "true" ]]; then
+        echo "  - SSH 密钥路径: $SSH_KEY_PATH"
+    fi
     echo "  - 日志目录: $LOG_DIR"
     echo "  - 配置目录: $CONFIG_DIR"
     echo ""
@@ -297,6 +324,9 @@ install_git() {
 # 克隆或更新项目
 clone_or_update_project() {
     log_info "准备项目代码..."
+    
+    # 配置Git凭据
+    configure_git_credentials
     
     local parent_dir=$(dirname "$PROJECT_DIR")
     local project_name=$(basename "$PROJECT_DIR")
@@ -1160,6 +1190,84 @@ health_check() {
     else
         log_success "所有服务健康检查通过"
         return 0
+    fi
+}
+
+# 添加SSH密钥配置函数
+setup_ssh_key() {
+    log_info "配置SSH密钥..."
+    
+    # 检查SSH密钥是否存在
+    if [[ ! -f "$SSH_KEY_PATH" ]]; then
+        log_warning "SSH密钥不存在: $SSH_KEY_PATH"
+        log_info "正在生成新的SSH密钥..."
+        
+        # 生成SSH密钥
+        ssh-keygen -t rsa -b 4096 -C "rustim-deploy@$(hostname)" -f "$SSH_KEY_PATH" -N ""
+        
+        log_success "SSH密钥已生成: $SSH_KEY_PATH"
+        log_warning "请将以下公钥添加到Gitee账户的SSH密钥中:"
+        echo "----------------------------------------"
+        cat "${SSH_KEY_PATH}.pub"
+        echo "----------------------------------------"
+        log_info "添加步骤:"
+        log_info "1. 登录Gitee -> 设置 -> SSH公钥"
+        log_info "2. 点击'添加公钥'"
+        log_info "3. 复制上面的公钥内容并粘贴"
+        log_info "4. 点击'确定'"
+        echo ""
+        read -p "请确认已添加SSH公钥到Gitee后按回车继续..."
+    else
+        log_info "SSH密钥已存在: $SSH_KEY_PATH"
+    fi
+    
+    # 确保SSH密钥权限正确
+    chmod 600 "$SSH_KEY_PATH"
+    chmod 644 "${SSH_KEY_PATH}.pub"
+    
+    # 启动ssh-agent并添加密钥
+    if ! pgrep -x "ssh-agent" > /dev/null; then
+        eval "$(ssh-agent -s)"
+    fi
+    ssh-add "$SSH_KEY_PATH" 2>/dev/null || true
+    
+    # 测试SSH连接
+    log_info "测试SSH连接到Gitee..."
+    if ssh -T git@gitee.com -o StrictHostKeyChecking=no -o ConnectTimeout=10 2>&1 | grep -q "successfully authenticated"; then
+        log_success "SSH连接测试成功"
+    else
+        log_warning "SSH连接测试失败，但将继续尝试克隆"
+        log_info "如果克隆失败，请检查SSH密钥配置"
+    fi
+}
+
+# 配置Git凭据存储
+configure_git_credentials() {
+    log_info "配置Git凭据..."
+    
+    if [[ "$USE_SSH" == "true" ]]; then
+        setup_ssh_key
+        # 确保使用SSH URL
+        GIT_REPO="git@gitee.com:chrisvip/rust-im.git"
+    else
+        # 使用HTTPS方式，配置凭据存储
+        log_info "配置Git凭据存储..."
+        git config --global credential.helper store
+        git config --global credential.helper 'cache --timeout=86400'  # 24小时缓存
+        
+        # 如果设置了环境变量，使用它们
+        if [[ -n "$GITEE_USERNAME" && -n "$GITEE_PASSWORD" ]]; then
+            log_info "使用环境变量中的Git凭据"
+            # 创建凭据文件
+            echo "https://${GITEE_USERNAME}:${GITEE_PASSWORD}@gitee.com" > ~/.git-credentials
+            chmod 600 ~/.git-credentials
+        else
+            log_warning "未设置GITEE_USERNAME和GITEE_PASSWORD环境变量"
+            log_info "请在首次克隆时输入用户名和密码，之后会自动缓存"
+        fi
+        
+        # 确保使用HTTPS URL
+        GIT_REPO="https://gitee.com/chrisvip/rust-im.git"
     fi
 }
 
