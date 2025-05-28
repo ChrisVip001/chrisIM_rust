@@ -12,6 +12,7 @@ use common::proto::friend::{
     GetAllFriendDetailListRequest, GetAllFriendDetailListResponse,
     ToggleFriendStarRequest, ToggleFriendStarResponse,
     ToggleFriendTopRequest, ToggleFriendTopResponse,
+    UpdateFriendRemarkRequest, UpdateFriendRemarkResponse,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -747,6 +748,50 @@ impl FriendService for FriendServiceImpl {
             Err(e) => {
                 error!("设置好友置顶状态失败: {:?}", e);
                 Err(e)
+            }
+        }
+    }
+
+    // 更新好友备注
+    async fn update_friend_remark(
+        &self,
+        request: Request<UpdateFriendRemarkRequest>,
+    ) -> Result<Response<UpdateFriendRemarkResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = req.user_id;
+        let friend_id = req.friend_id;
+        let remark = req.remark;
+        
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        
+        // 检查好友关系
+        match self.repository.check_friendship(&user_id, &friend_id).await {
+            Ok(status) => {
+                if status != Some(FriendshipStatus::Accepted) {
+                    return Err(Status::failed_precondition("不是好友关系，无法更新备注"));
+                }
+            },
+            Err(e) => {
+                error!("检查好友关系失败: {}", e);
+                return Err(Status::internal("内部服务错误"));
+            }
+        }
+        
+        // 更新好友备注
+        match self.repository.update_friend_remark(&user_id, &friend_id, &remark).await {
+            Ok(friend) => {
+                // 转换为proto对象
+                let proto_friend = friend.detailed_friend_to_proto();
+                
+                Ok(Response::new(UpdateFriendRemarkResponse {
+                    success: true,
+                    friend: Some(proto_friend),
+                }))
+            },
+            Err(e) => {
+                error!("更新好友备注失败: {}", e);
+                Err(Status::internal(format!("更新好友备注失败: {}", e)))
             }
         }
     }

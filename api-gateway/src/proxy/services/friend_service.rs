@@ -120,7 +120,7 @@ impl FriendServiceHandler {
                     .map(|f| self.convert_detailed_friend_to_json(f))
                     .collect::<Vec<_>>();
 
-                Ok(success_response(detailed_friends, StatusCode::OK))
+                Ok(success_response(json!({"friends": detailed_friends}), StatusCode::OK))
             }
 
             // 删除好友
@@ -274,6 +274,25 @@ impl FriendServiceHandler {
                 let response = self.client.toggle_friend_top(&user_id, &friend_id, is_top).await?;
 
                 Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+            }
+
+            // 更新好友备注
+            (&Method::POST, "updateRemark") => {
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
+                let remark = extract_string_param(&body, "remark", Some("remark"))?;
+                
+                let response = self.client.update_friend_remark(&user_id, &friend_id, &remark).await?;
+                
+                // 如果有好友详细信息，转换并返回
+                if let Some(friend) = response.friend {
+                    Ok(success_response(
+                        json!({"success": response.success,
+                            "friend":self.convert_detailed_friend_to_json(&friend)}),
+                        StatusCode::OK
+                    ))
+                } else {
+                    Ok(success_response(json!({"success": response.success}), StatusCode::OK))
+                }
             }
 
             // 其他未实现的方法

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
-use uuid::Uuid;
 
 use crate::model::group::{Group, UserGroup};
 
@@ -20,7 +19,7 @@ impl GroupRepository {
         name: String,
         description: String,
         avatar_url: String,
-        owner_id: Uuid,
+        owner_id: String,
     ) -> Result<Group> {
         let group = Group::new(name, description, avatar_url, owner_id);
 
@@ -34,11 +33,11 @@ impl GroupRepository {
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, name, description, avatar_url, owner_id, created_at, updated_at
             "#,
-            group.id.to_string(),
+            group.id,
             group.name,
             group.description,
             group.avatar_url,
-            group.owner_id.to_string(),
+            group.owner_id,
             created_at_naive,
             updated_at_naive
         )
@@ -46,35 +45,35 @@ impl GroupRepository {
         .await?;
 
         Ok(Group {
-            id: Uuid::parse_str(&result.id).unwrap(),
+            id: result.id,
             name: result.name,
             description: result.description.unwrap_or_default(),
             avatar_url: result.avatar_url.unwrap_or_default(),
-            owner_id: Uuid::parse_str(&result.owner_id).unwrap(),
+            owner_id: result.owner_id,
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
 
     // 获取群组信息
-    pub async fn get_group(&self, group_id: Uuid) -> Result<Group> {
+    pub async fn get_group(&self, group_id: String) -> Result<Group> {
         let result = sqlx::query!(
             r#"
             SELECT id, name, description, avatar_url, owner_id, created_at, updated_at
             FROM groups
             WHERE id = $1
             "#,
-            group_id.to_string()
+            group_id
         )
         .fetch_one(&self.pool)
         .await?;
 
         Ok(Group {
-            id: Uuid::parse_str(&result.id).unwrap(),
+            id: result.id,
             name: result.name,
             description: result.description.unwrap_or_default(),
             avatar_url: result.avatar_url.unwrap_or_default(),
-            owner_id: Uuid::parse_str(&result.owner_id).unwrap(),
+            owner_id: result.owner_id,
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
@@ -83,7 +82,7 @@ impl GroupRepository {
     // 更新群组信息
     pub async fn update_group(
         &self,
-        group_id: Uuid,
+        group_id: String,
         name: Option<String>,
         description: Option<String>,
         avatar_url: Option<String>,
@@ -92,7 +91,7 @@ impl GroupRepository {
         let now_naive = now.naive_utc();
 
         // 先获取现有数据
-        let current = self.get_group(group_id).await?;
+        let current = self.get_group(group_id.clone()).await?;
 
         // 更新群组信息
         let result = sqlx::query!(
@@ -106,26 +105,26 @@ impl GroupRepository {
             description.unwrap_or(current.description),
             avatar_url.unwrap_or(current.avatar_url),
             now_naive,
-            group_id.to_string()
+            group_id
         )
         .fetch_one(&self.pool)
         .await?;
 
         Ok(Group {
-            id: Uuid::parse_str(&result.id).unwrap(),
+            id: result.id,
             name: result.name,
             description: result.description.unwrap_or_default(),
             avatar_url: result.avatar_url.unwrap_or_default(),
-            owner_id: Uuid::parse_str(&result.owner_id).unwrap(),
+            owner_id: result.owner_id,
             created_at: Utc.from_utc_datetime(&result.created_at),
             updated_at: Utc.from_utc_datetime(&result.updated_at),
         })
     }
 
     // 删除群组
-    pub async fn delete_group(&self, group_id: Uuid, user_id: Uuid) -> Result<bool> {
+    pub async fn delete_group(&self, group_id: String, user_id: String) -> Result<bool> {
         // 先检查是否是群主
-        let group = self.get_group(group_id).await?;
+        let group = self.get_group(group_id.clone()).await?;
         if group.owner_id != user_id {
             return Err(anyhow::anyhow!("只有群主可以删除群组"));
         }
@@ -135,7 +134,7 @@ impl GroupRepository {
             DELETE FROM groups
             WHERE id = $1
             "#,
-            group_id.to_string()
+            group_id
         )
         .execute(&self.pool)
         .await?
@@ -145,14 +144,14 @@ impl GroupRepository {
     }
 
     // 获取群组成员数量
-    pub async fn get_member_count(&self, group_id: Uuid) -> Result<i32> {
+    pub async fn get_member_count(&self, group_id: String) -> Result<i32> {
         let result = sqlx::query!(
             r#"
             SELECT COUNT(*) as count
             FROM group_members
             WHERE group_id = $1
             "#,
-            group_id.to_string()
+            group_id
         )
         .fetch_one(&self.pool)
         .await?;
@@ -161,7 +160,7 @@ impl GroupRepository {
     }
 
     // 获取用户加入的群组列表
-    pub async fn get_user_groups(&self, user_id: Uuid) -> Result<Vec<UserGroup>> {
+    pub async fn get_user_groups(&self, user_id: String) -> Result<Vec<UserGroup>> {
         let groups = sqlx::query!(
             r#"
             SELECT 
@@ -175,7 +174,7 @@ impl GroupRepository {
             JOIN group_members m ON g.id = m.group_id
             WHERE m.user_id = $1
             "#,
-            user_id.to_string()
+            user_id
         )
         .fetch_all(&self.pool)
         .await?;
@@ -183,7 +182,7 @@ impl GroupRepository {
         let result = groups
             .into_iter()
             .map(|g| UserGroup {
-                id: Uuid::parse_str(&g.id).unwrap(),
+                id: g.id,
                 name: g.name,
                 avatar_url: g.avatar_url.unwrap_or_default(),
                 member_count: g.member_count.unwrap_or(0) as i32,
@@ -199,7 +198,7 @@ impl GroupRepository {
     // 搜索用户加入的群组（按关键字）
     pub async fn search_user_groups(
         &self,
-        user_id: Uuid,
+        user_id: String,
         keyword: &str,
         page: i32,
         page_size: i32,
@@ -224,13 +223,25 @@ impl GroupRepository {
             ORDER BY g.name
             LIMIT $3 OFFSET $4
             "#,
-            user_id.to_string(),
+            user_id,
             format!("%{}%", keyword),
             page_size as i64,
             offset as i64
         )
         .fetch_all(&self.pool)
         .await?;
+
+        let result = groups
+            .into_iter()
+            .map(|g| UserGroup {
+                id: g.id,
+                name: g.name,
+                avatar_url: g.avatar_url.unwrap_or_default(),
+                member_count: g.member_count.unwrap_or(0) as i32,
+                role: g.role.parse::<i32>().unwrap_or(0),
+                joined_at: Utc.from_utc_datetime(&g.joined_at),
+            })
+            .collect();
 
         // 获取总数
         let total = sqlx::query!(
@@ -241,25 +252,13 @@ impl GroupRepository {
             WHERE m.user_id = $1
             AND (g.name ILIKE $2 OR g.description ILIKE $2)
             "#,
-            user_id.to_string(),
+            user_id,
             format!("%{}%", keyword)
         )
         .fetch_one(&self.pool)
         .await?
         .count
         .unwrap_or(0);
-
-        let result = groups
-            .into_iter()
-            .map(|g| UserGroup {
-                id: Uuid::parse_str(&g.id).unwrap(),
-                name: g.name,
-                avatar_url: g.avatar_url.unwrap_or_default(),
-                member_count: g.member_count.unwrap_or(0) as i32,
-                role: g.role.parse::<i32>().unwrap_or(0),
-                joined_at: Utc.from_utc_datetime(&g.joined_at),
-            })
-            .collect();
 
         Ok((result, total))
     }

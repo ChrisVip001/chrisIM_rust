@@ -56,6 +56,9 @@ service FriendService {
   
   // 设置好友置顶状态
   rpc ToggleFriendTop (ToggleFriendTopRequest) returns (ToggleFriendTopResponse);
+  
+  // 更新好友备注
+  rpc UpdateFriendRemark (UpdateFriendRemarkRequest) returns (UpdateFriendRemarkResponse);
 }
 
 // 发送好友请求
@@ -323,4 +326,17 @@ message ToggleFriendTopRequest {
 // 设置好友置顶状态响应
 message ToggleFriendTopResponse {
   bool success = 1;          // 操作是否成功
+}
+
+// 更新好友备注请求
+message UpdateFriendRemarkRequest {
+  string user_id = 1;      // 用户ID
+  string friend_id = 2;    // 好友ID
+  string remark = 3;       // 新的备注
+}
+
+// 更新好友备注响应
+message UpdateFriendRemarkResponse {
+  bool success = 1;          // 操作是否成功
+  DetailedFriend friend = 2; // 更新后的好友信息
 }

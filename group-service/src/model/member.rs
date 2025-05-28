@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Member {
-    pub id: Uuid,
-    pub group_id: Uuid,
-    pub user_id: Uuid,
+    pub id: String,
+    pub group_id: String,
+    pub user_id: String,
     pub username: Option<String>,
     pub nickname: Option<String>,
     pub avatar_url: Option<String>,
@@ -19,15 +19,15 @@ pub struct Member {
 
 impl Member {
     pub fn new(
-        group_id: Uuid,
-        user_id: Uuid,
+        group_id: String,
+        user_id: String,
         username: Option<String>,
         nickname: Option<String>,
         avatar_url: Option<String>,
         role: MemberRole,
     ) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: Uuid::new_v4().to_string(),
             group_id,
             user_id,
             username,
@@ -42,9 +42,9 @@ impl Member {
         let joined_system_time = SystemTime::from(self.joined_at);
 
         common::proto::group::Member {
-            id: self.id.to_string(),
-            group_id: self.group_id.to_string(),
-            user_id: self.user_id.to_string(),
+            id: self.id.clone(),
+            group_id: self.group_id.clone(),
+            user_id: self.user_id.clone(),
             username: self.username.clone(),
             nickname: self.nickname.clone(),
             avatar_url: self.avatar_url.clone(),

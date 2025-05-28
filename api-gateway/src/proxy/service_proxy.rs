@@ -117,6 +117,11 @@ impl ServiceProxy {
     
     /// 从服务注册中心获取服务URL
     async fn get_service_url(&self, service_name: &str) -> Result<String, Error> {
+        // 公共服务特殊处理
+        if service_name=="common"{
+           return  Ok("http://common".to_string());
+        }
+        
         // 从服务注册中心获取服务信息
         let services = self.service_register.find_by_name(service_name).await?;
         

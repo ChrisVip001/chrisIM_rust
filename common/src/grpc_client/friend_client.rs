@@ -273,4 +273,21 @@ impl FriendServiceGrpcClient {
         let response = self.service_client.toggle_friend_top(request).await?;
         Ok(response.into_inner())
     }
+
+    /// 更新好友备注
+    pub async fn update_friend_remark(
+        &mut self,
+        user_id: &str,
+        friend_id: &str,
+        remark: &str,
+    ) -> Result<crate::proto::friend::UpdateFriendRemarkResponse> {
+        let request = Request::new(crate::proto::friend::UpdateFriendRemarkRequest {
+            user_id: user_id.to_string(),
+            friend_id: friend_id.to_string(),
+            remark: remark.to_string(),
+        });
+
+        let response = self.service_client.update_friend_remark(request).await?;
+        Ok(response.into_inner())
+    }
 }

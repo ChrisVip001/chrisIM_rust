@@ -39,6 +39,15 @@ gateway:
         methods: []
         rewrite_headers: {}
 
+      # 公共服务路由
+      - id: "common-service"
+        name: "聊天服务"
+        path_prefix: "/api/common"
+        service_type: "Common"
+        require_auth: true
+        methods: [ ]
+        rewrite_headers: { }
+
   # 限流配置
   rate_limit:
     # 全局限流
@@ -51,6 +60,11 @@ gateway:
     path_rules:
       # 登录接口限流
       - path_prefix: "/api/user/login"
+        rule:
+          requests_per_second: 5
+          burst_size: 3
+          enabled: true
+      - path_prefix: "/api/user/loginByPhone"
         rule:
           requests_per_second: 5
           burst_size: 3
@@ -101,7 +115,6 @@ gateway:
       - "/api/health"
       - "/metrics"
       - "/api/user/login"
-      - "/api/user/loginByPhone"
       - "/api/user/loginByPhone"
       - "/api/users/registerByPhone"
       - "/api/users/registerByUsername"

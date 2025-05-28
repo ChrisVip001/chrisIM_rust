@@ -1022,4 +1022,64 @@ impl FriendshipRepository {
         
         Ok(result.rows_affected() > 0)
     }
+
+    /// 更新好友备注
+    pub async fn update_friend_remark(&self, user_id: &str, friend_id: &str, remark: &str) -> Result<DetailedFriend> {
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+        
+        // 先更新好友备注
+        let result = sqlx::query!(
+            r#"
+            UPDATE friend_relation
+            SET remark = $1, updated_at = $2
+            WHERE user_id = $3 AND friend_id = $4 AND status = 1
+            RETURNING 1 as updated
+            "#,
+            remark,
+            now_naive,
+            user_id,
+            friend_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        if result.is_none() {
+            return Err(anyhow::anyhow!("更新好友备注失败，可能不是好友关系"));
+        }
+        
+        // 查询更新后的好友详细信息
+        let row = sqlx::query!(
+            r#"
+            SELECT u.id, u.username, u.nickname, u.avatar_url,
+                   fr.created_at as friendship_created_at,
+                   fr.remark, fr.status as relation_status,
+                   fr.is_starred, fr.is_top,
+                   fr.friend_type 
+            FROM users u
+            JOIN friend_relation fr ON fr.friend_id = u.id
+            WHERE fr.user_id = $1 AND fr.friend_id = $2 AND fr.status = 1
+            "#,
+            user_id,
+            friend_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        
+        let friend = DetailedFriend {
+            id: row.id,
+            username: row.username,
+            nickname: row.nickname,
+            avatar_url: row.avatar_url,
+            friendship_created_at: Utc.from_utc_datetime(&row.friendship_created_at),
+            remark: row.remark,
+            is_online: false, // 默认离线状态，实际应从在线状态服务获取
+            is_starred: row.is_starred == 1,
+            is_top: row.is_top == 1,
+            relation_status: row.relation_status as i32,
+            friend_type: row.friend_type as i32, // 默认为普通好友
+        };
+        
+        Ok(friend)
+    }
 }

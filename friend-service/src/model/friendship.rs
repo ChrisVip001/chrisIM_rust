@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
-use common::proto::friend::{Friendship as ProtoFriendship, FriendshipStatus, PotentialFriend as ProtoPotentialFriend,
-                          DetailedFriend as ProtoDetailedFriend, FriendType};
+use common::proto::friend::{DetailedFriend as ProtoDetailedFriend, FriendType,
+                            Friendship as ProtoFriendship, PotentialFriend as ProtoPotentialFriend};
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgRow, FromRow, Row};
+use sqlx::{FromRow, Row};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -217,6 +217,32 @@ impl DetailedFriend {
             is_top: is_top == 1,
             relation_status,
             friend_type,
+        }
+    }
+
+    // 辅助方法 - 将详细好友对象转换为proto对象
+    pub fn detailed_friend_to_proto(&self) -> common::proto::friend::DetailedFriend {
+        let created_system_time = SystemTime::from(self.friendship_created_at);
+
+        let friend_type = match self.friend_type {
+            0 => FriendType::Friend,
+            1 => FriendType::Official,
+            2 => FriendType::System,
+            _ => FriendType::Friend,
+        };
+
+        common::proto::friend::DetailedFriend {
+            id: self.id.clone(),
+            username: self.username.clone(),
+            nickname: self.nickname.clone(),
+            avatar_url: self.avatar_url.clone(),
+            friendship_created_at: Some(prost_types::Timestamp::from(created_system_time)),
+            remark: self.remark.clone(),
+            is_online: self.is_online,
+            is_starred: self.is_starred,
+            is_top: self.is_top,
+            relation_status: self.relation_status,
+            friend_type: friend_type as i32,
         }
     }
 }

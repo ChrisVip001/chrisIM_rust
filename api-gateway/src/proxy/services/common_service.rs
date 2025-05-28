@@ -84,8 +84,7 @@ impl CommonServiceHandler {
                 // 返回分类结果
                 Ok(success_response(json!({
                     "friends": friends,
-                    "groups": groups,
-                    "totalCount": friends.len() + groups.len()
+                    "groups": groups
                 }), StatusCode::OK))
             },
             
