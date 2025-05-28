@@ -6,8 +6,7 @@ use common::grpc_client::FriendServiceGrpcClient;
 use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
-use api_gateway::proxy::services::common::error_response;
-use super::common::{success_response, extract_string_param, timestamp_to_datetime_string,
+use super::common::{success_response,error_response, extract_string_param, timestamp_to_datetime_string,
                     get_i64_param, get_optional_string, get_user_id_from_jwt};
 use crate::auth::jwt::UserInfo;
 
