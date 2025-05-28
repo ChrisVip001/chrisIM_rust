@@ -153,10 +153,10 @@ impl FriendService for FriendServiceImpl {
                 // 如果状态是Pending或Accepted，则不允许重复发送请求
                 // 如果是Rejected，则允许重新发送请求
                 match status {
-                    FriendshipStatus::Pending | FriendshipStatus::Accepted => {
-                        return Err(Status::already_exists("已经存在好友关系或请求"));
+                    FriendshipStatus::Accepted => {
+                        return Err(Status::already_exists("已经存在好友关系"));
                     }
-                    FriendshipStatus::Rejected | FriendshipStatus::Expired => {
+                    FriendshipStatus::Pending | FriendshipStatus::Rejected | FriendshipStatus::Expired => {
                         match self.repository.delete_friend(&user_id, &friend_id).await{
                             Ok(_) => {}
                             Err(e) => {
