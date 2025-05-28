@@ -249,7 +249,7 @@ pub async fn refresh_token(
     let jwt_config = &config.gateway.auth.jwt;
 
     // 验证刷新令牌
-    let user_info = jwt::verify_token(refresh_req.refresh_token, jwt_config).await?;
+    let user_info = jwt::verify_token(&refresh_req.refresh_token, jwt_config)?;
 
     // 构建额外信息
     let extra = user_info.extra.clone();

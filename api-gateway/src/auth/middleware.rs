@@ -67,7 +67,7 @@ pub async fn auth_middleware(req: Request, next: Next) -> Response {
     };
 
     // 验证JWT token
-    match jwt::verify_token(token, jwt_config).await {
+    match jwt::verify_token(&token, jwt_config) {
         Ok(user_info) => {
             // 将用户信息添加到请求扩展中
             let mut request = req;

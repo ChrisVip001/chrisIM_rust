@@ -13,5 +13,6 @@ pub mod service_discovery;
 pub mod service_register_center;
 pub mod sms;
 pub mod snowflake;
+pub mod auth;
 
 pub use error::{Error, Result};
