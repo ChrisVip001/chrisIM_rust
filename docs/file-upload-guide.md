@@ -46,13 +46,8 @@
 **响应示例：**
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "upload_url": "https://bucket.cos.region.myqcloud.com/files/uuid-filename.pdf?q-sign-algorithm=sha1&...",
-    "file_key": "files/uuid-filename.pdf",
-    "expires_in": 900
-  }
+  "key": "uploads/2025/05/28/780152ab-9cbb-4ef3-b2bd-9f0479845935.ceshi",
+  "upload_url": "http://127.0.0.1:9000/uploads/2025/05/28/780152ab-9cbb-4ef3-b2bd-9f0479845935.ceshi?q-sign-algorithm=sha1&q-ak=minioadmin&q-sign-time=1748415593;1748419193&q-key-time=1748415593;1748419193&q-header-list=content-type&q-url-param-list=&q-signature=a3faff4ffe925b12e9bb84447c22205cee86ed40"
 }
 ```
 
@@ -75,26 +70,23 @@
 **请求参数：**
 ```json
 {
-  "file_key": "files/uuid-filename.pdf",
-  "file_size": 1048576,
-  "md5_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  "key": "files/uuid-filename.pdf",
+  "size": 1048576,
+  "md5": "d41d8cd98f00b204e9800998ecf8427e"
 }
 ```
 
 **参数说明：**
-- `file_key`: 文件标识（必填）
-- `file_size`: 文件大小（必填）
-- `md5_hash`: 文件MD5哈希值（必填）
+- `key`: 文件标识（必填）
+- `size`: 文件大小（必填）
+- `md5`: 文件MD5哈希值（必填）
 
 **响应示例：**
 ```json
 {
-  "code": 200,
-  "message": "Upload validated successfully",
-  "data": {
-    "valid": true,
-    "file_url": "https://your-domain.com/files/uuid-filename.pdf"
-  }
+  "status": "success",
+  "key": "files/uuid-filename.pdf",
+  "is_valid": true
 }
 ```
 
@@ -125,13 +117,8 @@
 **响应示例：**
 ```json
 {
-  "code": 200,
-  "message": "success",
-  "data": {
-    "upload_url": "https://avatars.cos.region.myqcloud.com/avatars/uuid.jpg?q-sign-algorithm=sha1&...",
-    "avatar_key": "avatars/uuid.jpg",
-    "expires_in": 600
-  }
+  "key": "avatars/register/9cd772c9-1518-4964-88f4-6326a5bc525b.png",
+  "upload_url": "http://127.0.0.1:9000/avatars/register/9cd772c9-1518-4964-88f4-6326a5bc525b.png?q-sign-algorithm=sha1&q-ak=minioadmin&q-sign-time=1748413094;1748414894&q-key-time=1748413094;1748414894&q-header-list=content-type&q-url-param-list=&q-signature=2c625234d686504a577ab195ddcccd59411d5ca9"
 }
 ```
 
@@ -149,41 +136,24 @@
 **请求参数：**
 ```json
 {
-  "avatar_key": "avatars/uuid.jpg",
-  "file_size": 204800,
-  "md5_hash": "a1b2c3d4e5f6789012345678901234567"
+  "key": "avatars/register/9cd772c9-1518-4964-88f4-6326a5bc525b.png",
+  "size": 1048576,
+  "md5": "d41d8cd98f00b204e9800998ecf8427e"
 }
 ```
 
 **参数说明：**
-- `avatar_key`: 头像文件标识（必填）
-- `file_size`: 文件大小（必填）
-- `md5_hash`: 文件MD5哈希值（必填）
+- `key`: 头像文件标识（必填）
+- `size`: 文件大小（必填）
+- `md5`: 文件MD5哈希值（必填）
 
 **响应示例：**
 ```json
 {
-  "code": 200,
-  "message": "Avatar upload validated successfully",
-  "data": {
-    "valid": true,
-    "avatar_url": "https://your-domain.com/avatars/uuid.jpg"
-  }
+  "status": "success",
+  "key": "avatars/register/9cd772c9-1518-4964-88f4-6326a5bc525b.png",
+  "is_valid": true
 }
-```
-
-
-## 网关白名单配置
-
-在`config.yaml`中添加注册头像上传接口到白名单：
-
-```yaml
-gateway:
-  path_whitelist:
-    - /api/auth/login
-    - /api/auth/register
-    - /api/files/register-avatar          # 注册头像上传
-    - /api/files/validate-register-avatar # 验证注册头像
 ```
 
 ## 安全注意事项
@@ -212,40 +182,5 @@ gateway:
 - 普通文件上传需要JWT认证
 - 注册头像上传使用白名单机制
 - 定期清理未完成的上传
-
-
-## 性能优化建议
-
-### 1. 前端优化
-- 大文件分片上传
-- 上传进度显示
-- 断点续传支持
-- 并发上传限制
-
-### 2. 后端优化
-- 预签名URL缓存
-- 异步文件验证
-- 批量操作支持
-- 监控和日志
-
-### 3. 存储优化
-- CDN加速
-- 多地域部署
-- 生命周期管理
-- 成本优化策略
-
-## 监控和日志
-
-### 关键指标
-- 上传成功率
-- 平均上传时间
-- 文件大小分布
-- 错误类型统计
-
-### 日志记录
-- 预签名URL生成
-- 文件上传验证
-- 错误详情记录
-- 性能指标追踪
 
 这个架构设计确保了文件上传的安全性、可靠性和高性能，同时支持多种使用场景和存储提供商。 
