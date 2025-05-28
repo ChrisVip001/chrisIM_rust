@@ -199,66 +199,127 @@ impl GroupRepository {
     pub async fn search_user_groups(
         &self,
         user_id: String,
-        keyword: &str,
-        page: i32,
-        page_size: i32,
+        keyword: Option<&str>,
+        page: Option<i32>,
+        page_size: Option<i32>,
     ) -> Result<(Vec<UserGroup>, i64)> {
+        // 设置默认值
+        // 默认分页参数
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(20);
+        
         // 计算偏移量
         let offset = (page - 1) * page_size;
         
-        // 获取匹配关键字的群组
-        let groups = sqlx::query!(
-            r#"
-            SELECT 
-                g.id,
-                g.name,
-                g.avatar_url,
-                m.role,
-                m.joined_at,
-                (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
-            FROM groups g
-            JOIN group_members m ON g.id = m.group_id
-            WHERE m.user_id = $1
-            AND (g.name ILIKE $2 OR g.description ILIKE $2)
-            ORDER BY g.name
-            LIMIT $3 OFFSET $4
-            "#,
-            user_id,
-            format!("%{}%", keyword),
-            page_size as i64,
-            offset as i64
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let mut result: Vec<UserGroup> = Vec::new();
+        let total: i64;
+        
+        // 根据是否有关键字构建不同的查询
+        if let Some(kw) = keyword {
+            // 有关键字时的查询
+            let groups = sqlx::query!(
+                r#"
+                SELECT 
+                    g.id,
+                    g.name,
+                    g.avatar_url,
+                    m.role,
+                    m.joined_at,
+                    (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
+                FROM groups g
+                JOIN group_members m ON g.id = m.group_id
+                WHERE m.user_id = $1
+                AND (g.name ILIKE $2 OR g.description ILIKE $2)
+                ORDER BY g.name
+                LIMIT $3 OFFSET $4
+                "#,
+                user_id,
+                format!("%{}%", kw),
+                page_size as i64,
+                offset as i64
+            )
+            .fetch_all(&self.pool)
+            .await?;
 
-        let result = groups
-            .into_iter()
-            .map(|g| UserGroup {
-                id: g.id,
-                name: g.name,
-                avatar_url: g.avatar_url.unwrap_or_default(),
-                member_count: g.member_count.unwrap_or(0) as i32,
-                role: g.role.parse::<i32>().unwrap_or(0),
-                joined_at: Utc.from_utc_datetime(&g.joined_at),
-            })
-            .collect();
+            // 将查询结果转换为UserGroup对象
+            for g in groups {
+                result.push(UserGroup {
+                    id: g.id,
+                    name: g.name,
+                    avatar_url: g.avatar_url.unwrap_or_default(),
+                    member_count: g.member_count.unwrap_or(0) as i32,
+                    role: g.role.parse::<i32>().unwrap_or(0),
+                    joined_at: Utc.from_utc_datetime(&g.joined_at),
+                });
+            }
 
-        // 获取总数
-        let total = sqlx::query!(
-            r#"
-            SELECT COUNT(*) as count
-            FROM groups g
-            JOIN group_members m ON g.id = m.group_id
-            WHERE m.user_id = $1
-            AND (g.name ILIKE $2 OR g.description ILIKE $2)
-            "#,
-            user_id,
-            format!("%{}%", keyword)
-        )
-        .fetch_one(&self.pool)
-        .await?
-        .count
-        .unwrap_or(0);
+            // 获取总数
+            total = sqlx::query!(
+                r#"
+                SELECT COUNT(*) as count
+                FROM groups g
+                JOIN group_members m ON g.id = m.group_id
+                WHERE m.user_id = $1
+                AND (g.name ILIKE $2 OR g.description ILIKE $2)
+                "#,
+                user_id,
+                format!("%{}%", kw)
+            )
+            .fetch_one(&self.pool)
+            .await?
+            .count
+            .unwrap_or(0);
+        } else {
+            // 无关键字时的查询
+            let groups = sqlx::query!(
+                r#"
+                SELECT 
+                    g.id,
+                    g.name,
+                    g.avatar_url,
+                    m.role,
+                    m.joined_at,
+                    (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
+                FROM groups g
+                JOIN group_members m ON g.id = m.group_id
+                WHERE m.user_id = $1
+                ORDER BY g.name
+                LIMIT $2 OFFSET $3
+                "#,
+                user_id,
+                page_size as i64,
+                offset as i64
+            )
+            .fetch_all(&self.pool)
+            .await?;
+
+            // 将查询结果转换为UserGroup对象
+            for g in groups {
+                result.push(UserGroup {
+                    id: g.id,
+                    name: g.name,
+                    avatar_url: g.avatar_url.unwrap_or_default(),
+                    member_count: g.member_count.unwrap_or(0) as i32,
+                    role: g.role.parse::<i32>().unwrap_or(0),
+                    joined_at: Utc.from_utc_datetime(&g.joined_at),
+                });
+            }
+
+            // 获取总数
+            total = sqlx::query!(
+                r#"
+                SELECT COUNT(*) as count
+                FROM groups g
+                JOIN group_members m ON g.id = m.group_id
+                WHERE m.user_id = $1
+                "#,
+                user_id
+            )
+            .fetch_one(&self.pool)
+            .await?
+            .count
+            .unwrap_or(0);
+        }
 
         Ok((result, total))
     }

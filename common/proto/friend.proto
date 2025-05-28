@@ -71,14 +71,14 @@ message SendFriendRequestRequest {
 // 接受好友请求
 message AcceptFriendRequestRequest {
   string user_id = 1;
-  string friend_id = 2;
+  string request_id = 3;  // 好友请求ID
 }
 
 // 拒绝好友请求
 message RejectFriendRequestRequest {
   string user_id = 1;
-  string friend_id = 2;
   string reason = 3;
+  string request_id = 4;  // 好友请求ID
 }
 
 // 获取好友列表请求

@@ -48,11 +48,11 @@ impl FriendServiceGrpcClient {
     pub async fn accept_friend_request(
         &mut self,
         user_id: &str,
-        friend_id: &str,
+        request_id: &str,
     ) -> Result<FriendshipResponse> {
         let request = Request::new(AcceptFriendRequestRequest {
             user_id: user_id.to_string(),
-            friend_id: friend_id.to_string(),
+            request_id: request_id.to_string(),
         });
 
         let response = self.service_client.accept_friend_request(request).await?;
@@ -63,19 +63,18 @@ impl FriendServiceGrpcClient {
     pub async fn reject_friend_request(
         &mut self,
         user_id: &str,
-        friend_id: &str,
         reason: &str,
+        request_id: &str,
     ) -> Result<FriendshipResponse> {
         let request = Request::new(RejectFriendRequestRequest {
             user_id: user_id.to_string(),
-            friend_id: friend_id.to_string(),
             reason: reason.to_string(),
+            request_id: request_id.to_string(),
         });
 
         let response = self.service_client.reject_friend_request(request).await?;
         Ok(response.into_inner())
     }
-
 
     /// 获取好友列表（带参数）
     pub async fn get_friend_list_with_params(
