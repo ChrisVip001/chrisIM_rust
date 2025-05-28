@@ -64,7 +64,7 @@ impl FriendshipRepository {
     pub async fn accept_friend_request(
         &self,
         user_id: &str,
-        friend_id: &str,
+        request_id: &str,
     ) -> Result<Friendship> {
         let now = Utc::now();
         let now_naive = now.naive_utc();
@@ -72,23 +72,39 @@ impl FriendshipRepository {
         // 开始事务
         let mut tx = self.pool.begin().await?;
 
-        // 1. 更新friendships表中的状态为已接受
+        // 1. 获取好友请求信息，确保请求ID与用户ID匹配
+        let friendship_result = sqlx::query!(
+            r#"
+            SELECT id, user_id, friend_id FROM friendships
+            WHERE id = $1 AND friend_id = $2 AND status = '0'
+            "#,
+            request_id,
+            user_id
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let friendship = match friendship_result {
+            Some(fs) => fs,
+            None => return Err(anyhow::anyhow!("好友请求不存在或已处理")),
+        };
+
+        // 2. 更新friendships表中的状态为已接受
         let result = sqlx::query!(
             r#"
             UPDATE friendships
             SET status = $1, updated_at = $2
-            WHERE user_id = $3 AND friend_id = $4
+            WHERE id = $3
             RETURNING id, user_id, friend_id, message, status, created_at, updated_at
             "#,
             (FriendshipStatus::Accepted as i32).to_string(),
             now_naive,
-            user_id,
-            friend_id
+            request_id
         )
         .fetch_one(&mut *tx)
         .await?;
 
-        // 2. 为用户和好友双向插入好友关系
+        // 3. 为用户和好友双向插入好友关系
         // 用户 -> 好友方向
         let relation_id1 = Uuid::new_v4().to_string();
         sqlx::query!(
@@ -99,7 +115,7 @@ impl FriendshipRepository {
             "#,
             relation_id1,
             user_id,
-            friend_id,
+            friendship.user_id,
             now_naive
         )
         .execute(&mut *tx)
@@ -114,7 +130,7 @@ impl FriendshipRepository {
             ON CONFLICT (user_id, friend_id) DO NOTHING
             "#,
             relation_id2,
-            friend_id,
+            friendship.user_id,
             user_id,
             now_naive
         )
@@ -143,23 +159,39 @@ impl FriendshipRepository {
     pub async fn reject_friend_request(
         &self,
         user_id: &str,
-        friend_id: &str,
         reason: Option<String>,
+        request_id: &str,
     ) -> Result<Friendship> {
+        // 1. 获取好友请求信息，确保请求ID与用户ID匹配
+        let friendship_result = sqlx::query!(
+            r#"
+            SELECT id, user_id, friend_id FROM friendships
+            WHERE id = $1 AND friend_id = $2 AND status = '0'
+            "#,
+            request_id,
+            user_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let _friendship = match friendship_result {
+            Some(fs) => fs,
+            None => return Err(anyhow::anyhow!("好友请求不存在或已处理")),
+        };
+
         let now = Utc::now();
         let now_naive = now.naive_utc();
         let result = sqlx::query!(
             r#"
             UPDATE friendships
             SET status = $1, updated_at = $2, reject_reason = $3
-            WHERE user_id = $4 AND friend_id = $5
+            WHERE id = $4
             RETURNING id, user_id, friend_id, message, status, created_at, updated_at, reject_reason
             "#,
             (FriendshipStatus::Rejected as i32).to_string(),
             now_naive,
             reason.as_deref(),
-            user_id,
-            friend_id
+            request_id
         )
         .fetch_one(&self.pool)
         .await?;
@@ -326,17 +358,35 @@ impl FriendshipRepository {
         page: Option<i64>,
         page_size: Option<i64>,
     ) -> Result<Vec<Friendship>> {
+        // 设置分页参数
         let page = page.unwrap_or(1);
         let page_size = page_size.unwrap_or(20);
         let offset = (page - 1) * page_size;
 
+        // 查询好友请求列表
         let requests = sqlx::query!(
             r#"
-            SELECT f.id, f.user_id, f.friend_id, f.message, f.status, f.created_at, f.updated_at, f.reject_reason,
-                u.username as "friend_username", u.nickname as "friend_nickname", u.avatar_url as "friend_avatar_url"
+            SELECT 
+                f.id, 
+                f.user_id, 
+                f.friend_id, 
+                f.message, 
+                f.status, 
+                f.created_at, 
+                f.updated_at, 
+                f.reject_reason,
+                u.username as friend_username,
+                u.nickname as friend_nickname,
+                u.avatar_url as friend_avatar_url
             FROM friendships f
-            LEFT JOIN users u ON f.user_id = u.id
-            WHERE f.friend_id = $1
+            LEFT JOIN users u ON (
+                CASE 
+                    WHEN f.user_id = $1 THEN f.friend_id = u.id
+                    ELSE f.user_id = u.id
+                END
+            )
+            WHERE f.friend_id = $1 OR f.user_id = $1
+            ORDER BY f.created_at DESC
             LIMIT $2 OFFSET $3
             "#,
             user_id,
@@ -346,17 +396,26 @@ impl FriendshipRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        let mut result = vec![];
-        for r in requests {
-            let status = match r.status.parse::<i32>() {
-                Ok(s) => s,
-                Err(_) => 0,
-            };
+        // 计算过期时间点（当前时间减去3天）
+        let now = Utc::now();
+        let three_days_ago = now - chrono::Duration::days(3);
 
-            // 只返回待处理的请求
-            if status == FriendshipStatus::Pending as i32 {
+        // 处理查询结果
+        let result = requests
+            .into_iter()
+            .map(|r| {
+                // 解析状态值
+                let mut status = r.status.parse::<i32>().unwrap_or(0);
+
+                // 判断请求是否过期：
+                // 1. 状态必须为 Pending (0)
+                // 2. 创建时间必须超过3天
+                if status == 0 && Utc.from_utc_datetime(&r.created_at) < three_days_ago {
+                    status = 4; // 设置为 Expired 状态
+                }
+
                 // 构建 Friendship 对象
-                result.push(Friendship {
+                Friendship {
                     id: r.id,
                     user_id: r.user_id,
                     friend_id: r.friend_id,
@@ -368,9 +427,9 @@ impl FriendshipRepository {
                     friend_username: r.friend_username,
                     friend_nickname: r.friend_nickname,
                     friend_avatar_url: r.friend_avatar_url,
-                });
-            }
-        }
+                }
+            })
+            .collect();
 
         Ok(result)
     }
@@ -411,13 +470,14 @@ impl FriendshipRepository {
     }
 
     // 检查好友关系状态
+    // 检查好友关系
     pub async fn check_friendship(
         &self,
         user_id: &str,
         friend_id: &str,
     ) -> Result<Option<FriendshipStatus>> {
         // 首先检查 friend_relation 表中的状态
-        let relation = sqlx::query!(
+        let relation_result = sqlx::query!(
             r#"
             SELECT status FROM friend_relation
             WHERE user_id = $1 AND friend_id = $2
@@ -428,19 +488,21 @@ impl FriendshipRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        if let Some(r) = relation {
-            // 已经是好友
-            if r.status == 1 {
-                return Ok(Some(FriendshipStatus::Accepted));
-            } else if r.status == 2 {
-                return Ok(Some(FriendshipStatus::Blocked));
-            }
+        // 如果在 friend_relation 表中找到记录，直接返回对应状态
+        if let Some(relation) = relation_result {
+            let status = match relation.status {
+                1 => FriendshipStatus::Accepted,
+                2 => FriendshipStatus::Blocked,
+                _ => FriendshipStatus::Accepted,
+            };
+            return Ok(Some(status));
         }
 
-        // 检查 friendships 表中的状态
-        let friendship = sqlx::query!(
+        // 如果在 friend_relation 表中没有找到记录，则检查 friendships 表
+        let result = sqlx::query!(
             r#"
-            SELECT status FROM friendships
+            SELECT status, created_at
+            FROM friendships
             WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)
             "#,
             user_id,
@@ -449,22 +511,29 @@ impl FriendshipRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        if let Some(f) = friendship {
-            let status = match f.status.parse::<i32>() {
-                Ok(s) => s,
-                Err(_) => 0,
-            };
-            match status {
-                s if s == FriendshipStatus::Pending as i32 => Ok(Some(FriendshipStatus::Pending)),
-                s if s == FriendshipStatus::Accepted as i32 => Ok(Some(FriendshipStatus::Accepted)),
-                s if s == FriendshipStatus::Rejected as i32 => Ok(Some(FriendshipStatus::Rejected)),
-                s if s == FriendshipStatus::Expired as i32 => Ok(Some(FriendshipStatus::Expired)),
-                s if s == FriendshipStatus::Blocked as i32 => Ok(Some(FriendshipStatus::Blocked)),
-                _ => Ok(Some(FriendshipStatus::Pending)),
+        Ok(result.map(|r| {
+            let mut status_code = r.status.parse::<i32>().unwrap_or(0);
+
+            // 判断请求是否过期：
+            // 1. 状态必须为 Pending (0)
+            // 2. 创建时间必须超过3天
+            if status_code == 0 {
+                let now = Utc::now();
+                let three_days_ago = now - chrono::Duration::days(3);
+                if Utc.from_utc_datetime(&r.created_at) < three_days_ago {
+                    status_code = 4; // 设置为 Expired 状态
+                }
             }
-        } else {
-            Ok(None)
-        }
+
+            match status_code {
+                0 => FriendshipStatus::Pending,
+                1 => FriendshipStatus::Accepted,
+                2 => FriendshipStatus::Rejected,
+                3 => FriendshipStatus::Blocked,
+                4 => FriendshipStatus::Expired,
+                _ => FriendshipStatus::Pending,
+            }
+        }))
     }
 
     /// 搜索潜在好友
@@ -940,8 +1009,8 @@ impl FriendshipRepository {
             avatar_url: Option<String>,
             friendship_created_at: NaiveDateTime,
             remark: Option<String>,
-            relation_status: i32,
-            friend_type: i32,
+            relation_status: i16,
+            friend_type: i16,
             is_starred: i32,
             is_top: i32,
         }
@@ -962,11 +1031,11 @@ impl FriendshipRepository {
                 avatar_url: row.avatar_url,
                 friendship_created_at: Utc.from_utc_datetime(&row.friendship_created_at),
                 remark: row.remark,
-                is_online: false, // 默认离线状态
+                is_online: false, // 默认离线状态，实际应从在线状态服务获取
                 is_starred: row.is_starred == 1,
                 is_top: row.is_top == 1,
-                relation_status: row.relation_status,
-                friend_type: row.friend_type,
+                relation_status: row.relation_status as i32,
+                friend_type: row.friend_type as i32, // 默认为普通好友
             })
             .collect();
         
@@ -1077,7 +1146,7 @@ impl FriendshipRepository {
             is_starred: row.is_starred == 1,
             is_top: row.is_top == 1,
             relation_status: row.relation_status as i32,
-            friend_type: row.friend_type as i32, // 默认为普通好友
+            friend_type: row.friend_type as i32,
         };
         
         Ok(friend)

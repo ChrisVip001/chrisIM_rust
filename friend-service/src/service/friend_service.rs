@@ -205,29 +205,16 @@ impl FriendService for FriendServiceImpl {
         let req = request.into_inner();
 
         let user_id = req.user_id;
-        let friend_id = req.friend_id;
+        let request_id = req.request_id;
 
-        // 检查好友请求是否存在
-        match self.repository.check_friendship(&user_id, &friend_id).await {
-            Ok(Some(status)) => {
-                if status != FriendshipStatus::Pending {
-                    return Err(Status::failed_precondition(
-                        "无法接受的好友请求：不是处于等待状态",
-                    ));
-                }
-            }
-            Ok(None) => {
-                return Err(Status::not_found("好友请求不存在"));
-            }
-            Err(e) => {
-                error!("检查好友关系失败: {}", e);
-                return Err(Status::internal("内部服务错误"));
-            }
+        // 检查请求ID是否为空
+        if request_id.is_empty() {
+            return Err(Status::invalid_argument("请求ID不能为空"));
         }
 
         match self
             .repository
-            .accept_friend_request(&user_id, &friend_id)
+            .accept_friend_request(&user_id, &request_id)
             .await
         {
             Ok(friendship) => {
@@ -238,7 +225,7 @@ impl FriendService for FriendServiceImpl {
             }
             Err(e) => {
                 error!("接受好友请求失败: {}", e);
-                Err(Status::internal("接受好友请求失败"))
+                Err(Status::internal(format!("接受好友请求失败: {}", e)))
             }
         }
     }
@@ -251,7 +238,12 @@ impl FriendService for FriendServiceImpl {
         let req = request.into_inner();
 
         let user_id = req.user_id;
-        let friend_id = req.friend_id;
+        let request_id = req.request_id;
+
+        // 检查请求ID是否为空
+        if request_id.is_empty() {
+            return Err(Status::invalid_argument("请求ID不能为空"));
+        }
 
         // 获取拒绝理由（如果有）
         let reason = if !req.reason.is_empty() {
@@ -260,27 +252,9 @@ impl FriendService for FriendServiceImpl {
             None
         };
 
-        // 检查好友请求是否存在
-        match self.repository.check_friendship(&user_id, &friend_id).await {
-            Ok(Some(status)) => {
-                if status != FriendshipStatus::Pending {
-                    return Err(Status::failed_precondition(
-                        "无法拒绝的好友请求：不是处于等待状态",
-                    ));
-                }
-            }
-            Ok(None) => {
-                return Err(Status::not_found("好友请求不存在"));
-            }
-            Err(e) => {
-                error!("检查好友关系失败: {}", e);
-                return Err(Status::internal("内部服务错误"));
-            }
-        }
-
         match self
             .repository
-            .reject_friend_request(&user_id, &friend_id, reason)
+            .reject_friend_request(&user_id, reason, &request_id)
             .await
         {
             Ok(friendship) => {
@@ -291,7 +265,7 @@ impl FriendService for FriendServiceImpl {
             }
             Err(e) => {
                 error!("拒绝好友请求失败: {}", e);
-                Err(Status::internal("拒绝好友请求失败"))
+                Err(Status::internal(format!("拒绝好友请求失败: {}", e)))
             }
         }
     }

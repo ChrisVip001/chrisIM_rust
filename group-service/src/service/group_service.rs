@@ -427,13 +427,21 @@ impl GroupService for GroupServiceImpl {
         let req = request.into_inner();
         let user_id = req.user_id;
 
-        // 设置默认值
-        let page = if req.page <= 0 { 1 } else { req.page };
-        let page_size = if req.page_size <= 0 || req.page_size > 100 { 10 } else { req.page_size };
-
+         // 解析可选参数
+         let page = (req.page > 0).then_some(req.page);
+         let page_size = (req.page_size > 0).then_some(req.page_size);
+         
+         // 解析搜索关键词
+         let keyword = (!req.keyword.is_empty()).then_some(req.keyword.clone());
+ 
         match self
             .group_repository
-            .search_user_groups(user_id, &req.keyword, page, page_size)
+            .search_user_groups(
+                user_id, 
+                keyword.as_deref(), 
+                page, 
+                page_size
+            )
             .await
         {
             Ok((groups, total)) => {
@@ -442,8 +450,8 @@ impl GroupService for GroupServiceImpl {
                 Ok(Response::new(SearchUserGroupsResponse {
                     groups: proto_groups,
                     total: total as i32,
-                    page,
-                    page_size,
+                    page: page.unwrap_or(1),
+                    page_size: page_size.unwrap_or(10),
                 }))
             }
             Err(e) => {

@@ -51,7 +51,7 @@ impl CommonServiceHandler {
         match (method, method_name) {
             // 模糊查询当前用户的好友和群聊
             (&Method::POST, "searchFriendsAndGroups") => {
-                let keyword = extract_string_param(&body, "keyword", None)?;
+                let keyword = get_optional_string(&body, "keyword", None).unwrap_or_default();
                 
                 // 使用friend_client的get_friend_list_with_params接口搜索好友
                 // 该接口支持关键字搜索且在数据库层面执行
