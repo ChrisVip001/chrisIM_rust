@@ -68,7 +68,7 @@ impl FriendServiceHandler {
             // 拒绝好友请求
             (&Method::POST, "rejectRequest") => {
                 let reason = extract_string_param(&body, "rejectReason", Some("reject_reason"))?;
-                let request_id = extract_string_param(&body, "requestId", Some("request_id"))?;
+                let request_id = get_optional_string(&body, "requestId", Some("request_id")).unwrap_or_default();
 
                 let response = self.client.reject_friend_request(&user_id, &reason, &request_id).await?;
                 let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
