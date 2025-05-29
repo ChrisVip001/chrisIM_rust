@@ -180,48 +180,91 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
     // 获取服务注册中心
     let service_registry = service_register_center(config);
 
-    let (name, host, port, tags) = match com {
+    let (name, host, port, tags, health_check) = match com {
         Component::MessageServer => {
             let name = config.rpc.chat.name.clone();
             let host = config.rpc.chat.host.clone();
             let port = config.rpc.chat.port;
             let tags = config.rpc.chat.tags.clone();
-            (name, host, port, tags)
-        }
-        Component::ApiGateway => {
-            let name = config.rpc.api.name.clone();
-            let host = config.rpc.api.host.clone();
-            let port = config.rpc.api.port;
-            let tags = config.rpc.api.tags.clone();
-            (name, host, port, tags)
+            let health_check = config.rpc.chat.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
         }
         Component::MessageGateway => {
             let name = config.rpc.ws.name.clone();
             let host = config.rpc.ws.host.clone();
             let port = config.rpc.ws.port;
             let tags = config.rpc.ws.tags.clone();
-            (name, host, port, tags)
+            let health_check = config.rpc.ws.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
         }
         Component::UserServer => {
             let name = config.rpc.user.name.clone();
             let host = config.rpc.user.host.clone();
             let port = config.rpc.user.port;
             let tags = config.rpc.user.tags.clone();
-            (name, host, port, tags)
+            let health_check = config.rpc.user.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
         }
         Component::FriendServer => {
             let name = config.rpc.friend.name.clone();
             let host = config.rpc.friend.host.clone();
             let port = config.rpc.friend.port;
             let tags = config.rpc.friend.tags.clone();
-            (name, host, port, tags)
+            let health_check = config.rpc.friend.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
         }
         Component::GroupServer => {
             let name = config.rpc.group.name.clone();
             let host = config.rpc.group.host.clone();
             let port = config.rpc.group.port;
             let tags = config.rpc.group.tags.clone();
-            (name, host, port, tags)
+            let health_check = config.rpc.group.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
         }
         Component::All => {
             // TODO 要完善
@@ -236,7 +279,7 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
         host,
         port,
         tags,
-        check: None,
+        check: health_check,
     };
 
     // 注册服务

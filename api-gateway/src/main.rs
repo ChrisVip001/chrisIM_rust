@@ -12,8 +12,7 @@ use tower_http::{
 use tracing::{error, info};
 
 use common::{
-    config::{AppConfig, Component, ConfigLoader},
-    grpc_client::base::register_service,
+    config::{AppConfig, ConfigLoader},
 };
 use crate::api_utils::ip_region::ip_location::init_ip_location;
 
@@ -65,18 +64,41 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     info!("API网关监听: https://{}:{}", config.server.host, config.server.port);
 
-    // 注册服务
-    let service_id = register_service(&config, Component::ApiGateway).await?;
-    info!("API网关已就绪, 服务ID: {}", service_id);
-
     // 启动服务器
     let handle = Handle::new();
     let (shutdown_tx, _shutdown_rx) = oneshot::channel::<()>();
     
-    let config_clone = config.clone();
-    let service_id_clone = service_id.clone();
     let shutdown_task = tokio::spawn(async move {
-        common::service::shutdown_signal(shutdown_tx, service_id_clone, &config_clone).await
+        // api-gateway不需要从服务注册中心注销，直接监听关闭信号
+        use tokio::signal;
+        
+        let ctrl_c = async {
+            signal::ctrl_c().await.expect("无法安装Ctrl+C处理器");
+        };
+
+        #[cfg(unix)]
+        let terminate = async {
+            signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("无法安装SIGTERM处理器")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate => {},
+        }
+
+        info!("接收到关闭信号，准备优雅关闭API网关...");
+        
+        if let Err(_) = shutdown_tx.send(()) {
+            tracing::warn!("无法发送关闭信号，接收端可能已关闭");
+        }
+        
+        Ok::<(), anyhow::Error>(())
     });
 
     if let Err(err) = axum_server::bind(addr)

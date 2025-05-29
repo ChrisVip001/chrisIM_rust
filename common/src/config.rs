@@ -80,6 +80,49 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub ws_lb_strategy: String,
+    /// TLS/HTTPS配置
+    pub tls: Option<TlsConfig>,
+    /// 超时配置
+    pub timeouts: Option<TimeoutConfig>,
+    /// 连接配置
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// TLS配置
+#[derive(Debug, Deserialize, Clone)]
+pub struct TlsConfig {
+    /// 是否启用HTTPS
+    pub enabled: bool,
+    /// 证书文件路径
+    pub cert_file: String,
+    /// 私钥文件路径
+    pub key_file: String,
+    /// CA证书文件路径（可选）
+    pub client_ca_file: Option<String>,
+    /// 是否要求客户端证书
+    pub require_client_cert: bool,
+}
+
+/// 超时配置
+#[derive(Debug, Deserialize, Clone)]
+pub struct TimeoutConfig {
+    /// 读取超时（秒）
+    pub read_timeout_secs: u64,
+    /// 写入超时（秒）
+    pub write_timeout_secs: u64,
+    /// 空闲连接超时（秒）
+    pub idle_timeout_secs: u64,
+}
+
+/// 连接配置
+#[derive(Debug, Deserialize, Clone)]
+pub struct ConnectionConfig {
+    /// 最大连接数
+    pub max_connections: u32,
+    /// Keep-Alive超时（秒）
+    pub keep_alive_timeout_secs: u64,
+    /// 禁用Nagle算法
+    pub tcp_nodelay: bool,
 }
 
 impl ServerConfig {
@@ -95,6 +138,9 @@ impl ServerConfig {
             host: self.host.clone(),
             port,
             ws_lb_strategy: self.ws_lb_strategy.clone(),
+            tls: self.tls.clone(),
+            timeouts: self.timeouts.clone(),
+            connection: self.connection.clone(),
         }
     }
 }
@@ -115,6 +161,17 @@ pub struct WebsocketConfig {
     pub port: u16,
     pub name: String,
     pub tags: Vec<String>,
+    pub health_check: Option<HealthCheckConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct HealthCheckConfig {
+    pub health_type: String,
+    pub name: String,
+    pub url: String,
+    pub interval: u64,
+    pub timeout: u64,
+    pub deregister_after: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -131,6 +188,7 @@ pub struct RpcServiceConfig {
     pub name: String,
     pub tags: Vec<String>,
     pub grpc_health_check: Option<GrpcHealthCheckConfig>,
+    pub health_check: Option<HealthCheckConfig>,
 }
 
 impl RpcServiceConfig {
@@ -143,7 +201,6 @@ impl RpcServiceConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RpcConfig {
-    pub api: RpcServiceConfig,
     pub ws: RpcServiceConfig,
     pub chat: RpcServiceConfig,
     pub user: RpcServiceConfig,
@@ -155,7 +212,6 @@ pub struct RpcConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Component {
-    ApiGateway,
     UserServer,
     FriendServer,
     GroupServer,
@@ -206,7 +262,6 @@ impl AppConfig {
     // 新增: 根据服务类型获取服务特定的配置文件路径
     fn get_service_config_path(component: &Component) -> Option<String> {
         match component {
-            Component::ApiGateway => Some("./config/services/api-gateway.yaml".to_string()),
             Component::UserServer => Some("./config/services/user-service.yaml".to_string()),
             Component::FriendServer => Some("./config/services/friend-service.yaml".to_string()),
             Component::GroupServer => Some("./config/services/group-service.yaml".to_string()),
@@ -346,6 +401,15 @@ impl ConfigLoader {
         }
         if !source.ws_lb_strategy.is_empty() {
             target.ws_lb_strategy = source.ws_lb_strategy.clone();
+        }
+        if let Some(tls) = &source.tls {
+            target.tls = Some(tls.clone());
+        }
+        if let Some(timeouts) = &source.timeouts {
+            target.timeouts = Some(timeouts.clone());
+        }
+        if let Some(connection) = &source.connection {
+            target.connection = Some(connection.clone());
         }
     }
     
