@@ -1,6 +1,6 @@
-mod message;
-mod seq;
+pub mod message;
+pub mod seq;
 mod test;
 
-pub(crate) use message::*;
-pub(crate) use seq::*;
+pub use message::{PostgresMessage, QueryParams, MessageStats, ConversationInfo};
+pub use seq::PostgresSeq;

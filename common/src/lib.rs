@@ -3,6 +3,7 @@ pub mod configs;
 pub mod config;
 pub mod error;
 pub mod message;
+pub mod message_ext;
 pub mod utils;
 pub mod service;
 pub mod logging;
@@ -16,3 +17,4 @@ pub mod snowflake;
 pub mod auth;
 
 pub use error::{Error, Result};
+pub use message_ext::{MsgExt, MsgBuilder};

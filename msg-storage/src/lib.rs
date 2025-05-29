@@ -10,6 +10,9 @@ pub mod message;
 // pub mod rpc;
 pub mod seq;
 
+// 导出查询相关结构体
+pub use postgres::{QueryParams, MessageStats, ConversationInfo};
+
 use std::sync::Arc;
 use ::sqlx::PgPool;
 use message::{MsgRecBoxCleaner, MsgRecBoxRepo, MsgStoreRepo};

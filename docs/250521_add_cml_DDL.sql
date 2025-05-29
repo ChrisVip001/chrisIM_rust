@@ -39,7 +39,5 @@ COMMENT ON COLUMN friend_group_relation.group_id IS '分组ID';
 COMMENT ON COLUMN friend_group_relation.created_at IS '创建时间';
 COMMENT ON COLUMN friend_group_relation.updated_at IS '更新时间';
 
-alter table group_messages
-drop constraint check_content_type;
 
 
