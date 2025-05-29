@@ -297,7 +297,7 @@ impl UserService for UserServiceImpl {
         request: Request<ForgetPasswordRequest>,
     ) -> std::result::Result<Response<UserResponse>, Status> {
         let req = request.into_inner();
-        debug!("用户忘记密码修改密码，手机号||账号: {}||{}", req.phone, req.username);
+        debug!("用户忘记密码修改密码，手机号: {}", req.phone);
         // 转换请求数据
         let forget_data = ForgetPasswordData::from(req.clone());
         

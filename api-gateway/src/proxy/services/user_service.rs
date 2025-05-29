@@ -6,7 +6,7 @@ use common::grpc_client::UserServiceGrpcClient;
 use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug, info};
-
+use api_gateway::proxy::services::common::get_user_id_from_jwt;
 use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
 use crate::auth::jwt::UserInfo;
 
@@ -32,6 +32,9 @@ impl UserServiceHandler {
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理用户服务请求: {} {}", method, path);
 
+        // 从JWT中获取用户ID
+        let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+        
         // 从路径提取方法名 - 格式: /api/users/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
 
@@ -84,18 +87,18 @@ impl UserServiceHandler {
 
             // 更新用户
             (&Method::POST, "updateUser") => {
-                let user_id = get_optional_string(&body, "userId", Some("user_id"));
-                if user_id.clone().unwrap_or_default().is_empty() {
-                    return Ok(error_response("用户ID不能为空", StatusCode::BAD_REQUEST));
-                }
-
+                // userid从token中获取
+                let user_id = Some(current_user_id);
                 let nickname = get_optional_string(&body, "nickname", None);
                 let email = get_optional_string(&body, "email", None);
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
-                let password = get_optional_string(&body, "password", None);
-                let address = get_optional_string(&body, "host", None);
+                // 密码不让在此修改
+                // let password = get_optional_string(&body, "password", None);
+                let password = None;
+                let address = get_optional_string(&body, "address", None);
                 let head_image = get_optional_string(&body, "headImage", Some("head_image"));
                 let head_image_thumb = get_optional_string(&body, "headImageThumb", Some("head_image_thumb"));
+                let custom_id = get_optional_string(&body, "customId", Some("custom_id"));
                 let sex = get_optional_string(&body, "sex", None)
                     .and_then(|s| s.parse::<i32>().ok());
                 let username = get_optional_string(&body, "username", None);
@@ -111,6 +114,7 @@ impl UserServiceHandler {
                     head_image_thumb,
                     sex,
                     username,
+                    custom_id,
                 };
 
                 let response = self.client.update_user(request).await?;
@@ -194,14 +198,13 @@ impl UserServiceHandler {
 
             // 忘记密码
             (&Method::POST, "forgetPassword") => {
-                let username = extract_string_param(&body, "username", None)?;
+                // let username = extract_string_param(&body, "username", None)?;
                 let password = extract_string_param(&body, "password", None)?;
                 let tenant_id = get_optional_string(&body, "tenantId", Some("tenant_id")).unwrap_or_default();
                 let phone = get_optional_string(&body, "phone", None).unwrap_or_default();
                 let verify_code = get_optional_string(&body, "verifyCode", Some("verify_code")).unwrap_or_default();
 
                 let request = proto::user::ForgetPasswordRequest {
-                    username: username.to_string(),
                     password: password.to_string(),
                     tenant_id: tenant_id.to_string(),
                     phone: phone.to_string(),

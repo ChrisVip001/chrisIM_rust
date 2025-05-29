@@ -3,6 +3,7 @@ use chrono::{TimeZone, Utc};
 use common::utils::{generate_user_id, hash_password, verify_password};
 use common::{Error, Result};
 use sqlx::{PgPool, QueryBuilder, Row};
+use tonic::Status;
 use tracing::{debug, error};
 use tracing::log::info;
 use uuid::Uuid;
@@ -112,24 +113,27 @@ impl UserRepository {
         if data.tenant_id.is_empty() {
             return Err(Error::BadRequest("企业号不能为空".to_string()));
         }
-        // 用户名或者手机号
-        if data.username.is_empty() {
-            return Err(Error::BadRequest("账号或者手机号不能为空".to_string()));
-        }
+        let phone = data.phone;
+        let user=match self.get_user_by_phone(&phone).await {
+            Ok(u) => {u}, // 用户存在，继续处理
+            Err(err) => {
+                error!("手机号对应用户不存在: {}, 错误: {}", phone, err);
+                return Err(Error::BadRequest("手机号对应用户不存在".to_string()));
+            }
+        };        
         // 生成密码哈希
         let password_hash = hash_password(&data.password)?;
         // 插入用户数据
         let row = sqlx::query!(
             r#"
             UPDATE users
-            SET password = COALESCE($1, password)
-            WHERE id = $2 or phone = $3
+            SET password = $1
+            WHERE id = $2 
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
             phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
             "#,
             password_hash,
-            data.username,
-            data.username
+            user.id
         )
         .fetch_one(&self.pool)
         .await

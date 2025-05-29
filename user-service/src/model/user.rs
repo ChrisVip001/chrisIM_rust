@@ -121,7 +121,7 @@ impl From<user::UpdateUserRequest> for UpdateUserData {
             sex: req.sex.map(|x| x as u32),
             user_id: req.user_id,
             username: req.username,
-            custom_id: None,
+            custom_id: req.custom_id,
         }
     }
 }
@@ -155,7 +155,7 @@ impl From<user::RegisterRequest> for RegisterUserData {
 /// 忘记密码请求数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForgetPasswordData {
-    pub username: String,
+    // pub username: String,
     pub password: String,
     pub tenant_id : String,
     pub phone: String,
@@ -165,7 +165,7 @@ pub struct ForgetPasswordData {
 impl From<user::ForgetPasswordRequest> for ForgetPasswordData {
     fn from(req: user::ForgetPasswordRequest) -> Self {
         Self {
-            username: req.username,
+            // username: req.username,
             password: req.password,
             tenant_id: req.tenant_id,
             phone: req.phone,
