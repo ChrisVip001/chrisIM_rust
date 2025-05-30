@@ -499,7 +499,7 @@ impl UserRepository {
         }
         if let Some(sex) = data.sex {
             if !first { builder.push(","); }
-            builder.push(" sex = COALESCE( ").push_bind(sex.to_string()).push(", sex) ");
+            builder.push(" sex = COALESCE( ").push_bind(sex as i32).push(", sex) ");
             first = false;
         }
         if let Some(password) = data.password {

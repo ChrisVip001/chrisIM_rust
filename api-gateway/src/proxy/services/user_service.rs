@@ -31,9 +31,6 @@ impl UserServiceHandler {
         jwt_user_info: Option<UserInfo>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理用户服务请求: {} {}", method, path);
-
-        // 从JWT中获取用户ID
-        let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
         
         // 从路径提取方法名 - 格式: /api/users/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
@@ -87,6 +84,8 @@ impl UserServiceHandler {
 
             // 更新用户
             (&Method::POST, "updateUser") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
                 // userid从token中获取
                 let user_id = Some(current_user_id);
                 let nickname = get_optional_string(&body, "nickname", None);
