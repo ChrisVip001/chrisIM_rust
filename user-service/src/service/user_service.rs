@@ -273,7 +273,7 @@ impl UserService for UserServiceImpl {
 
         let verify_result = self.verify_phone_code(&reg_data.phone, &req.verify_code, "register").await?;
         if !verify_result {
-            return Err(Status::invalid_argument("验证码不正确或已过期"));
+            return Err(Status::invalid_argument("验证码错误"));
         }
 
         // 创建用户
@@ -309,7 +309,7 @@ impl UserService for UserServiceImpl {
             
             let verify_result = self.verify_phone_code(&forget_data.phone, &req.verify_code, "reset_password").await?;
             if !verify_result {
-                return Err(Status::invalid_argument("验证码不正确或已过期"));
+                return Err(Status::invalid_argument("验证码错误"));
             }
         }
 
@@ -490,7 +490,7 @@ impl UserService for UserServiceImpl {
         
         let verify_result = self.verify_phone_code(&req.phone, &req.code, "login").await?;
         if !verify_result {
-            return Err(Status::invalid_argument("验证码不正确或已过期"));
+            return Err(Status::invalid_argument("验证码错误"));
         }
         
         // 通过手机号获取用户
@@ -668,7 +668,7 @@ impl UserService for UserServiceImpl {
                     message: if is_valid { 
                         "验证码验证成功".to_string() 
                     } else { 
-                        "验证码不正确或已过期".to_string() 
+                        "验证码错误".to_string()
                     },
                 }))
             },
