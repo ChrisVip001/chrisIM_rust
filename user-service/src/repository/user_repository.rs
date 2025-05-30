@@ -652,7 +652,7 @@ impl UserRepository {
         let anon_phone = format!("deact{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
         
         // 执行用户注销操作 - 软删除和匿名化处理
-        // 1. 将用户状态修改为已注销(9)
+        // 1. 将用户状态修改为已注销(3)
         // 2. 匿名化用户敏感信息
         let result = sqlx::query!(
             r#"
@@ -667,7 +667,7 @@ impl UserRepository {
                 address = NULL,
                 head_image = NULL,
                 head_image_thumb = NULL,
-                user_stat = 9,
+                user_stat = 3,
                 updated_at = NOW()
             WHERE id = $4
             "#,

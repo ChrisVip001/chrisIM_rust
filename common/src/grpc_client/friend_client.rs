@@ -136,10 +136,11 @@ impl FriendServiceGrpcClient {
     }
 
     /// 拉黑用户
-    pub async fn block_user(&mut self, user_id: &str, blocked_user_id: &str) -> Result<BlockUserResponse> {
+    pub async fn block_user(&mut self, user_id: &str, blocked_user_id: &str, reason: Option<&str>) -> Result<BlockUserResponse> {
         let request = Request::new(BlockUserRequest {
             user_id: user_id.to_string(),
             blocked_user_id: blocked_user_id.to_string(),
+            reason: reason.unwrap_or("").to_string(),
         });
 
         let response = self.service_client.block_user(request).await?;
@@ -287,6 +288,23 @@ impl FriendServiceGrpcClient {
         });
 
         let response = self.service_client.update_friend_remark(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 获取用户黑名单列表
+    pub async fn get_user_blacklist(
+        &mut self,
+        user_id: &str,
+        page: i64,
+        page_size: i64,
+    ) -> Result<crate::proto::friend::GetUserBlacklistResponse> {
+        let request = Request::new(crate::proto::friend::GetUserBlacklistRequest {
+            user_id: user_id.to_string(),
+            page,
+            page_size,
+        });
+
+        let response = self.service_client.get_user_blacklist(request).await?;
         Ok(response.into_inner())
     }
 }

@@ -5,6 +5,7 @@ use sqlx::{PgPool, Row, FromRow, types::chrono::NaiveDateTime};
 use uuid::Uuid;
 
 use crate::model::friendship::{Friend, Friendship, FriendGroup, PotentialFriend, DetailedFriend};
+use crate::model::user_blacklist::UserBlacklist;
 
 pub struct FriendshipRepository {
     pool: PgPool,
@@ -476,7 +477,43 @@ impl FriendshipRepository {
         user_id: &str,
         friend_id: &str,
     ) -> Result<Option<FriendshipStatus>> {
-        // 首先检查 friend_relation 表中的状态
+        // 首先检查是否在黑名单中
+        let blacklist_exists = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM user_blacklist
+                WHERE user_id = $1 AND blocked_user_id = $2
+            ) AS "exists!"
+            "#,
+            user_id,
+            friend_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        
+        if blacklist_exists.exists {
+            return Ok(Some(FriendshipStatus::Blocked));
+        }
+        
+        // 检查对方是否把自己拉黑
+        let reverse_blacklist_exists = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM user_blacklist
+                WHERE user_id = $1 AND blocked_user_id = $2
+            ) AS "exists!"
+            "#,
+            friend_id,
+            user_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        
+        if reverse_blacklist_exists.exists {
+            return Ok(Some(FriendshipStatus::Blocked));
+        }
+        
+        // 然后检查 friend_relation 表中的状态
         let relation_result = sqlx::query!(
             r#"
             SELECT status FROM friend_relation
@@ -643,64 +680,260 @@ impl FriendshipRepository {
         }
     }
 
-    // 拉黑用户
-    pub async fn block_user(&self, user_id: &str, blocked_user_id: &str) -> Result<bool> {
+    // 拉黑用户（增强版 - 使用用户黑名单表）
+    pub async fn block_user(&self, user_id: &str, blocked_user_id: &str, reason: Option<String>) -> Result<UserBlacklist> {
+        let mut tx = self.pool.begin().await?;
         let now = Utc::now();
         let now_naive = now.naive_utc();
         
-        // 设置黑名单状态
-        let relation_id = Uuid::new_v4().to_string();
-        let result = sqlx::query!(
+        // 1. 记录到用户黑名单表
+        let blacklist = UserBlacklist::new(
+            user_id.to_string(), 
+            blocked_user_id.to_string(), 
+            reason.clone()
+        );
+        
+        let created_at_naive = blacklist.created_at.naive_utc();
+        
+        sqlx::query!(
             r#"
-            INSERT INTO friend_relation (id, user_id, friend_id, status, created_at)
-            VALUES ($1, $2, $3, 2, $4)
-            ON CONFLICT (user_id, friend_id) 
-            DO UPDATE SET status = 2, updated_at = $4
+            INSERT INTO user_blacklist (id, user_id, blocked_user_id, reason, created_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id, blocked_user_id) 
+            DO UPDATE SET reason = $4, created_at = $5
             "#,
-            relation_id,
-            user_id,
-            blocked_user_id,
-            now_naive
+            blacklist.id,
+            blacklist.user_id,
+            blacklist.blocked_user_id,
+            blacklist.reason,
+            created_at_naive
         )
-            .execute(&self.pool)
-            .await?;
-            
-        Ok(result.rows_affected() > 0)
-    }
-
-    // 解除拉黑
-    pub async fn unblock_user(&self, user_id: &str, blocked_user_id: &str) -> Result<bool> {
-        // 删除黑名单记录
-        let result = sqlx::query!(
+        .execute(&mut *tx)
+        .await?;
+        
+        // 2. 如果是好友关系，只修改状态为拉黑，不删除关系
+        // 查询是否存在好友关系
+        let friend_relation = sqlx::query!(
             r#"
-            DELETE FROM friend_relation
-            WHERE user_id = $1 AND friend_id = $2 AND status = 2
+            SELECT id, status FROM friend_relation
+            WHERE user_id = $1 AND friend_id = $2
             "#,
             user_id,
             blocked_user_id
         )
-            .execute(&self.pool)
-            .await?;
+        .fetch_optional(&mut *tx)
+        .await?;
+        
+        if let Some(relation) = friend_relation {
+            if relation.status == 1 {  // 如果是接受状态的好友关系
+                // 只更新状态为拉黑状态
+                sqlx::query!(
+                    r#"
+                    UPDATE friend_relation
+                    SET status = 2, updated_at = $1
+                    WHERE id = $2
+                    "#,
+                    now_naive,
+                    relation.id
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        
+        tx.commit().await?;
             
-        Ok(result.rows_affected() > 0)
+        Ok(blacklist)
     }
 
-    // 检查用户是否被拉黑
+    // 解除拉黑（增强版 - 使用用户黑名单表）
+    pub async fn unblock_user(&self, user_id: &str, blocked_user_id: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+        
+        // 1. 从用户黑名单表中删除记录
+        let blacklist_result = sqlx::query!(
+            r#"
+            DELETE FROM user_blacklist
+            WHERE user_id = $1 AND blocked_user_id = $2
+            RETURNING id
+            "#,
+            user_id,
+            blocked_user_id
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        
+        let blacklist_removed = blacklist_result.is_some();
+        
+        // 2. 查询是否存在状态为拉黑的好友关系记录
+        let relation = sqlx::query!(
+            r#"
+            SELECT id, status FROM friend_relation
+            WHERE user_id = $1 AND friend_id = $2
+            "#,
+            user_id,
+            blocked_user_id
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        
+        // 3. 如果存在拉黑状态的好友关系记录，将其恢复为接受状态
+        if let Some(rel) = relation {
+            if rel.status == 2 {  // 状态为拉黑
+                sqlx::query!(
+                    r#"
+                    UPDATE friend_relation
+                    SET status = 1, updated_at = $1
+                    WHERE id = $2
+                    "#,
+                    now_naive,
+                    rel.id
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        
+        tx.commit().await?;
+            
+        Ok(blacklist_removed)
+    }
+
+    // 检查用户是否被拉黑（增强版 - 使用用户黑名单表）
     pub async fn is_user_blocked(&self, user_id: &str, blocked_user_id: &str) -> Result<bool> {
         let result = sqlx::query!(
             r#"
             SELECT EXISTS(
-                SELECT 1 FROM friend_relation
-                WHERE user_id = $1 AND friend_id = $2 AND status = 2
+                SELECT 1 FROM user_blacklist
+                WHERE user_id = $1 AND blocked_user_id = $2
             ) AS "exists!"
             "#,
             user_id,
             blocked_user_id
         )
-            .fetch_one(&self.pool)
-            .await?;
+        .fetch_one(&self.pool)
+        .await?;
             
         Ok(result.exists)
+    }
+    
+    // 获取用户黑名单列表
+    pub async fn get_user_blacklist(
+        &self,
+        user_id: &str,
+        page: Option<i64>,
+        page_size: Option<i64>,
+    ) -> Result<Vec<UserBlacklist>> {
+        // 默认分页参数
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(20);
+        let offset = (page - 1) * page_size;
+        
+        // 查询用户黑名单
+        let rows = sqlx::query!(
+            r#"
+            SELECT 
+                ub.id, 
+                ub.user_id, 
+                ub.blocked_user_id, 
+                ub.reason, 
+                ub.created_at
+            FROM user_blacklist ub
+            WHERE ub.user_id = $1
+            ORDER BY ub.created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+            user_id,
+            page_size,
+            offset
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        
+        let blacklist = rows
+            .into_iter()
+            .map(|row| UserBlacklist {
+                id: row.id,
+                user_id: row.user_id,
+                blocked_user_id: row.blocked_user_id,
+                reason: row.reason,
+                created_at: Utc.from_utc_datetime(&row.created_at),
+            })
+            .collect();
+        
+        Ok(blacklist)
+    }
+    
+    // 获取带用户信息的黑名单列表
+    pub async fn get_user_blacklist_with_info(
+        &self,
+        user_id: &str,
+        page: Option<i64>,
+        page_size: Option<i64>,
+    ) -> Result<Vec<(UserBlacklist, Option<String>, Option<String>, Option<String>)>> {
+        // 默认分页参数
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(20);
+        let offset = (page - 1) * page_size;
+        
+        // 查询用户黑名单，并联合用户表获取用户信息
+        let rows = sqlx::query!(
+            r#"
+            SELECT 
+                ub.id, 
+                ub.user_id, 
+                ub.blocked_user_id, 
+                ub.reason, 
+                ub.created_at,
+                u.username,
+                u.nickname,
+                u.avatar_url
+            FROM user_blacklist ub
+            LEFT JOIN users u ON ub.blocked_user_id = u.id
+            WHERE ub.user_id = $1
+            ORDER BY ub.created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+            user_id,
+            page_size,
+            offset
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        
+        let blacklist_with_info = rows
+            .into_iter()
+            .map(|row| {
+                let blacklist = UserBlacklist {
+                    id: row.id,
+                    user_id: row.user_id,
+                    blocked_user_id: row.blocked_user_id,
+                    reason: row.reason,
+                    created_at: Utc.from_utc_datetime(&row.created_at),
+                };
+                
+                (blacklist, row.username, row.nickname, row.avatar_url)
+            })
+            .collect();
+        
+        Ok(blacklist_with_info)
+    }
+    
+    // 计算用户黑名单总数
+    pub async fn count_user_blacklist(&self, user_id: &str) -> Result<i64> {
+        let result = sqlx::query!(
+            r#"
+            SELECT COUNT(*) as "count!" FROM user_blacklist
+            WHERE user_id = $1
+            "#,
+            user_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        
+        Ok(result.count)
     }
 
     // 更新好友分组中的好友

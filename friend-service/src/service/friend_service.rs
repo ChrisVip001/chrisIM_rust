@@ -13,6 +13,7 @@ use common::proto::friend::{
     ToggleFriendStarRequest, ToggleFriendStarResponse,
     ToggleFriendTopRequest, ToggleFriendTopResponse,
     UpdateFriendRemarkRequest, UpdateFriendRemarkResponse,
+    GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo,
 };
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -20,6 +21,7 @@ use tracing::{error, info};
 
 use crate::repository::friendship_repository::FriendshipRepository;
 use crate::model::friendship::{PotentialFriend, DetailedFriend};
+use crate::model::user_blacklist::UserBlacklist;
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
@@ -401,6 +403,7 @@ impl FriendService for FriendServiceImpl {
 
         let user_id = req.user_id.clone();
         let blocked_user_id = req.blocked_user_id.clone();
+        let reason = if req.reason.is_empty() { None } else { Some(req.reason) };
 
         // 检查用户是否存在
         self.check_user_exists(&user_id).await?;
@@ -414,11 +417,11 @@ impl FriendService for FriendServiceImpl {
             return Err(Status::already_exists("该用户已被拉黑"));
         }
 
-        match self.repository.block_user(&user_id, &blocked_user_id).await {
-            Ok(success) => {
-                info!("用户 {} 成功拉黑用户 {}", user_id, blocked_user_id);
+        match self.repository.block_user(&user_id, &blocked_user_id, reason).await {
+            Ok(blacklist) => {
+                info!("用户 {} 成功拉黑用户 {}，好友关系状态已更新为拉黑（如果存在）", user_id, blocked_user_id);
                 Ok(Response::new(BlockUserResponse {
-                    success,
+                    blacklist: Some(blacklist.to_proto()),
                 }))
             }
             Err(e) => {
@@ -452,7 +455,7 @@ impl FriendService for FriendServiceImpl {
 
         match self.repository.unblock_user(&user_id, &blocked_user_id).await {
             Ok(success) => {
-                info!("用户 {} 成功解除拉黑用户 {}", user_id, blocked_user_id);
+                info!("用户 {} 成功解除拉黑用户 {}，好友关系已自动恢复（如果之前存在）", user_id, blocked_user_id);
                 Ok(Response::new(UnblockUserResponse {
                     success,
                 }))
@@ -766,6 +769,56 @@ impl FriendService for FriendServiceImpl {
             Err(e) => {
                 error!("更新好友备注失败: {}", e);
                 Err(Status::internal(format!("更新好友备注失败: {}", e)))
+            }
+        }
+    }
+
+    // 获取用户黑名单列表
+    async fn get_user_blacklist(
+        &self,
+        request: Request<GetUserBlacklistRequest>,
+    ) -> Result<Response<GetUserBlacklistResponse>, Status> {
+        let req = request.into_inner();
+        
+        let user_id = req.user_id.clone();
+        let page = if req.page > 0 { Some(req.page) } else { None };
+        let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
+        
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        
+        // 获取黑名单总数
+        let total = match self.repository.count_user_blacklist(&user_id).await {
+            Ok(count) => count,
+            Err(e) => {
+                error!("获取用户黑名单总数失败: {}", e);
+                return Err(Status::internal("获取用户黑名单总数失败"));
+            }
+        };
+        
+        // 获取带用户信息的黑名单列表
+        match self.repository.get_user_blacklist_with_info(&user_id, page, page_size).await {
+            Ok(blacklist_with_info) => {
+                let blacklist_protos = blacklist_with_info
+                    .into_iter()
+                    .map(|(blacklist, username, nickname, avatar_url)| {
+                        UserBlacklistWithInfo {
+                            blacklist: Some(blacklist.to_proto()),
+                            username,
+                            nickname,
+                            avatar_url,
+                        }
+                    })
+                    .collect();
+                
+                Ok(Response::new(GetUserBlacklistResponse {
+                    blacklist: blacklist_protos,
+                    total,
+                }))
+            }
+            Err(e) => {
+                error!("获取用户黑名单列表失败: {}", e);
+                Err(Status::internal("获取用户黑名单列表失败"))
             }
         }
     }

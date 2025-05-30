@@ -59,6 +59,9 @@ service FriendService {
   
   // 更新好友备注
   rpc UpdateFriendRemark (UpdateFriendRemarkRequest) returns (UpdateFriendRemarkResponse);
+  
+  // 获取黑名单列表
+  rpc GetUserBlacklist (GetUserBlacklistRequest) returns (GetUserBlacklistResponse);
 }
 
 // 发送好友请求
@@ -174,11 +177,12 @@ enum FriendshipStatus {
 message BlockUserRequest {
   string user_id = 1;        // 操作用户ID
   string blocked_user_id = 2; // 被拉黑用户ID
+  string reason = 3;         // 拉黑原因（可选）
 }
 
 // 拉黑用户响应
 message BlockUserResponse {
-  bool success = 1;
+  UserBlacklist blacklist = 1;
 }
 
 // 解除拉黑请求
@@ -190,6 +194,36 @@ message UnblockUserRequest {
 // 解除拉黑响应
 message UnblockUserResponse {
   bool success = 1;
+}
+
+// 用户黑名单记录
+message UserBlacklist {
+  string id = 1;                         // 黑名单记录ID
+  string user_id = 2;                    // 用户ID（拉黑操作的发起者）
+  string blocked_user_id = 3;            // 被拉黑用户ID
+  optional string reason = 4;            // 拉黑原因
+  google.protobuf.Timestamp created_at = 5; // 拉黑时间
+}
+
+// 带用户信息的黑名单记录
+message UserBlacklistWithInfo {
+  UserBlacklist blacklist = 1;           // 黑名单记录
+  optional string username = 2;          // 被拉黑用户的用户名
+  optional string nickname = 3;          // 被拉黑用户的昵称
+  optional string avatar_url = 4;        // 被拉黑用户的头像
+}
+
+// 获取黑名单列表请求
+message GetUserBlacklistRequest {
+  string user_id = 1;                    // 用户ID
+  int64 page = 2;                        // 页码
+  int64 page_size = 3;                   // 每页数量
+}
+
+// 获取黑名单列表响应
+message GetUserBlacklistResponse {
+  repeated UserBlacklistWithInfo blacklist = 1; // 黑名单列表（带用户信息）
+  int64 total = 2;                             // 总数
 }
 
 // 好友分组

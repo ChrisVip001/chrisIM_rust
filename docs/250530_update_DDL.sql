@@ -256,7 +256,7 @@ COMMENT ON COLUMN "user_config"."vibration_enabled" IS '是否开启震动(1-是
 
 -- 创建用户黑名单表
 CREATE TABLE IF NOT EXISTS user_blacklist (
-                                              id VARCHAR(36) PRIMARY KEY,                          -- 黑名单记录ID
+    id VARCHAR(36) PRIMARY KEY,                          -- 黑名单记录ID
     user_id VARCHAR(36) NOT NULL,                        -- 用户ID（拉黑操作的发起者）
     blocked_user_id VARCHAR(36) NOT NULL,                -- 被拉黑用户ID
     reason VARCHAR(255),                                 -- 拉黑原因(可选)
