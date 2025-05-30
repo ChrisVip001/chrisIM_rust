@@ -39,7 +39,7 @@ impl GroupServiceHandler {
         debug!("处理群组服务请求: {} {}", method, path);
 
         // 从JWT中获取用户ID
-        let user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+        let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
 
         // 从路径提取方法名 - 格式: /api/groups/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
@@ -71,7 +71,7 @@ impl GroupServiceHandler {
                 let response = self.client.create_group(
                     &name,
                     description,
-                    &user_id,
+                    &current_user_id,
                     avatar_url,
                     members
                 ).await?;
@@ -115,7 +115,7 @@ impl GroupServiceHandler {
             (&Method::GET, "delete") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
 
-                let response = self.client.delete_group(&group_id, &user_id).await?;
+                let response = self.client.delete_group(&group_id, &current_user_id).await?;
 
                 Ok(success_response(
                     response.success,
@@ -126,7 +126,7 @@ impl GroupServiceHandler {
             // 添加成员
             (&Method::POST, "addMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let member_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
                 
                 let role_value = get_i64_param(&body, "role", 0);
                 let role = match role_value {
@@ -136,7 +136,7 @@ impl GroupServiceHandler {
                     _ => proto::group::MemberRole::Member,
                 };
 
-                let response = self.client.add_member(&group_id, &member_id, &user_id, role).await?;
+                let response = self.client.add_member(&group_id, &member_id, &current_user_id, role).await?;
                 let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
 
                 Ok(success_response(self.convert_member_to_json(&member), StatusCode::OK))
@@ -145,9 +145,9 @@ impl GroupServiceHandler {
             // 移除成员
             (&Method::POST, "removeMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let member_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
 
-                let response = self.client.remove_member(&group_id, &member_id, &user_id).await?;
+                let response = self.client.remove_member(&group_id, &member_id, &current_user_id).await?;
                 
                 Ok(success_response(
                     response.success,
@@ -158,7 +158,7 @@ impl GroupServiceHandler {
             // 更新成员角色
             (&Method::POST, "updateMemberRole") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let member_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
                 
                 let role_value = get_i64_param(&body, "role", 0);
                 let role = match role_value {
@@ -168,7 +168,7 @@ impl GroupServiceHandler {
                     _ => proto::group::MemberRole::Member,
                 };
 
-                let response = self.client.update_member_role(&group_id, &member_id, &user_id, role).await?;
+                let response = self.client.update_member_role(&group_id, &member_id, &current_user_id, role).await?;
                 let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
 
                 Ok(success_response(self.convert_member_to_json(&member), StatusCode::OK))
@@ -186,7 +186,7 @@ impl GroupServiceHandler {
 
             // 获取用户加入的群组列表
             (&Method::GET, "getUserGroups") => {
-                let response = self.client.get_user_groups(&user_id).await?;
+                let response = self.client.get_user_groups(&current_user_id).await?;
                 let groups = response.groups.iter().map(|g| self.convert_user_group_to_json(g)).collect::<Vec<_>>();
 
                 Ok(success_response(groups, StatusCode::OK))
@@ -196,7 +196,7 @@ impl GroupServiceHandler {
             (&Method::GET, "checkMembership") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
 
-                let response = self.client.check_membership(&group_id, &user_id).await?;
+                let response = self.client.check_membership(&group_id, &current_user_id).await?;
 
                 let role_text = if response.is_member {
                     match response.role.unwrap_or(0) {
@@ -230,7 +230,7 @@ impl GroupServiceHandler {
 
                 let response = self.client.create_announcement(
                     &group_id,
-                    &user_id,
+                    &current_user_id,
                     &title,
                     &content,
                     is_pinned
@@ -267,7 +267,7 @@ impl GroupServiceHandler {
             (&Method::GET, "deleteAnnouncement") => {
                 let announcement_id = extract_string_param(&body, "announcementId", Some("announcement_id"))?;
 
-                let response = self.client.delete_announcement(&announcement_id, &user_id).await?;
+                let response = self.client.delete_announcement(&announcement_id, &current_user_id).await?;
 
                 Ok(success_response(
                     response.success,
@@ -295,7 +295,7 @@ impl GroupServiceHandler {
 
                 let response = self.client.update_group_settings(
                     &group_id,
-                    &user_id,
+                    &current_user_id,
                     allow_member_friendship,
                     join_approval_required,
                     only_admin_can_invite,
@@ -322,13 +322,13 @@ impl GroupServiceHandler {
             // 添加用户到黑名单
             (&Method::POST, "addToBlacklist") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
                 let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
                 let response = self.client.add_to_blacklist(
                     &group_id,
                     &target_user_id,
-                    &user_id,
+                    &current_user_id,
                     &reason
                 ).await?;
 
@@ -340,12 +340,12 @@ impl GroupServiceHandler {
             // 从黑名单移除用户
             (&Method::POST, "removeFromBlacklist") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
 
                 let response = self.client.remove_from_blacklist(
                     &group_id,
                     &target_user_id,
-                    &user_id
+                    &current_user_id
                 ).await?;
 
                 Ok(success_response(
@@ -357,7 +357,7 @@ impl GroupServiceHandler {
             // 禁言成员
             (&Method::POST, "muteMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
                 let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let is_permanent = get_bool_param(&body, "isPermanent", Some("is_permanent"), false);
                 
@@ -377,7 +377,7 @@ impl GroupServiceHandler {
                 let response = self.client.mute_member(
                     &group_id,
                     &target_user_id,
-                    &user_id,
+                    &current_user_id,
                     &reason,
                     mute_until,
                     is_permanent
@@ -391,12 +391,12 @@ impl GroupServiceHandler {
             // 解除成员禁言
             (&Method::POST, "unmuteMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
 
                 let response = self.client.unmute_member(
                     &group_id,
                     &target_user_id,
-                    &user_id
+                    &current_user_id
                 ).await?;
 
                 Ok(success_response(
@@ -418,11 +418,11 @@ impl GroupServiceHandler {
             }
 
             // 获取成员设置
-            (&Method::GET, "getMemberSettings") => {
+            (&Method::POST, "getMemberSettings") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
                 let target_user_id = body.get("userId")
                     .and_then(|v| v.as_str())
-                    .unwrap_or(&user_id)
+                    .unwrap_or(&current_user_id)
                     .to_string();
 
                 let response = self.client.get_member_settings(&group_id, &target_user_id).await?;
@@ -443,7 +443,7 @@ impl GroupServiceHandler {
 
                 let response = self.client.update_member_settings(
                     &group_id,
-                    &user_id,
+                    &current_user_id,
                     mute_notifications,
                     &nickname_in_group
                 ).await?;
@@ -473,7 +473,7 @@ impl GroupServiceHandler {
 
                 let response = self.client.create_group_qrcode(
                     &group_id,
-                    &user_id,
+                    &current_user_id,
                     expires_at,
                     is_permanent
                 ).await?;
