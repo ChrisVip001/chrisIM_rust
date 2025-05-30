@@ -205,7 +205,7 @@ pub async fn login(
 
     // 检查密码是否有效
     if !response.valid || response.user.is_none() {
-        return Err(Error::Authentication("用户名或密码不正确".to_string()));
+        return Err(Error::Internal("用户名或密码不正确".to_string()));
     }
 
     // 获取用户信息
