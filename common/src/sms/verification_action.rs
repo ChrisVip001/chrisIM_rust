@@ -14,6 +14,8 @@ pub enum VerificationAction {
     BindPhone,      // 绑定手机号
     #[serde(rename = "change_phone")]
     ChangePhone,    // 更换手机号
+    #[serde(rename = "deactivate")]
+    Deactivate,     // 注销账号
 }
 
 impl VerificationAction {
@@ -25,6 +27,7 @@ impl VerificationAction {
             Self::ResetPassword => "重置密码",
             Self::BindPhone => "绑定手机号",
             Self::ChangePhone => "更换手机号",
+            Self::Deactivate => "注销账号",
         }
     }
     
@@ -36,6 +39,7 @@ impl VerificationAction {
             Self::ResetPassword => "reset_password",
             Self::BindPhone => "bind_phone",
             Self::ChangePhone => "change_phone",
+            Self::Deactivate => "deactivate",
         }
     }
 }
@@ -50,6 +54,7 @@ impl FromStr for VerificationAction {
             "reset_password" => Ok(Self::ResetPassword),
             "bind_phone" => Ok(Self::BindPhone),
             "change_phone" => Ok(Self::ChangePhone),
+            "deactivate" => Ok(Self::Deactivate),
             _ => Err(format!("未知的验证码用途: {}", s)),
         }
     }

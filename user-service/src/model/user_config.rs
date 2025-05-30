@@ -13,6 +13,8 @@ pub struct UserConfig {
     pub auto_load_video: Option<i32>,
     pub auto_load_pic: Option<i32>,
     pub msg_read_flag: Option<i32>,
+    pub sound_enabled: Option<i32>,
+    pub vibration_enabled: Option<i32>,
     pub create_time: Option<DateTime<Utc>>,
     pub update_time: Option<DateTime<Utc>>,
 }
@@ -25,6 +27,8 @@ pub struct UserConfigData {
     pub auto_load_video: Option<i32>,
     pub auto_load_pic: Option<i32>,
     pub msg_read_flag: Option<i32>,
+    pub sound_enabled: Option<i32>,
+    pub vibration_enabled: Option<i32>,
 }
 
 impl From<user::UserConfigRequest> for UserConfigData {
@@ -36,6 +40,8 @@ impl From<user::UserConfigRequest> for UserConfigData {
             auto_load_video: req.auto_load_video,
             auto_load_pic: req.auto_load_pic,
             msg_read_flag: req.msg_read_flag,
+            sound_enabled: req.sound_enabled,
+            vibration_enabled: req.vibration_enabled,
         }
     }
 }

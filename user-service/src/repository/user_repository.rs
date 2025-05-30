@@ -638,4 +638,52 @@ impl UserRepository {
 
         Ok((users, total as i32))
     }
+
+    /// 注销用户账号（软删除+匿名化）
+    pub async fn deactivate_user(&self, user_id: &str) -> Result<bool> {
+        // 获取用户信息
+        let _user = self.get_user_by_id(user_id).await?;
+        
+        // 生成匿名用户名和随机密码
+        let anon_username = format!("deactivated_{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
+        let anon_password = hash_password(&Uuid::new_v4().to_string())?;
+        
+        // 为手机号生成随机值（保留前缀，确保唯一性）
+        let anon_phone = format!("deact{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
+        
+        // 执行用户注销操作 - 软删除和匿名化处理
+        // 1. 将用户状态修改为已注销(9)
+        // 2. 匿名化用户敏感信息
+        let result = sqlx::query!(
+            r#"
+            UPDATE users
+            SET 
+                username = $1,
+                email = NULL,
+                password = $2,
+                nickname = '已注销用户',
+                avatar_url = NULL,
+                phone = $3,
+                address = NULL,
+                head_image = NULL,
+                head_image_thumb = NULL,
+                user_stat = 9,
+                updated_at = NOW()
+            WHERE id = $4
+            "#,
+            anon_username,
+            anon_password,
+            anon_phone,
+            user_id
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|err| {
+            error!("注销用户失败: {}", err);
+            Error::Database(err)
+        })?;
+        
+        debug!("成功注销用户: {}, 影响行数: {}", user_id, result.rows_affected());
+        Ok(result.rows_affected() > 0)
+    }
 }

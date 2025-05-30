@@ -47,6 +47,9 @@ service UserService {
   
   // 验证手机验证码
   rpc VerifyPhoneCode (VerifyPhoneCodeRequest) returns (VerifyPhoneCodeResponse);
+  
+  // 注销用户账号
+  rpc DeactivateUser (DeactivateUserRequest) returns (DeactivateUserResponse);
 }
 
 // 创建用户请求
@@ -160,6 +163,8 @@ message UserConfigRequest{
   optional int32 auto_load_video = 4;
   optional int32 auto_load_pic = 5;
   optional int32 msg_read_flag = 6;
+  optional int32 sound_enabled = 7;
+  optional int32 vibration_enabled = 8;
 }
 
 // 用户设置响应
@@ -177,6 +182,8 @@ message UserConfig {
   optional int32 msg_read_flag = 6;
   google.protobuf.Timestamp create_time = 7;
   google.protobuf.Timestamp update_time = 8;
+  optional int32 sound_enabled = 9;
+  optional int32 vibration_enabled = 10;
 }
 
 // 手机验证码请求
@@ -201,5 +208,18 @@ message VerifyPhoneCodeRequest {
 // 验证手机验证码响应
 message VerifyPhoneCodeResponse {
   bool valid = 1;
+  string message = 2;
+}
+
+// 用户注销请求
+message DeactivateUserRequest {
+  string user_id = 1;
+  string phone = 2;    // 需要验证手机号
+  string verify_code = 3;  // 需要提供验证码
+}
+
+// 用户注销响应
+message DeactivateUserResponse {
+  bool success = 1;
   string message = 2;
 }

@@ -243,3 +243,35 @@ CREATE TRIGGER update_group_member_settings_modtime
     ON group_member_settings
     FOR EACH ROW
     EXECUTE FUNCTION update_modified_column();
+
+-- 为user_config表添加声音和震动开关字段
+ALTER TABLE "user_config" ADD COLUMN "sound_enabled" int4 DEFAULT 2;
+ALTER TABLE "user_config" ADD COLUMN "vibration_enabled" int4 DEFAULT 2;
+
+COMMENT ON COLUMN "user_config"."sound_enabled" IS '是否开启声音(1-是，2-否)';
+COMMENT ON COLUMN "user_config"."vibration_enabled" IS '是否开启震动(1-是，2-否)';
+
+
+-- 功能: 添加用户黑名单表和相关功能
+
+-- 创建用户黑名单表
+CREATE TABLE IF NOT EXISTS user_blacklist (
+                                              id VARCHAR(36) PRIMARY KEY,                          -- 黑名单记录ID
+    user_id VARCHAR(36) NOT NULL,                        -- 用户ID（拉黑操作的发起者）
+    blocked_user_id VARCHAR(36) NOT NULL,                -- 被拉黑用户ID
+    reason VARCHAR(255),                                 -- 拉黑原因(可选)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 创建时间
+    CONSTRAINT uk_user_blocked_user UNIQUE (user_id, blocked_user_id)
+    );
+
+-- 创建索引以提高查询性能
+CREATE INDEX IF NOT EXISTS idx_user_blacklist_user_id ON user_blacklist (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_blacklist_blocked_user_id ON user_blacklist (blocked_user_id);
+
+-- 添加表和字段注释
+COMMENT ON TABLE user_blacklist IS '用户黑名单表';
+COMMENT ON COLUMN user_blacklist.id IS '黑名单记录ID';
+COMMENT ON COLUMN user_blacklist.user_id IS '拉黑操作的发起者ID';
+COMMENT ON COLUMN user_blacklist.blocked_user_id IS '被拉黑用户ID';
+COMMENT ON COLUMN user_blacklist.reason IS '拉黑原因';
+COMMENT ON COLUMN user_blacklist.created_at IS '拉黑时间';

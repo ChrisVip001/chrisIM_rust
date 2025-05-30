@@ -1,7 +1,7 @@
 use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -69,7 +69,8 @@ impl UserServiceImpl {
             VerificationAction::Login | 
             VerificationAction::ResetPassword | 
             VerificationAction::BindPhone | 
-            VerificationAction::ChangePhone => {
+            VerificationAction::ChangePhone |
+            VerificationAction::Deactivate => {
                 // 通过手机号检查用户是否存在
                 match self.repository.get_user_by_phone(phone).await {
                     Ok(_) => {}, // 用户存在，继续处理
@@ -569,6 +570,8 @@ impl UserService for UserServiceImpl {
             auto_load_video: user_config.auto_load_video,
             auto_load_pic: user_config.auto_load_pic,
             msg_read_flag: user_config.msg_read_flag,
+            sound_enabled: user_config.sound_enabled,
+            vibration_enabled: user_config.vibration_enabled,
             create_time: user_config.create_time.map(|dt| prost_types::Timestamp {
                 seconds: dt.timestamp(),
                 nanos: dt.timestamp_subsec_nanos() as i32,
@@ -611,6 +614,8 @@ impl UserService for UserServiceImpl {
             auto_load_video: user_config.auto_load_video,
             auto_load_pic: user_config.auto_load_pic,
             msg_read_flag: user_config.msg_read_flag,
+            sound_enabled: user_config.sound_enabled,
+            vibration_enabled: user_config.vibration_enabled,
             create_time: user_config.create_time.map(|dt| prost_types::Timestamp {
                 seconds: dt.timestamp(),
                 nanos: dt.timestamp_subsec_nanos() as i32,
@@ -677,6 +682,79 @@ impl UserService for UserServiceImpl {
                     valid: false,
                     message: err.to_string(),
                 }))
+            }
+        }
+    }
+
+    /// 注销用户账号
+    async fn deactivate_user(
+        &self,
+        request: Request<DeactivateUserRequest>,
+    ) -> std::result::Result<Response<DeactivateUserResponse>, Status> {
+        let request = request.into_inner();
+        
+        info!("用户注销请求: user_id={}, phone={}", request.user_id, request.phone);
+        
+        // 手机号格式校验
+        if !validate_phone(&request.phone) {
+            error!("手机号格式不正确: {}", request.phone);
+            return Err(Status::invalid_argument("手机号格式不正确"));
+        }
+        
+        // 短信验证码校验
+        if request.verify_code.is_empty() {
+            return Err(Status::invalid_argument("验证码不能为空"));
+        }
+
+        // 确认手机号与用户匹配
+        match self.repository.get_user_by_id(&request.user_id).await {
+            Ok(user) => {
+                if user.phone != request.phone {
+                    error!("提供的手机号与用户绑定的手机号不匹配");
+                    return Err(Status::permission_denied("提供的手机号与用户绑定的手机号不匹配"));
+                }
+            },
+            Err(err) => {
+                error!("获取用户信息失败: {}", err);
+                return Err(err.into());
+            }
+        }
+
+
+        // 验证码验证
+        match self.verify_phone_code(&request.phone, &request.verify_code, "deactivate").await {
+            Ok(is_valid) => {
+                if !is_valid {
+                    return Err(Status::invalid_argument("验证码错误"));
+                }
+            },
+            Err(err) => {
+                error!("验证码验证失败: {}", err);
+                return Err(err);
+            }
+        }
+        
+      
+        // 执行注销操作
+        match self.repository.deactivate_user(&request.user_id).await {
+            Ok(success) => {
+                if success {
+                    info!("用户注销成功: {}", request.user_id);
+                    Ok(Response::new(DeactivateUserResponse {
+                        success: true,
+                        message: "用户账号已成功注销".to_string(),
+                    }))
+                } else {
+                    error!("用户注销失败，未找到用户: {}", request.user_id);
+                    Ok(Response::new(DeactivateUserResponse {
+                        success: false,
+                        message: "用户注销失败，未找到用户".to_string(),
+                    }))
+                }
+            },
+            Err(err) => {
+                error!("用户注销失败: {}", err);
+                Err(Status::internal(format!("用户注销失败: {}", err)))
             }
         }
     }

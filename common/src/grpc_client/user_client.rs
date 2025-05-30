@@ -2,7 +2,7 @@ use anyhow::Result;
 use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
-use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse};
+use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse};
 use crate::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务gRPC客户端
@@ -110,6 +110,8 @@ impl UserServiceGrpcClient {
             auto_load_video: Option::from(0 as i32),
             auto_load_pic: Option::from(0 as i32),
             msg_read_flag: Option::from(0 as i32),
+            sound_enabled: Option::from(0 as i32),
+            vibration_enabled: Option::from(0 as i32),
         });
         let response = self.service_client.get_user_config(request).await?;
         Ok(response.into_inner())
@@ -130,6 +132,12 @@ impl UserServiceGrpcClient {
     /// 验证手机验证码
     pub async fn verify_phone_code(&mut self, request: VerifyPhoneCodeRequest) -> Result<VerifyPhoneCodeResponse> {
         let response = self.service_client.verify_phone_code(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+    
+    /// 注销用户账号
+    pub async fn deactivate_user(&mut self, request: DeactivateUserRequest) -> Result<DeactivateUserResponse> {
+        let response = self.service_client.deactivate_user(Request::new(request)).await?;
         Ok(response.into_inner())
     }
 }
