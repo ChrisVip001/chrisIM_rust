@@ -212,3 +212,29 @@ pub fn timestamp_to_datetime_string(timestamp: &Option<prost_types::Timestamp>) 
         })
         .unwrap_or_default()
 }
+
+/// 参数提取辅助函数 - 从JSON中提取布尔参数 （非必填给默认值）
+pub fn get_bool_param(body: &Value, param_name: &str, alt_name: Option<&str>, default: bool) -> bool {
+    body.get(param_name)
+        .or_else(|| alt_name.and_then(|alt| body.get(alt)))
+        .and_then(|v| {
+            if v.is_boolean() {
+                v.as_bool()
+            } else if v.is_string() {
+                match v.as_str().unwrap_or("").to_lowercase().as_str() {
+                    "true" | "1" | "yes" | "y" => Some(true),
+                    "false" | "0" | "no" | "n" => Some(false),
+                    _ => None,
+                }
+            } else if v.is_number() {
+                match v.as_i64() {
+                    Some(1) => Some(true),
+                    Some(0) => Some(false),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or(default)
+}

@@ -38,6 +38,34 @@ service GroupService {
   
   // 搜索用户的群组
   rpc SearchUserGroups (SearchUserGroupsRequest) returns (SearchUserGroupsResponse);
+
+  // 新增方法 - 群组设置
+  rpc GetGroupSettings (GetGroupSettingsRequest) returns (GroupSettingsResponse);
+  rpc UpdateGroupSettings (UpdateGroupSettingsRequest) returns (GroupSettingsResponse);
+
+  // 新增方法 - 群公告
+  rpc CreateAnnouncement (CreateAnnouncementRequest) returns (AnnouncementResponse);
+  rpc GetAnnouncement (GetAnnouncementRequest) returns (AnnouncementResponse);
+  rpc GetGroupAnnouncements (GetGroupAnnouncementsRequest) returns (GetGroupAnnouncementsResponse);
+  rpc DeleteAnnouncement (DeleteAnnouncementRequest) returns (DeleteAnnouncementResponse);
+
+  // 新增方法 - 群黑名单
+  rpc AddToBlacklist (AddToBlacklistRequest) returns (BlacklistResponse);
+  rpc RemoveFromBlacklist (RemoveFromBlacklistRequest) returns (RemoveFromBlacklistResponse);
+  rpc GetBlacklist (GetBlacklistRequest) returns (GetBlacklistResponse);
+
+  // 新增方法 - 群禁言
+  rpc MuteMember (MuteMemberRequest) returns (MuteResponse);
+  rpc UnmuteMember (UnmuteMemberRequest) returns (UnmuteResponse);
+  rpc GetMutedMembers (GetMutedMembersRequest) returns (GetMutedMembersResponse);
+
+  // 新增方法 - 群成员设置
+  rpc GetMemberSettings (GetMemberSettingsRequest) returns (MemberSettingsResponse);
+  rpc UpdateMemberSettings (UpdateMemberSettingsRequest) returns (MemberSettingsResponse);
+
+  // 新增方法 - 群二维码
+  rpc CreateGroupQrcode (CreateGroupQrcodeRequest) returns (GroupQrcodeResponse);
+  rpc GetGroupQrcode (GetGroupQrcodeRequest) returns (GroupQrcodeResponse);
 }
 
 // 创建群组请求
@@ -198,4 +226,211 @@ message SearchUserGroupsResponse {
   int32 total = 2;
   int32 page = 3;
   int32 page_size = 4;
+}
+
+// 新增消息定义 - 群组设置
+message GroupSettings {
+  string group_id = 1;
+  bool allow_member_friendship = 2;
+  bool join_approval_required = 3;
+  bool only_admin_can_invite = 4;
+  bool only_admin_can_modify = 5;
+}
+
+message GetGroupSettingsRequest {
+  string group_id = 1;
+}
+
+message GroupSettingsResponse {
+  GroupSettings settings = 1;
+}
+
+message UpdateGroupSettingsRequest {
+  string group_id = 1;
+  string updated_by_id = 2;
+  bool allow_member_friendship = 3;
+  bool join_approval_required = 4;
+  bool only_admin_can_invite = 5;
+  bool only_admin_can_modify = 6;
+}
+
+// 新增消息定义 - 群公告
+message Announcement {
+  string id = 1;
+  string group_id = 2;
+  string creator_id = 3;
+  string title = 4;
+  string content = 5;
+  bool is_pinned = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message CreateAnnouncementRequest {
+  string group_id = 1;
+  string creator_id = 2;
+  string title = 3;
+  string content = 4;
+  bool is_pinned = 5;
+}
+
+message AnnouncementResponse {
+  Announcement announcement = 1;
+}
+
+message GetAnnouncementRequest {
+  string announcement_id = 1;
+}
+
+message GetGroupAnnouncementsRequest {
+  string group_id = 1;
+}
+
+message GetGroupAnnouncementsResponse {
+  repeated Announcement announcements = 1;
+}
+
+message DeleteAnnouncementRequest {
+  string announcement_id = 1;
+  string deleted_by_id = 2;
+}
+
+message DeleteAnnouncementResponse {
+  bool success = 1;
+}
+
+// 新增消息定义 - 群黑名单
+message BlacklistEntry {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  string creator_id = 4;
+  string reason = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message AddToBlacklistRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string creator_id = 3;
+  string reason = 4;
+}
+
+message BlacklistResponse {
+  BlacklistEntry entry = 1;
+}
+
+message RemoveFromBlacklistRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string removed_by_id = 3;
+}
+
+message RemoveFromBlacklistResponse {
+  bool success = 1;
+}
+
+message GetBlacklistRequest {
+  string group_id = 1;
+}
+
+message GetBlacklistResponse {
+  repeated BlacklistEntry entries = 1;
+}
+
+// 新增消息定义 - 群禁言
+message MuteEntry {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  string creator_id = 4;
+  string reason = 5;
+  google.protobuf.Timestamp mute_until = 6;
+  bool is_permanent = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message MuteMemberRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string creator_id = 3;
+  string reason = 4;
+  google.protobuf.Timestamp mute_until = 5;
+  bool is_permanent = 6;
+}
+
+message MuteResponse {
+  MuteEntry entry = 1;
+}
+
+message UnmuteMemberRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string unmuted_by_id = 3;
+}
+
+message UnmuteResponse {
+  bool success = 1;
+}
+
+message GetMutedMembersRequest {
+  string group_id = 1;
+}
+
+message GetMutedMembersResponse {
+  repeated MuteEntry entries = 1;
+}
+
+// 新增消息定义 - 群成员设置
+message MemberSettings {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  bool mute_notifications = 4;
+  string nickname_in_group = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message GetMemberSettingsRequest {
+  string group_id = 1;
+  string user_id = 2;
+}
+
+message MemberSettingsResponse {
+  MemberSettings settings = 1;
+}
+
+message UpdateMemberSettingsRequest {
+  string group_id = 1;
+  string user_id = 2;
+  bool mute_notifications = 3;
+  string nickname_in_group = 4;
+}
+
+// 新增消息定义 - 群二维码
+message GroupQrcode {
+  string id = 1;
+  string group_id = 2;
+  string creator_id = 3;
+  string qrcode_url = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  bool is_permanent = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message CreateGroupQrcodeRequest {
+  string group_id = 1;
+  string creator_id = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  bool is_permanent = 4;
+}
+
+message GroupQrcodeResponse {
+  GroupQrcode qrcode = 1;
+}
+
+message GetGroupQrcodeRequest {
+  string group_id = 1;
 } 
