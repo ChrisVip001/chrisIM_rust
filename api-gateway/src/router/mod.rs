@@ -82,11 +82,11 @@ pub async fn build_routes(
         // 健康检查和指标
         .route("/health", get(health_check))
         .route(&gateway_config.metrics_endpoint, get(crate::metrics::get_metrics_handler))
-        // 认证路由
+        // 认证路由（无需认证）
         .route("/api/user/login", post(controller::login))
         .route("/api/user/loginByPhone", post(controller::login_by_phone))
         .route("/api/user/refresh", post(controller::refresh_token))
-        // 文件上传路由
+        // 文件上传路由（无需认证）
         .route("/api/files/presigned-url", post(get_presigned_upload_url))
         .route("/api/files/validate-upload", post(validate_file_upload))
         .route("/api/files/register-avatar", post(get_register_avatar_url))
@@ -123,7 +123,7 @@ fn add_service_route(
         }
     };
 
-    info!("添加路由: {} (认证: {})", path, require_auth);
+    info!("添加路由: {} (require_auth: {})", path, require_auth);
     
     // 根据认证要求添加路由
     let route_handler = if require_auth {

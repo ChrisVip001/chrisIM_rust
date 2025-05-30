@@ -72,29 +72,3 @@ pub struct RequestValidationConfig {
     /// IP黑名单
     pub blocked_ips: Vec<String>,
 }
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            jwt: JwtConfig {
-                secret: "change_this_to_a_secure_random_string".to_string(),
-                issuer: "api-gateway".to_string(),
-                expiry_seconds: 86400,          // 24小时
-                refresh_expiry_seconds: 604800, // 7天
-                verify_issuer: false,
-                allowed_issuers: vec![],
-                header_name: "Authorization".to_string(),
-                header_prefix: "Bearer ".to_string(),
-            },
-            ip_whitelist: vec!["127.0.0.1".to_string(), "::1".to_string()],
-            path_whitelist: vec![
-                "/api/health".to_string(),
-                "/api/auth/login".to_string(),
-                "/api/auth/register".to_string(),
-                "/metrics".to_string(),
-            ],
-            security_headers: None,
-            request_validation: None,
-        }
-    }
-}
