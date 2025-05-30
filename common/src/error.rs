@@ -156,7 +156,7 @@ impl IntoResponse for Error {
             ),
             Error::Internal(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("内部服务错误: {}", msg),
+                format!("{}", msg),
             ),
             Error::Sms(msg) => (
                 StatusCode::SERVICE_UNAVAILABLE,

@@ -11,6 +11,10 @@ pub struct AuthConfig {
     /// 路径白名单（不需要认证的路径）
     #[serde(default)]
     pub path_whitelist: Vec<String>,
+    /// 安全头配置
+    pub security_headers: Option<SecurityHeadersConfig>,
+    /// 请求验证配置
+    pub request_validation: Option<RequestValidationConfig>,
 }
 
 /// JWT配置
@@ -35,26 +39,36 @@ pub struct JwtConfig {
     pub header_prefix: String,
 }
 
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            jwt: JwtConfig {
-                secret: "change_this_to_a_secure_random_string".to_string(),
-                issuer: "api-gateway".to_string(),
-                expiry_seconds: 86400,          // 24小时
-                refresh_expiry_seconds: 604800, // 7天
-                verify_issuer: false,
-                allowed_issuers: vec![],
-                header_name: "Authorization".to_string(),
-                header_prefix: "Bearer ".to_string(),
-            },
-            ip_whitelist: vec!["127.0.0.1".to_string(), "::1".to_string()],
-            path_whitelist: vec![
-                "/api/health".to_string(),
-                "/api/auth/login".to_string(),
-                "/api/auth/register".to_string(),
-                "/metrics".to_string(),
-            ],
-        }
-    }
+/// 安全头配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityHeadersConfig {
+    /// 是否启用安全头
+    pub enabled: bool,
+    /// 内容安全策略
+    pub content_security_policy: String,
+    /// X-Frame-Options
+    pub x_frame_options: String,
+    /// X-Content-Type-Options
+    pub x_content_type_options: String,
+    /// X-XSS-Protection
+    pub x_xss_protection: String,
+    /// Strict-Transport-Security
+    pub strict_transport_security: String,
+    /// Referrer-Policy
+    pub referrer_policy: String,
+}
+
+/// 请求验证配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestValidationConfig {
+    /// 最大请求大小（MB）
+    pub max_request_size_mb: u64,
+    /// 最大请求头数量
+    pub max_header_count: u32,
+    /// 单个请求头最大大小（KB）
+    pub max_header_size_kb: u64,
+    /// 阻止的User-Agent列表
+    pub blocked_user_agents: Vec<String>,
+    /// IP黑名单
+    pub blocked_ips: Vec<String>,
 }

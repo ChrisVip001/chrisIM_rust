@@ -420,7 +420,7 @@ impl ServiceRegister for Consul {
         if result.is_empty() {
             debug!("No healthy services found with name: {}", service_name);
         } else {
-            info!(
+            debug!(
                 "Found {} healthy instances of service: {}",
                 result.len(),
                 service_name

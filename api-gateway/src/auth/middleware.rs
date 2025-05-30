@@ -55,6 +55,10 @@ pub async fn auth_middleware(req: Request, next: Next) -> Response {
     let token = match jwt::extract_token(&req, &jwt_config.header_name, &jwt_config.header_prefix) {
         Some(token) => token,
         None => {
+            warn!(
+                "JWT认证失败: 路径={}, IP={}, 原因=缺少认证令牌",
+                path, client_ip
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({
@@ -67,7 +71,7 @@ pub async fn auth_middleware(req: Request, next: Next) -> Response {
     };
 
     // 验证JWT token
-    match jwt::verify_token(token, jwt_config).await {
+    match jwt::verify_token(&token, jwt_config) {
         Ok(user_info) => {
             // 将用户信息添加到请求扩展中
             let mut request = req;
@@ -75,7 +79,7 @@ pub async fn auth_middleware(req: Request, next: Next) -> Response {
             next.run(request).await
         }
         Err(e) => {
-            warn!("JWT验证失败: {}", e);
+            warn!("JWT认证失败: 路径={}, IP={}, 原因={}", path, client_ip, e);
             (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({

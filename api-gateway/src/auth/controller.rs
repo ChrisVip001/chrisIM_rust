@@ -205,7 +205,7 @@ pub async fn login(
 
     // 检查密码是否有效
     if !response.valid || response.user.is_none() {
-        return Err(Error::Authentication("用户名或密码不正确".to_string()));
+        return Err(Error::Internal("用户名或密码不正确".to_string()));
     }
 
     // 获取用户信息
@@ -249,7 +249,7 @@ pub async fn refresh_token(
     let jwt_config = &config.gateway.auth.jwt;
 
     // 验证刷新令牌
-    let user_info = jwt::verify_token(refresh_req.refresh_token, jwt_config).await?;
+    let user_info = jwt::verify_token(&refresh_req.refresh_token, jwt_config)?;
 
     // 构建额外信息
     let extra = user_info.extra.clone();

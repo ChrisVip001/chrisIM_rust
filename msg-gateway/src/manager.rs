@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::client::Client;
+pub(crate) use crate::client::Client;
 use cache::Cache;
 use common::error::Error;
 use common::message::chat_service_client::ChatServiceClient;

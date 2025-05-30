@@ -122,6 +122,24 @@ gateway:
       # 注册头像上传相关的API路径
       - "/api/files/register-avatar"
       - "/api/files/validate-register-avatar"
+    # 安全头配置
+    security_headers:
+      enabled: true
+      # 内容安全策略
+      content_security_policy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      # 其他安全头
+      x_frame_options: "DENY"
+      x_content_type_options: "nosniff"
+      x_xss_protection: "1; mode=block"
+      strict_transport_security: "max-age=31536000; includeSubDomains"
+      referrer_policy: "strict-origin-when-cross-origin"
+    # 请求验证
+    request_validation:
+      max_request_size_mb: 10      # 最大请求大小
+      max_header_count: 100        # 最大请求头数量
+      max_header_size_kb: 8        # 单个请求头最大大小
+      blocked_user_agents: []      # 阻止的User-Agent列表
+      blocked_ips: []              # IP黑名单
 
   # Metrics暴露端点 指标配置
   metrics_endpoint: "/metrics"
@@ -198,6 +216,24 @@ server:
   host: 127.0.0.1
   port: 8000
   ws_lb_strategy: RoundRobin # Random, RoundRobin
+  # TLS/HTTPS配置
+  tls:
+    enabled: false  # 是否启用HTTPS
+    cert_file: "./config/ssl/server.crt"  # 证书文件路径
+    key_file: "./config/ssl/server.key"   # 私钥文件路径
+    # 可选：客户端证书验证
+    client_ca_file: "./config/ssl/ca.crt"  # CA证书文件
+    require_client_cert: false  # 是否要求客户端证书
+  # 超时配置
+  timeouts:
+    read_timeout_secs: 30      # 读取超时
+    write_timeout_secs: 30     # 写入超时
+    idle_timeout_secs: 60      # 空闲连接超时
+  # 连接配置
+  connection:
+    max_connections: 10000     # 最大连接数
+    keep_alive_timeout_secs: 75  # Keep-Alive超时
+    tcp_nodelay: true          # 禁用Nagle算法
 
 
 # consul服务注册与发现配置
@@ -227,21 +263,6 @@ websocket:
 
 # RPC服务配置
 rpc:
-  api:
-    protocol: http
-    host: 127.0.0.1
-    port: 50000
-    name: api
-    tags:
-      - api
-      - grpc
-    health_check:
-      health_type: "http"
-      name: "api"
-      url: "/health"
-      interval: 15
-      timeout: 60
-      deregister_after: 60
   ws:
     protocol: http
     host: 127.0.0.1
