@@ -6,7 +6,6 @@ use axum::response::IntoResponse;
 use axum::Json;
 use common::config::ConfigLoader;
 use common::error::Error;
-use common::grpc_client::UserServiceGrpcClient;
 use common::proto::user::user_service_client::UserServiceClient;
 use common::proto::user::VerifyPasswordRequest;
 use common::service_discovery::LbWithServiceDiscovery;

@@ -9,7 +9,6 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::{error, info};
-use common::grpc_client::base::register_service;
 
 mod model;
 mod repository;
@@ -36,6 +35,9 @@ async fn main() -> Result<()> {
 
     // 确保全局配置可以正常访问
     let config = ConfigLoader::get_global().expect("获取全局配置失败");
+
+    // 初始化统一服务模块
+    common::service::init((*config).clone());
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
@@ -74,8 +76,8 @@ async fn main() -> Result<()> {
     // 初始化群组服务
     let group_service = GroupServiceImpl::new(db_pool.clone());
 
-    // 创建并注册到服务注册中心
-    let service_id = register_service(&config, Component::GroupServer).await?;
+    // 注册服务到服务注册中心
+    let service_id = common::service::register(Component::GroupServer).await?;
 
     info!(
         "群组服务已注册到服务注册中心, 服务ID: {}",

@@ -7,7 +7,6 @@ pub mod utils;
 pub mod service;
 pub mod logging;
 pub mod grpc;
-pub mod grpc_client;
 pub mod types;
 pub mod service_discovery;
 pub mod service_register_center;

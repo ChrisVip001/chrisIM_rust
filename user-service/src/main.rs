@@ -39,6 +39,9 @@ async fn main() -> Result<()> {
     // 确保全局配置可以正常访问
     let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
+    // 初始化统一服务模块
+    common::service::init((*config).clone());
+
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
         // 启动带有分布式链路追踪的日志系统
@@ -79,9 +82,8 @@ async fn main() -> Result<()> {
     // 初始化用户服务
     let user_service = UserServiceImpl::new(db_pool.clone());
 
-    // 创建并注册到服务注册中心
-    let service_id =
-        common::grpc_client::base::register_service(&config, Component::UserServer).await?;
+    // 注册服务到服务注册中心
+    let service_id = common::service::register(Component::UserServer).await?;
 
     info!("用户服务准备就绪, 服务ID: {}", service_id);
 

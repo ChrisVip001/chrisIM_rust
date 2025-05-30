@@ -2,7 +2,6 @@ use anyhow::Result;
 use std::env;
 use common::config::{AppConfig, Component, ConfigLoader};
 use common::grpc::LoggingInterceptor;
-use common::grpc_client::base::register_service;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
@@ -39,6 +38,9 @@ async fn main() -> Result<()> {
 
     // 确保全局配置可以正常访问
     let config = ConfigLoader::get_global().expect("获取全局配置失败");
+
+    // 初始化统一服务模块
+    common::service::init((*config).clone());
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
@@ -80,8 +82,8 @@ async fn main() -> Result<()> {
     // 初始化好友服务
     let friend_service = FriendServiceImpl::new(db_pool.clone());
 
-    // 创建并注册到服务注册中心
-    let service_id = register_service(&config, Component::FriendServer).await?;
+    // 注册服务到服务注册中心
+    let service_id = common::service::register(Component::FriendServer).await?;
 
     info!("好友服务已注册到服务注册中心, 服务ID: {}", service_id);
 

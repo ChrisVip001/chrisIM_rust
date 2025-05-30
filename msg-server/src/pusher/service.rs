@@ -6,7 +6,6 @@ use super::Pusher;
 use common::config::AppConfig;
 use common::message::msg_service_client::MsgServiceClient;
 use common::message::{GroupMemSeq, Msg, SendGroupMsgRequest, SendMsgRequest};
-use common::grpc_client::base::get_chan;
 use common::service_discovery::LbWithServiceDiscovery;
 
 /// 消息推送服务的具体实现
@@ -62,7 +61,7 @@ impl PusherService {
 
         // 使用项目的服务发现机制创建带负载均衡的通道
         // 这会自动从Consul查询可用的WebSocket网关实例
-        let channel = get_chan(config, sub_svr_name).await?;
+        let channel = common::service::dynamic_channel(&sub_svr_name).await?;
         
         // 创建WebSocket RPC客户端
         // 客户端会自动处理连接池、重试、超时等功能

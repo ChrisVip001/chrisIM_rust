@@ -94,12 +94,17 @@ impl ChatRpcService {
             warn!("Kafka服务可能未启动，请检查Kafka服务状态");
         }
 
-        // 向服务注册中心（Consul）注册当前服务
-        // 这样其他服务就可以通过服务发现找到这个消息服务
-        common::grpc_client::base::register_service(config, Component::MessageServer)
-            .await
-            .expect("服务注册到Consul失败");
-        info!("聊天RPC服务已注册到服务注册中心");
+        // 在grpc服务启动前注册服务
+        let service_id = match common::service::register(Component::MessageServer).await {
+            Ok(id) => {
+                info!("聊天RPC服务已注册到服务注册中心, 服务ID: {}", id);
+                id
+            }
+            Err(e) => {
+                error!("服务注册失败: {}", e);
+                panic!("无法注册服务到注册中心");
+            }
+        };
 
         // 创建gRPC健康检查服务
         // 用于监控服务健康状态，支持Kubernetes等容器编排工具的健康检查
