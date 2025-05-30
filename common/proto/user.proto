@@ -80,6 +80,7 @@ message UpdateUserRequest {
   optional string head_image_thumb = 8;
   optional int32 sex = 9;
   optional string username = 10;
+  optional string custom_id = 11;
 }
 
 // 验证密码请求
@@ -144,11 +145,11 @@ message RegisterRequest {
 
 // 忘记密码请求
 message ForgetPasswordRequest{
-  string username = 1;
+//  string username = 1;
+  string phone = 1;
   string password = 2;
   string tenant_id = 3;
-  string phone = 4;
-  string verify_code = 5;
+  string verify_code = 4;
 }
 
 // 用户设置请求
