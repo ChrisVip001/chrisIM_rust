@@ -1,7 +1,7 @@
 use crate::auth::jwt;
 use crate::proxy::services::common::{error_response, success_response};
 use axum::extract::Extension;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, HeaderMap};
 use axum::response::IntoResponse;
 use axum::Json;
 use common::config::ConfigLoader;
@@ -13,7 +13,45 @@ use common::service_discovery::LbWithServiceDiscovery;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+use common::auth::jwt::UserInfo;
+
+/// 平台类型枚举
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PlatformType {
+    Web,
+    Mobile,
+    IOS,
+    Android,
+    Desktop,
+    Unknown,
+}
+
+impl From<&str> for PlatformType {
+    fn from(system_type: &str) -> Self {
+        match system_type.to_lowercase().as_str() {
+            "web" | "browser" => PlatformType::Web,
+            "mobile" | "app" => PlatformType::Mobile,
+            "ios" => PlatformType::IOS,
+            "android" => PlatformType::Android,
+            "desktop" | "pc" | "windows" | "macos" | "linux" => PlatformType::Desktop,
+            _ => PlatformType::Unknown,
+        }
+    }
+}
+
+impl PlatformType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlatformType::Web => "web",
+            PlatformType::Mobile => "mobile",
+            PlatformType::IOS => "ios",
+            PlatformType::Android => "android",
+            PlatformType::Desktop => "desktop",
+            PlatformType::Unknown => "unknown",
+        }
+    }
+}
 
 /// 登录请求
 #[derive(Debug, Deserialize)]
@@ -79,6 +117,20 @@ pub struct UserInfoResponse {
     pub custom_id: Option<String>,
 }
 
+/// 从请求头中提取平台信息
+fn extract_platform_info(headers: &HeaderMap) -> PlatformType {
+    let system_type = headers
+        .get("system-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown");
+
+    let platform = PlatformType::from(system_type);
+    
+    debug!("检测到登录平台: {:?}, 原始system-type: {}", platform, system_type);
+
+    platform
+}
+
 /// 用户服务共享实例
 #[derive(Clone)]
 pub struct SharedUserService(UserServiceClient<LbWithServiceDiscovery>);
@@ -121,9 +173,14 @@ impl SharedUserService {
 /// 处理短信验证码登录请求
 pub async fn login_by_phone(
     Extension(user_service): Extension<SharedUserService>,
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    headers: HeaderMap,
     Json(login_req): Json<LoginByPhoneRequest>,
 ) -> Result<impl IntoResponse, Error> {
     debug!("短信验证码登录请求：手机号 {}", login_req.phone);
+
+    // 提取平台信息
+    let platform = extract_platform_info(&headers);
 
     // 创建验证请求
     let verify_request = common::proto::user::VerifyPhoneCodeRequest {
@@ -152,7 +209,7 @@ pub async fn login_by_phone(
     // 获取用户信息
     let user = response.user.unwrap();
 
-    info!("用户 {} 手机号登录成功", user.username);
+    info!("用户 {} 手机号登录成功，平台: {}", user.username, platform.as_str());
 
     // 提取用户额外信息
     let extra = extract_user_extra(&user);
@@ -171,6 +228,8 @@ pub async fn login_by_phone(
         1,         // 示例租户ID
         "default", // 示例租户名称，实际应从用户信息中获取
         extra,
+        cache_instance,
+        platform,
     )
     .await?;
 
@@ -181,9 +240,14 @@ pub async fn login_by_phone(
 /// 处理登录请求
 pub async fn login(
     Extension(user_service): Extension<SharedUserService>,
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    headers: HeaderMap,
     Json(login_req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, Error> {
     debug!("登录请求：用户 {}", login_req.username);
+
+    // 提取平台信息
+    let platform = extract_platform_info(&headers);
 
     // 创建验证密码请求
     let verify_request = VerifyPasswordRequest {
@@ -211,7 +275,7 @@ pub async fn login(
     // 获取用户信息
     let user = response.user.unwrap();
 
-    info!("用户 {} 登录成功", login_req.username);
+    info!("用户 {} 登录成功，平台: {}", login_req.username, platform.as_str());
 
     // 提取用户额外信息
     let extra = extract_user_extra(&user);
@@ -230,6 +294,8 @@ pub async fn login(
         1,         // 示例租户ID
         "default", // 示例租户名称，实际应从用户信息中获取
         extra,
+        cache_instance,
+        platform,
     )
     .await?;
 
@@ -239,9 +305,14 @@ pub async fn login(
 
 /// 处理令牌刷新请求
 pub async fn refresh_token(
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    headers: HeaderMap,
     Json(refresh_req): Json<RefreshTokenRequest>,
 ) -> Result<impl IntoResponse, Error> {
     debug!("刷新令牌请求");
+
+    // 提取平台信息
+    let platform = extract_platform_info(&headers);
 
     // 读取JWT配置
     let config = ConfigLoader::get_global().expect("Failed to get global config");
@@ -264,10 +335,12 @@ pub async fn refresh_token(
         user_info.tenant_id,
         &user_info.tenant_name,
         extra,
+        cache_instance,
+        platform,
     )
     .await?;
 
-    info!("用户 {} 刷新令牌成功", username);
+    info!("用户 {} 刷新令牌成功，平台: {}", username, platform);
 
     // 返回响应
     Ok(success_response(refresh_response, StatusCode::OK))
@@ -307,11 +380,17 @@ async fn build_login_response(
     tenant_id: i64,
     tenant_name: &str,
     extra: HashMap<String, String>,
+    cache_instance: Arc<dyn cache::Cache>,
+    platform: PlatformType
 ) -> Result<LoginResponse, Error> {
     // 读取JWT配置
     let config = ConfigLoader::get_global().expect("Failed to get global config");
 
     let jwt_config = &config.gateway.auth.jwt;
+
+    // 在额外信息中添加平台信息
+    let mut extended_extra = extra.clone();
+    extended_extra.insert("platform".to_string(), platform.as_str().to_string());
 
     // 生成访问令牌
     let access_token = jwt::generate_token(
@@ -319,13 +398,50 @@ async fn build_login_response(
         username,
         tenant_id,
         tenant_name,
-        extra.clone(),
+        extended_extra.clone(),
         jwt_config,
     )?;
 
     // 生成刷新令牌
     let refresh_token =
-        jwt::generate_refresh_token(user_id, username, tenant_id, tenant_name, extra.clone(),jwt_config)?;
+        jwt::generate_refresh_token(user_id, username, tenant_id, tenant_name, extended_extra.clone(),jwt_config)?;
+
+    // 将用户标记为在线状态
+    if let Err(e) = cache_instance.user_login(&user_id.to_string()).await {
+        error!("将用户{}标记为在线状态失败: {}", user_id, e);
+        // 不影响登录流程，继续执行
+    } else {
+        debug!("用户{}已标记为在线状态", user_id);
+    }
+
+    // 为不同平台创建不同的token键，支持多平台同时登录
+    let platform_str = platform.as_str();
+    
+    // 将访问令牌存储到Redis中，按平台分别存储
+    if let Err(e) = cache_instance.save_access_token_for_platform(
+        &user_id.to_string(), 
+        &access_token, 
+        platform_str,
+        jwt_config.expiry_seconds
+    ).await {
+        error!("存储用户{}在{}平台的访问令牌失败: {}", user_id, platform_str, e);
+        // 不影响登录流程，继续执行
+    } else {
+        debug!("用户{}在{}平台的访问令牌已存储到Redis", user_id, platform_str);
+    }
+
+    // 将刷新令牌存储到Redis中，按平台分别存储
+    if let Err(e) = cache_instance.save_refresh_token_for_platform(
+        &user_id.to_string(), 
+        &refresh_token,
+        platform_str,
+        jwt_config.refresh_expiry_seconds
+    ).await {
+        error!("存储用户{}在{}平台的刷新令牌失败: {}", user_id, platform_str, e);
+        // 不影响登录流程，继续执行
+    } else {
+        debug!("用户{}在{}平台的刷新令牌已存储到Redis", user_id, platform_str);
+    }
 
     // 构建用户信息响应
     let user_info = UserInfoResponse {
@@ -349,4 +465,116 @@ async fn build_login_response(
     };
 
     Ok(login_response)
+}
+
+/// 处理用户登出请求（支持指定平台登出）
+pub async fn logout(
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    headers: HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, Error> {
+    debug!("用户登出请求：用户ID {}", user_id);
+    // 获取token
+    // 提取平台信息
+    let platform = extract_platform_info(&headers);
+    let platform_str = platform.as_str();
+
+    // 删除指定平台的访问令牌
+    if let Err(e) = cache_instance.delete_access_token_for_platform(&user_id, platform_str).await {
+        error!("删除用户{}在{}平台的访问令牌失败: {}", user_id, platform_str, e);
+    } else {
+        debug!("用户{}在{}平台的访问令牌已删除", user_id, platform_str);
+    }
+
+    // 删除指定平台的刷新令牌
+    if let Err(e) = cache_instance.delete_refresh_token_for_platform(&user_id, platform_str).await {
+        error!("删除用户{}在{}平台的刷新令牌失败: {}", user_id, platform_str, e);
+    } else {
+        debug!("用户{}在{}平台的刷新令牌已删除", user_id, platform_str);
+    }
+
+    // 检查用户是否还有其他平台的登录token，如果没有则清理在线状态
+    let has_other_tokens = cache_instance.check_user_has_any_tokens(&user_id).await.unwrap_or(true);
+    if !has_other_tokens {
+        if let Err(e) = cache_instance.user_logout(&user_id).await {
+            error!("清理用户{}在线状态失败: {}", user_id, e);
+        } else {
+            debug!("用户{}已从在线状态中移除", user_id);
+        }
+    }
+
+    info!("用户{}从{}平台登出成功", user_id, platform_str);
+
+    // 返回成功响应
+    Ok(success_response(
+        serde_json::json!({
+            "message": "登出成功",
+            "platform": platform_str
+        }),
+        StatusCode::OK
+    ))
+}
+
+/// 处理用户全平台登出请求
+pub async fn logout_all_platforms(
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, Error> {
+    debug!("用户全平台登出请求：用户ID {}", user_id);
+
+    // 清理用户的在线状态
+    if let Err(e) = cache_instance.user_logout(&user_id).await {
+        error!("清理用户{}在线状态失败: {}", user_id, e);
+    } else {
+        debug!("用户{}已从在线状态中移除", user_id);
+    }
+
+    // 删除所有平台的令牌
+    if let Err(e) = cache_instance.delete_all_user_tokens(&user_id).await {
+        error!("删除用户{}所有平台令牌失败: {}", user_id, e);
+    } else {
+        debug!("用户{}所有平台的令牌已删除", user_id);
+    }
+
+    info!("用户{}全平台登出成功", user_id);
+
+    // 返回成功响应
+    Ok(success_response(
+        serde_json::json!({
+            "message": "全平台登出成功"
+        }),
+        StatusCode::OK
+    ))
+}
+
+/// 获取用户在线平台信息
+pub async fn get_user_platforms(
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, Error> {
+    debug!("获取用户{}的在线平台信息", user_id);
+
+    // 获取用户在所有平台的登录信息
+    let platforms = match cache_instance.get_user_login_platforms(&user_id).await {
+        Ok(platforms) => platforms,
+        Err(e) => {
+            error!("获取用户{}的平台信息失败: {}", user_id, e);
+            return Ok(error_response(
+                &format!("获取平台信息失败: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
+        }
+    };
+
+    debug!("用户{}当前在线平台: {:?}", user_id, platforms);
+
+    // 返回成功响应
+    Ok(success_response(
+        serde_json::json!({
+            "user_id": user_id,
+            "platforms": platforms,
+            "platform_count": platforms.len()
+        }),
+        StatusCode::OK
+    ))
 }

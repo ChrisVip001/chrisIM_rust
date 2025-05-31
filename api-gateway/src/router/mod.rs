@@ -62,10 +62,25 @@ pub struct ValidateRegisterAvatarRequest {
     pub md5: String,
 }
 
-/// 构建路由
+/// 构建应用路由
+///
+/// 这个函数负责构建整个应用的路由系统，包括：
+/// - 认证路由（登录、注册、刷新令牌等）
+/// - 受保护的API路由（需要JWT验证）
+/// - 健康检查和指标端点
+/// - 文件上传路由
+///
+/// # 参数
+/// * `service_proxy` - 用于代理服务请求的代理器
+/// * `gateway_config` - 网关配置
+/// * `cache_instance` - 缓存实例，用于Redis操作
+///
+/// # 返回值
+/// * `Result<Router, anyhow::Error>` - 成功时返回构建好的路由器，失败时返回错误
 pub async fn build_routes(
     service_proxy: ServiceProxy,
     gateway_config: &GatewayConfig,
+    cache_instance: std::sync::Arc<dyn cache::Cache>,
 ) -> anyhow::Result<Router> {
     // 创建用户服务客户端
     let config = ConfigLoader::get_global().expect("获取配置失败");
@@ -86,6 +101,9 @@ pub async fn build_routes(
         .route("/api/user/login", post(controller::login))
         .route("/api/user/loginByPhone", post(controller::login_by_phone))
         .route("/api/user/refresh", post(controller::refresh_token))
+        .route("/api/user/logout", post(controller::logout))
+        .route("/api/user/logout-all/{user_id}", post(controller::logout_all_platforms))
+        .route("/api/user/platforms/{user_id}", get(controller::get_user_platforms))
         // 文件上传路由（无需认证）
         .route("/api/files/presigned-url", post(get_presigned_upload_url))
         .route("/api/files/validate-upload", post(validate_file_upload))
@@ -95,11 +113,13 @@ pub async fn build_routes(
     // 添加动态路由
     let service_proxy = Arc::new(service_proxy);
     for route in &gateway_config.routes.routes {
-        router = add_service_route(router, route, service_proxy.clone());
+        router = add_service_route(router, route, service_proxy.clone(), cache_instance.clone());
     }
 
-    // 添加用户服务扩展
-    Ok(router.layer(axum::Extension(user_service)))
+    // 添加用户服务扩展和缓存扩展
+    Ok(router
+        .layer(axum::Extension(user_service))
+        .layer(axum::Extension(cache_instance)))
 }
 
 /// 添加服务路由
@@ -107,6 +127,7 @@ fn add_service_route(
     router: Router,
     route: &RouteRule,
     service_proxy: Arc<ServiceProxy>,
+    cache_instance: Arc<dyn cache::Cache>,
 ) -> Router {
     let path = route.path_prefix.clone();
     let service_type = route.service_type.clone();
@@ -127,7 +148,9 @@ fn add_service_route(
     
     // 根据认证要求添加路由
     let route_handler = if require_auth {
-        any(create_handler()).layer(middleware::from_fn(auth_middleware))
+        any(create_handler())
+            .layer(axum::Extension(cache_instance.clone()))
+            .layer(middleware::from_fn(auth_middleware))
     } else {
         any(create_handler())
     };
@@ -135,7 +158,9 @@ fn add_service_route(
     // 添加精确路径和通配符路径
     let wildcard_path = format!("{}/{{*path}}", path);
     let wildcard_handler = if require_auth {
-        any(create_handler()).layer(middleware::from_fn(auth_middleware))
+        any(create_handler())
+            .layer(axum::Extension(cache_instance.clone()))
+            .layer(middleware::from_fn(auth_middleware))
     } else {
         any(create_handler())
     };
