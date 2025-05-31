@@ -112,6 +112,7 @@ impl UserServiceGrpcClient {
             msg_read_flag: Option::from(0 as i32),
             sound_enabled: Option::from(0 as i32),
             vibration_enabled: Option::from(0 as i32),
+            show_phone: Option::from(0 as i32),
         });
         let response = self.service_client.get_user_config(request).await?;
         Ok(response.into_inner())

@@ -98,6 +98,7 @@ impl UserServiceHandler {
                 let head_image = get_optional_string(&body, "headImage", Some("head_image"));
                 let head_image_thumb = get_optional_string(&body, "headImageThumb", Some("head_image_thumb"));
                 let custom_id = get_optional_string(&body, "customId", Some("custom_id"));
+                let sign = get_optional_string(&body, "sign", Some("sign"));
                 let sex = get_optional_string(&body, "sex", None)
                     .and_then(|s| s.parse::<i32>().ok());
                 let username = get_optional_string(&body, "username", None);
@@ -114,6 +115,7 @@ impl UserServiceHandler {
                     sex,
                     username,
                     custom_id,
+                    sign,
                 };
 
                 let response = self.client.update_user(request).await?;
@@ -290,6 +292,8 @@ impl UserServiceHandler {
                     .and_then(|s| s.parse::<i32>().ok());
                 let vibration_enabled = get_optional_string(&body, "vibrationEnabled", Some("vibration_enabled"))
                     .and_then(|s| s.parse::<i32>().ok());
+                let show_phone = get_optional_string(&body, "showPhone", Some("show_phone"))
+                    .and_then(|s| s.parse::<i32>().ok());
 
                 let request = proto::user::UserConfigRequest {
                     user_id: current_user_id.to_string(),
@@ -300,6 +304,7 @@ impl UserServiceHandler {
                     msg_read_flag,
                     sound_enabled,
                     vibration_enabled,
+                    show_phone,
                 };
                 let response = self.client.save_user_config(request).await?;
                 let user_config = response.user_config.unwrap_or_default();
@@ -440,6 +445,7 @@ impl UserServiceHandler {
             "tenant_id" : user.tenant_id,
             "last_login_time" : format_timestamp(user.last_login_time.clone()),
             "custom_id" : user.custom_id,
+            "sign" : user.sign,
         })
     }
 
@@ -453,6 +459,7 @@ impl UserServiceHandler {
             "msg_read_flag": user_config.msg_read_flag,
             "sound_enabled": user_config.sound_enabled,
             "vibration_enabled": user_config.vibration_enabled,
+            "show_phone": user_config.show_phone,
             "create_time": format_timestamp(user_config.create_time.clone()),
             "update_time": format_timestamp(user_config.update_time.clone()),
         })

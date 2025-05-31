@@ -68,7 +68,7 @@ impl UserRepository {
             INSERT INTO users (id, username, password, phone, tenant_id, custom_id)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id,sign
             "#,
             id.to_string(),
             data.username.clone(),
@@ -102,6 +102,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
         debug!("用户注册成功: {}", user.id);
         Ok(user)
@@ -130,7 +131,7 @@ impl UserRepository {
             SET password = $1
             WHERE id = $2 
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id ,sign
             "#,
             password_hash,
             user.id
@@ -160,6 +161,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
         debug!("修改密码成功: {}", user.username);
         Ok(user)
@@ -194,7 +196,7 @@ impl UserRepository {
             INSERT INTO users (id, username, email, password, nickname, avatar_url, custom_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id ,sign
             "#,
             id.to_string(),
             data.username,
@@ -229,6 +231,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         debug!("用户创建成功: {}", user.id);
@@ -259,7 +262,7 @@ impl UserRepository {
 
         let user = User {
             id: row.id,
-            username: row.username,
+            username: row.username.unwrap_or_default(),
             email: row.email,
             password: row.password,
             nickname: row.nickname,
@@ -304,7 +307,7 @@ impl UserRepository {
 
         let user = User {
             id: row.id,
-            username: row.username,
+            username: row.username.unwrap_or_default(),
             email: row.email,
             password: row.password,
             nickname: row.nickname,
