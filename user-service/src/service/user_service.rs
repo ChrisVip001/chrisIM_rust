@@ -565,11 +565,7 @@ impl UserService for UserServiceImpl {
 
         // 设置默认分页参数
         let page = if req.page <= 0 { 1 } else { req.page };
-        let page_size = if req.page_size <= 0 || req.page_size > 100 {
-            10
-        } else {
-            req.page_size
-        };
+        let page_size = if req.page_size <= 0 { 10 } else { req.page_size };
 
         // 搜索用户
         let (users, total) = match self

@@ -1,3 +1,4 @@
+use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
 use common::proto::friend::{
     AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse,
@@ -629,15 +630,37 @@ impl FriendService for FriendServiceImpl {
         };
         
         // 转换为PotentialFriend对象
-        let potential_friends: Vec<_> = users
-            .into_iter()
-            .map(|(id, username, nickname, avatar_url, phone, friendship_status)| {
-                let friend = PotentialFriend::from_tuple(
-                    id, username, nickname, avatar_url, phone, friendship_status
-                );
-                friend.to_proto()
-            })
-            .collect();
+        let mut potential_friends: Vec<_> = Vec::with_capacity(users.len());
+        
+        for (id, username, nickname, avatar_url, phone, friendship_status, sign) in users {
+            // 使用默认隐私设置（这里固定为2表示不显示完整手机号）
+            // 在实际生产环境中，可以从配置系统获取
+            let show_phone = 2; // 2表示不显示手机号，1表示显示
+            
+            // 根据隐私配置处理手机号
+            let new_phone = if let Some(phone_str) = phone {
+                if show_phone == 2 { // 2表示不显示手机号
+                    // 将手机号处理为脱敏状态
+                    if !phone_str.is_empty() && phone_str.len() >= 7 {
+                        let prefix = &phone_str[0..3];
+                        let suffix = &phone_str[phone_str.len() - 4..];
+                        let stars = "*".repeat(phone_str.len() - 7);
+                        Some(format!("{}{}{}", prefix, stars, suffix))
+                    } else {
+                        Some(phone_str)
+                    }
+                } else {
+                    Some(phone_str) // 保持原样显示
+                }
+            } else {
+                None
+            };
+            
+            let friend = PotentialFriend::from_tuple(
+                id, username, nickname, avatar_url, new_phone, friendship_status, sign
+            );
+            potential_friends.push(friend.to_proto());
+        }
         
         Ok(Response::new(SearchPotentialFriendsResponse {
             users: potential_friends,

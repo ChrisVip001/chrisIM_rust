@@ -302,6 +302,7 @@ message PotentialFriend {
   optional string avatar_url = 4;     // 头像地址
   optional string phone = 5;          // 手机号（可能会根据隐私设置处理）
   FriendshipStatus friendship_status = 6; // 好友关系状态，如果有的话
+  optional string sign = 7; // 个性签名
 }
 
 // 好友类型

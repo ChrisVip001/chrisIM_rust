@@ -54,12 +54,12 @@ impl UserConfigRepository {
                 Ok(UserConfig {
                     id: 0, // 使用默认值 0 作为占位符
                     user_id: id.to_string(),
-                    allow_phone_search: Option::from(2),  // 设置默认值
-                    allow_id_search: Option::from(2),     // 设置默认值
+                    allow_phone_search: Option::from(1),  // 设置默认值
+                    allow_id_search: Option::from(1),     // 设置默认值
                     auto_load_video: Option::from(2),    // 设置默认值
                     auto_load_pic: Option::from(2),       // 设置默认值
-                    msg_read_flag: Option::from(2),       // 设置默认值
-                    sound_enabled: Option::from(2),       // 设置默认值
+                    msg_read_flag: Option::from(1),       // 设置默认值
+                    sound_enabled: Option::from(1),       // 设置默认值
                     vibration_enabled: Option::from(2),   // 设置默认值
                     show_phone: Option::from(2),          // 设置默认值
                     create_time: Some(Utc::now()),

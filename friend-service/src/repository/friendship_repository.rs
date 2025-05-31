@@ -580,7 +580,7 @@ impl FriendshipRepository {
         &self,
         user_id: &str,
         search_term: &str,
-    ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, i32)>> {
+    ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, i32,Option<String>)>> {
         // 构建SQL查询，自动匹配custom_id或手机号
         let query = r#"
             SELECT 
@@ -589,7 +589,8 @@ impl FriendshipRepository {
                 u.nickname, 
                 u.avatar_url, 
                 u.phone,
-                COALESCE(fr.status, -1) as friendship_status
+                COALESCE(fr.status, -1) as friendship_status,
+                u.sign,
             FROM 
                 users u
             LEFT JOIN 
@@ -618,6 +619,7 @@ impl FriendshipRepository {
                     row.get::<Option<String>, _>("avatar_url"),
                     row.get::<Option<String>, _>("phone"),
                     row.get::<i32, _>("friendship_status"),
+                    row.get::<Option<String>, _>("sign"),
                 )
             })
             .collect();

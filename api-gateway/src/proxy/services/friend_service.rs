@@ -401,6 +401,7 @@ impl FriendServiceHandler {
             "nickname": friend.nickname,
             "avatarUrl": friend.avatar_url,
             "phone": friend.phone,
+            "sign": friend.sign,
             "friendshipStatus": friend.friendship_status,
             "friendshipStatusText": status_text
         })
