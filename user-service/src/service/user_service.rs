@@ -256,12 +256,10 @@ impl UserService for UserServiceImpl {
         };
         info!("注册用户成功 {}", user.username);
 
-        // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
-        
+       
         // 返回响应
         Ok(Response::new(UserResponse {
-            user: Some(ProtoUser::from(processed_user)),
+            user: Some(ProtoUser::from(user)),
         }))
     }
 
@@ -321,12 +319,10 @@ impl UserService for UserServiceImpl {
         };
         info!("注册用户成功 {}", user.phone);
 
-        // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
         
         // 返回响应
         Ok(Response::new(UserResponse {
-            user: Some(ProtoUser::from(processed_user)),
+            user: Some(ProtoUser::from(user)),
         }))
     }
 
@@ -362,12 +358,10 @@ impl UserService for UserServiceImpl {
         };
         info!("修改密码成功 {}", user.phone);
 
-        // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
-        
+      
         // 返回响应
         Ok(Response::new(UserResponse {
-            user: Some(ProtoUser::from(processed_user)),
+            user: Some(ProtoUser::from(user)),
         }))
     }
 
@@ -395,12 +389,10 @@ impl UserService for UserServiceImpl {
 
         info!("成功创建用户 {}", user.id);
 
-        // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
-        
+       
         // 返回响应
         Ok(Response::new(UserResponse {
-            user: Some(ProtoUser::from(processed_user)),
+            user: Some(ProtoUser::from(user)),
         }))
     }
 
@@ -479,12 +471,9 @@ impl UserService for UserServiceImpl {
 
         info!("成功更新用户 {}", user.id);
 
-        // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
-
         // 返回响应
         Ok(Response::new(UserResponse {
-            user: Some(ProtoUser::from(processed_user)),
+            user: Some(ProtoUser::from(user)),
         }))
     }
 
@@ -504,14 +493,11 @@ impl UserService for UserServiceImpl {
         {
             Ok(user) => {
                 debug!("密码验证成功，用户ID: {}", user.id);
-
-                // 处理用户信息时根据用户配置决定是否显示手机号
-                let processed_user = self.process_user_phone_display(user).await?;
-
+                
                 // 返回响应
                 Ok(Response::new(VerifyPasswordResponse {
                     valid: true,
-                    user: Some(ProtoUser::from(processed_user)),
+                    user: Some(ProtoUser::from(user)),
                 }))
             }
             Err(err) => {
@@ -562,13 +548,10 @@ impl UserService for UserServiceImpl {
         
         debug!("手机验证码登录成功，用户ID: {}", user.id);
         
-        // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
-        
         // 返回响应
         Ok(Response::new(VerifyPasswordResponse {
             valid: true,
-            user: Some(ProtoUser::from(processed_user)),
+            user: Some(ProtoUser::from(user)),
         }))
     }
 
@@ -925,14 +908,11 @@ impl UserService for UserServiceImpl {
         match self.repository.update_phone(&req.user_id, &req.new_phone).await {
             Ok(updated_user) => {
                 info!("用户手机号更新成功，用户ID: {}", req.user_id);
-                
-                // 处理用户信息时根据用户配置决定是否显示手机号
-                let processed_user = self.process_user_phone_display(updated_user).await?;
-                
+
                 Ok(Response::new(UpdatePhoneResponse {
                     success: true,
                     message: "手机号更新成功".to_string(),
-                    user: Some(ProtoUser::from(processed_user)),
+                    user: Some(ProtoUser::from(user)),
                 }))
             }
             Err(err) => {
