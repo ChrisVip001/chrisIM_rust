@@ -78,7 +78,16 @@ async fn main() -> Result<()> {
     };
 
     // 初始化好友服务
-    let friend_service = FriendServiceImpl::new(db_pool.clone());
+    let friend_service = match FriendServiceImpl::new(db_pool.clone()).await {
+        Ok(service) => {
+            info!("好友服务初始化成功");
+            service
+        }
+        Err(err) => {
+            error!("好友服务初始化失败: {}", err);
+            return Err(err.into());
+        }
+    };
 
     // 创建并注册到服务注册中心
     let service_id = register_service(&config, Component::FriendServer).await?;

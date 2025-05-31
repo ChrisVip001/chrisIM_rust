@@ -46,6 +46,25 @@ impl UserServiceHandler {
                 Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
             }
 
+            // 增强的用户查询（包含好友状态、拉黑状态、在线状态）
+            (&Method::GET, "getEnhancedUserById") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+
+                let response = self.client.get_enhanced_user(current_user_id, &user_id).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+
+                let result = json!({
+                    "user": self.convert_user_to_json(&user),
+                    "isBlocked": response.is_blocked,
+                    "friendStatus": response.friend_status,
+                    "isOnline": response.is_online
+                });
+
+                Ok(success_response(result, StatusCode::OK))
+            }
+
             // 用户名查询
             (&Method::GET, "getUserByUsername") => {
                 let username = extract_string_param(&body, "username", None)?;

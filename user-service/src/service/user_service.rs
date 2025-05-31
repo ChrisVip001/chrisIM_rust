@@ -1,7 +1,7 @@
 use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -22,6 +22,7 @@ pub struct UserServiceImpl {
     repository: UserRepository,
     user_config_repository: UserConfigRepository,
     sms_service: Arc<dyn SmsService>,
+    redis_client: RedisClient,
 }
 
 impl UserServiceImpl {
@@ -44,6 +45,7 @@ impl UserServiceImpl {
             repository: UserRepository::new(pool.clone()),
             user_config_repository: UserConfigRepository::new(pool.clone()),
             sms_service,
+            redis_client,
         }
     }
     
@@ -227,6 +229,33 @@ impl UserServiceImpl {
                 return final_id;
             }
         }
+    }
+
+    /// 检查用户在线状态
+    async fn check_user_online_status(&self, user_id: &str) -> Result<bool, Status> {
+        // 从Redis检查用户是否在线
+        let mut redis_conn = self.redis_client.get_connection().map_err(|e| {
+            error!("获取Redis连接失败: {}", e);
+            Status::internal("获取在线状态失败")
+        })?;
+        
+        let is_online: bool = redis::cmd("SISMEMBER")
+            .arg("online_users")
+            .arg(user_id)
+            .query(&mut redis_conn)
+            .unwrap_or(false);
+            
+        Ok(is_online)
+    }
+
+    /// 检查用户好友和拉黑状态
+    async fn check_friend_and_blacklist_status(&self, current_user_id: &str, target_user_id: &str) -> Result<(FriendshipStatus, bool), Status> {
+        // 由于客户端创建的复杂性，现在先返回默认状态
+        // 在实际部署中，应该通过服务发现机制连接好友服务
+        
+        // TODO: 实现通过服务发现连接好友服务
+        // 目前返回默认状态：没有关系，未拉黑
+        Ok((FriendshipStatus::NoRelation, false))
     }
 }
 
@@ -419,6 +448,41 @@ impl UserService for UserServiceImpl {
         // 返回响应
         Ok(Response::new(UserResponse {
             user: Some(ProtoUser::from(processed_user)),
+        }))
+    }
+
+    /// 增强的通过ID获取用户（包含好友状态、拉黑状态、在线状态）
+    async fn get_enhanced_user_by_id(
+        &self,
+        request: Request<GetEnhancedUserByIdRequest>,
+    ) -> std::result::Result<Response<EnhancedUserResponse>, Status> {
+        let req = request.into_inner();
+        debug!("增强的通过ID获取用户请求，当前用户: {}, 目标用户: {}", req.current_user_id, req.user_id);
+
+        // 查询用户基本信息
+        let user = match self.repository.get_user_by_id(&req.user_id).await {
+            Ok(user) => user,
+            Err(err) => {
+                error!("通过ID获取用户失败: {}", err);
+                return Err(err.into());
+            }
+        };
+
+        // 处理用户信息时根据用户配置决定是否显示手机号
+        let processed_user = self.process_user_phone_display(user).await?;
+
+        // 检查在线状态
+        let is_online = self.check_user_online_status(&req.user_id).await.unwrap_or(false);
+
+        // 检查好友关系和拉黑状态
+        let (friend_status, is_blocked) = self.check_friend_and_blacklist_status(&req.current_user_id, &req.user_id).await?;
+
+        // 返回增强的响应
+        Ok(Response::new(EnhancedUserResponse {
+            user: Some(ProtoUser::from(processed_user)),
+            is_blocked,
+            friend_status: friend_status as i32,
+            is_online,
         }))
     }
 

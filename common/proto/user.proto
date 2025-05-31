@@ -12,6 +12,9 @@ service UserService {
   // 通过ID获取用户
   rpc GetUserById (GetUserByIdRequest) returns (UserResponse);
   
+  // 增强的通过ID获取用户（包含好友状态、拉黑状态、在线状态）
+  rpc GetEnhancedUserById (GetEnhancedUserByIdRequest) returns (EnhancedUserResponse);
+  
   // 通过用户名获取用户
   rpc GetUserByUsername (GetUserByUsernameRequest) returns (UserResponse);
   
@@ -67,6 +70,12 @@ message CreateUserRequest {
 // 按ID获取用户请求
 message GetUserByIdRequest {
   string user_id = 1;
+}
+
+// 按ID获取用户请求
+message GetEnhancedUserByIdRequest {
+  string current_user_id = 1;
+  string user_id = 2;
 }
 
 // 按用户名获取用户请求
@@ -244,4 +253,22 @@ message UpdatePhoneResponse {
   bool success = 1;
   string message = 2;
   optional User user = 3; // 更新后的用户信息
+}
+
+// 增强的用户详情响应
+message EnhancedUserResponse {
+  User user = 1;                    // 用户基本信息
+  bool is_blocked = 2;              // 是否已拉黑
+  FriendshipStatus friend_status = 3; // 好友状态
+  bool is_online = 4;               // 在线状态
+}
+
+// 好友关系状态枚举
+enum FriendshipStatus {
+  NO_RELATION = 0;      // 无关系
+  PENDING = 1;          // 待确认
+  ACCEPTED = 2;         // 已接受（好友）
+  REJECTED = 3;         // 已拒绝
+  BLOCKED = 4;          // 已拉黑
+  EXPIRED = 5;          // 已过期
 }

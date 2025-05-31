@@ -16,23 +16,35 @@ use common::proto::friend::{
     UpdateFriendRemarkRequest, UpdateFriendRemarkResponse,
     GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo,
 };
+use anyhow;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
-
+use common::config::ConfigLoader;
+use common::grpc_client::base::get_rpc_client;
+use common::grpc_client::UserServiceGrpcClient;
+use common::proto::user::user_service_client::UserServiceClient;
+use common::service_discovery::LbWithServiceDiscovery;
+use common::service_register_center::service_register_center;
 use crate::repository::friendship_repository::FriendshipRepository;
 use crate::model::friendship::{PotentialFriend, DetailedFriend};
 use crate::model::user_blacklist::UserBlacklist;
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
+    service_client: UserServiceClient<LbWithServiceDiscovery>,
 }
 
 impl FriendServiceImpl {
-    pub fn new(pool: PgPool) -> Self {
-        Self {
+    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
+        let config = ConfigLoader::get_global().expect("Failed to get global config");
+
+        let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
+
+        Ok(Self {
             repository: FriendshipRepository::new(pool),
-        }
+            service_client,
+        })
     }
 
     // 检查用户是否存在的辅助方法

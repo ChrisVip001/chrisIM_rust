@@ -2,7 +2,7 @@ use anyhow::Result;
 use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
-use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse};
+use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, EnhancedUserResponse, GetEnhancedUserByIdRequest};
 use crate::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务gRPC客户端
@@ -145,6 +145,17 @@ impl UserServiceGrpcClient {
     /// 修改手机号（密码+验证码方式）
     pub async fn update_phone(&mut self, request: UpdatePhoneRequest) -> Result<UpdatePhoneResponse> {
         let response = self.service_client.update_phone(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 增强的获取用户（包含好友状态、拉黑状态、在线状态）
+    pub async fn get_enhanced_user(&mut self, current_user_id: String, user_id: &str) -> Result<EnhancedUserResponse> {
+        let request = Request::new(GetEnhancedUserByIdRequest {
+            current_user_id: current_user_id,
+            user_id: user_id.to_string(),
+        });
+
+        let response = self.service_client.get_enhanced_user_by_id(request).await?;
         Ok(response.into_inner())
     }
 }
