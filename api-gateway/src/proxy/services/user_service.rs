@@ -368,6 +368,41 @@ impl UserServiceHandler {
                 }
             }
 
+            // 修改手机号（密码+新手机验证码）
+            (&Method::POST, "updatePhone") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let password = extract_string_param(&body, "password", None)?;
+                let new_phone = extract_string_param(&body, "newPhone", Some("new_phone"))?;
+                let verify_code = extract_string_param(&body, "verifyCode", Some("verify_code"))?;
+                
+                let request = proto::user::UpdatePhoneRequest {
+                    user_id: current_user_id.to_string(),
+                    password,
+                    new_phone: new_phone.clone(),
+                    verify_code,
+                };
+                
+                // 调用后端服务
+                match self.client.update_phone(request).await {
+                    Ok(response) => {
+                        if response.success {
+                            Ok(success_with_message(
+                                json!({"phone": new_phone}),
+                                "手机号更新成功",
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("更新手机号失败: {}", err);
+                        Ok(error_response(&format!("更新手机号失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
+            }
+
             //根据token获取用户信息(用户id等信息已经在jwt_user_info里了用id查找用户详细信息)
             (&Method::GET, "getUserInfo") => {
                 // 从JWT中获取用户ID

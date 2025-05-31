@@ -553,7 +553,7 @@ impl UserRepository {
         Ok(updated_user)
     }
 
-    /// 验证用户密码
+    /// 验证用户密码(用户名或手机号验证)
     pub async fn verify_user_password(&self, username: &str, password: &str) -> Result<User> {
         // 查询用户
         let user = self.get_user_by_username_phone(username).await?;
@@ -566,6 +566,21 @@ impl UserRepository {
         }
 
         Ok(user)
+    }
+
+    /// 验证用户密码(id验证)
+    pub async fn verify_user_password_by_id(&self, username: &str, password: &str) -> Result<bool> {
+        // 查询用户
+        let user = self.get_user_by_username_phone(username).await?;
+
+        // 验证密码
+        let is_valid = verify_password(password, &user.password)?;
+
+        if !is_valid {
+            return Err(Error::Authentication("密码不正确".to_string()));
+        }
+
+        Ok(true)
     }
 
     /// 搜索用户
@@ -691,5 +706,29 @@ impl UserRepository {
         
         debug!("成功注销用户: {}, 影响行数: {}", user_id, result.rows_affected());
         Ok(result.rows_affected() > 0)
+    }
+
+    /// 更新用户手机号
+    pub async fn update_phone(&self, user_id: &str, new_phone: &str) -> Result<User> {
+        // 检查用户是否存在
+        let _user = self.get_user_by_id(user_id).await?;
+        // 执行更新
+        sqlx::query!(
+            r#"
+            UPDATE users
+            SET phone = $1, updated_at = NOW()
+            WHERE id = $2
+            "#,
+            new_phone,
+            user_id
+        )
+            .execute(&self.pool)
+            .await
+            .map_err(|err| {
+                error!("更新用户手机号失败: {}", err);
+                Error::Database(err)
+            })?;
+        // 获取更新后的用户信息
+        self.get_user_by_id(user_id).await
     }
 }

@@ -2,7 +2,7 @@ use anyhow::Result;
 use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
-use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse};
+use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse};
 use crate::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务gRPC客户端
@@ -138,6 +138,12 @@ impl UserServiceGrpcClient {
     /// 注销用户账号
     pub async fn deactivate_user(&mut self, request: DeactivateUserRequest) -> Result<DeactivateUserResponse> {
         let response = self.service_client.deactivate_user(Request::new(request)).await?;
+        Ok(response.into_inner())
+    }
+    
+    /// 修改手机号（密码+验证码方式）
+    pub async fn update_phone(&mut self, request: UpdatePhoneRequest) -> Result<UpdatePhoneResponse> {
+        let response = self.service_client.update_phone(Request::new(request)).await?;
         Ok(response.into_inner())
     }
 }

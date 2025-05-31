@@ -50,6 +50,9 @@ service UserService {
   
   // 注销用户账号
   rpc DeactivateUser (DeactivateUserRequest) returns (DeactivateUserResponse);
+  
+  // 修改手机号
+  rpc UpdatePhone (UpdatePhoneRequest) returns (UpdatePhoneResponse);
 }
 
 // 创建用户请求
@@ -222,4 +225,19 @@ message DeactivateUserRequest {
 message DeactivateUserResponse {
   bool success = 1;
   string message = 2;
+}
+
+// 修改手机号请求
+message UpdatePhoneRequest {
+  string user_id = 1;     // 用户ID
+  string password = 2;    // 用户密码，用于验证身份
+  string new_phone = 3;   // 新手机号
+  string verify_code = 4; // 新手机号的验证码
+}
+
+// 修改手机号响应
+message UpdatePhoneResponse {
+  bool success = 1;
+  string message = 2;
+  optional User user = 3; // 更新后的用户信息
 }

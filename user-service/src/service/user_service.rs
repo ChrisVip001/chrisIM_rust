@@ -1,7 +1,7 @@
 use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -69,7 +69,6 @@ impl UserServiceImpl {
             VerificationAction::Login | 
             VerificationAction::ResetPassword | 
             VerificationAction::BindPhone | 
-            VerificationAction::ChangePhone |
             VerificationAction::Deactivate => {
                 // 通过手机号检查用户是否存在
                 match self.repository.get_user_by_phone(phone).await {
@@ -81,13 +80,14 @@ impl UserServiceImpl {
                 }
             },
             // 注册操作不需要验证用户存在
-            VerificationAction::Register => {
+            VerificationAction::Register |
+            VerificationAction::ChangePhone => {
                 // 注册时，反而应该确保用户不存在
                 match self.repository.get_user_by_phone(phone).await {
                     Ok(_) => {
                         // 用户已存在，返回错误
                         error!("手机号已注册: {}", phone);
-                        return Err(Status::already_exists(format!("手机号已注册: {}", phone)));
+                        return Err(Status::already_exists(format!("新手机号已注册: {}", phone)));
                     },
                     Err(_) => {
                         // 用户不存在，可以发送注册验证码
@@ -755,6 +755,78 @@ impl UserService for UserServiceImpl {
             Err(err) => {
                 error!("用户注销失败: {}", err);
                 Err(Status::internal(format!("用户注销失败: {}", err)))
+            }
+        }
+    }
+
+
+    /// 修改手机号
+    async fn update_phone(
+        &self,
+        request: Request<UpdatePhoneRequest>,
+    ) -> std::result::Result<Response<UpdatePhoneResponse>, Status> {
+        let req = request.into_inner();
+        debug!("用户修改手机号请求，用户ID: {}", req.user_id);
+
+        // 验证用户ID
+        let user = match self.repository.get_user_by_id(&req.user_id).await {
+            Ok(user) => user,
+            Err(err) => {
+                error!("获取用户信息失败: {}", err);
+                return Err(Status::not_found("用户不存在"));
+            }
+        };
+
+        // 验证用户密码
+        let password_valid = match self.repository.verify_user_password_by_id(&user.id, &req.password).await {
+            Ok(valid) => valid,
+            Err(err) => {
+                error!("验证密码失败: {}", err);
+                return Err(err.into());
+            }
+        };
+
+        if !password_valid {
+            return Err(Status::invalid_argument("密码错误"));
+        }
+
+        // 验证新手机号的格式
+        if !validate_phone(&req.new_phone) {
+            return Err(Status::invalid_argument("新手机号格式不正确"));
+        }
+
+        // 检查新手机号是否已被其他用户使用
+        if let Ok(existing_user) = self.repository.get_user_by_phone(&req.new_phone).await {
+            if existing_user.id != req.user_id {
+                return Err(Status::already_exists("该手机号已被其他用户使用"));
+            }
+        }
+
+        // 验证验证码
+        if req.verify_code.is_empty() {
+            return Err(Status::invalid_argument("验证码不能为空"));
+        }
+
+        let verify_result = self.verify_phone_code(&req.new_phone, &req.verify_code, "change_phone").await?;
+        if !verify_result {
+            return Err(Status::invalid_argument("验证码错误"));
+        }
+        
+        
+
+        // 更新用户手机号
+        match self.repository.update_phone(&req.user_id, &req.new_phone).await {
+            Ok(updated_user) => {
+                info!("用户手机号更新成功，用户ID: {}", req.user_id);
+                Ok(Response::new(UpdatePhoneResponse {
+                    success: true,
+                    message: "手机号更新成功".to_string(),
+                    user: Some(ProtoUser::from(updated_user)),
+                }))
+            }
+            Err(err) => {
+                error!("更新手机号失败: {}", err);
+                Err(err.into())
             }
         }
     }
