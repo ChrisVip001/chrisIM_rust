@@ -4,17 +4,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tower_http::{
-    cors::CorsLayer,
-    limit::RequestBodyLimitLayer,
-    timeout::TimeoutLayer,
-    trace::TraceLayer,
+    cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer,
 };
 use tracing::{error, info};
 
-use common::{
-    config::{AppConfig, ConfigLoader},
-};
 use crate::api_utils::ip_region::ip_location::init_ip_location;
+use common::config::{AppConfig, ConfigLoader};
 
 mod api_utils;
 mod auth;
@@ -31,9 +26,9 @@ async fn main() -> anyhow::Result<()> {
     common::service::init_rustls();
 
     // 加载配置
-    let config_path = std::env::var("CONFIG_PATH")
-        .unwrap_or_else(|_| "./config/config.yaml".to_string());
-    
+    let config_path =
+        std::env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
+
     let app_config = AppConfig::from_file(Some(&config_path))?;
     ConfigLoader::set_global(app_config);
     let config = ConfigLoader::get_global().expect("未找到配置文件");
@@ -62,14 +57,19 @@ async fn main() -> anyhow::Result<()> {
 
     // 启动服务器
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
-    info!("API网关监听: https://{}:{}", config.server.host, config.server.port);
+    let protocol = if config.server.tls.as_ref().map_or(false, |tls| tls.enabled) {
+        "https"
+    } else {
+        "http"
+    };
+    info!("API网关监听: {}://{}:{}", protocol, config.server.host, config.server.port);
 
     // 启动服务器
     let handle = Handle::new();
     let (shutdown_tx, _shutdown_rx) = oneshot::channel::<()>();
     
     let shutdown_task = tokio::spawn(async move {
-        // api-gateway不需要从服务注册中心注销，直接监听关闭信号
+        // 监听关闭信号
         use tokio::signal;
         
         let ctrl_c = async {
@@ -118,12 +118,9 @@ async fn main() -> anyhow::Result<()> {
 
 /// 构建应用
 async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
-    // 创建服务代理
-    let service_proxy = proxy::ServiceProxy::new().await;
-    
     // 构建路由
-    let router = router::build_routes(service_proxy, &config.gateway).await?;
-    
+    let router = router::build_routes(&config.gateway).await?;
+
     // 配置中间件栈
     Ok(router
         .layer(TraceLayer::new_for_http())

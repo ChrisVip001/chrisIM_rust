@@ -1,6 +1,6 @@
 use crate::auth::controller;
 use crate::auth::middleware::auth_middleware;
-use crate::proxy::ServiceProxy;
+use crate::proxy::service_proxy::ServiceProxy;
 use axum::{
     body::Body,
     extract::{Json, Path, Query},
@@ -10,19 +10,14 @@ use axum::{
     routing::{any, get, post},
     Router,
 };
-use common::{
-    config::ConfigLoader,
-    configs::{GatewayConfig, routes_config::RouteRule},
-    grpc_client::{base::get_rpc_client, UserServiceGrpcClient as CommonUserServiceClient},
-    proto::user::user_service_client::UserServiceClient,
-    service_discovery::LbWithServiceDiscovery,
-};
+use common::{config::ConfigLoader, configs::{GatewayConfig, routes_config::RouteRule}, proto::user::user_service_client::UserServiceClient, service, service_discovery::LbWithServiceDiscovery};
 use oss::oss;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use tracing::{error, info};
 use uuid::Uuid;
+use common::service::user_client;
 
 // 预签名URL请求参数
 #[derive(Debug, Deserialize)]
@@ -64,20 +59,10 @@ pub struct ValidateRegisterAvatarRequest {
 
 /// 构建路由
 pub async fn build_routes(
-    service_proxy: ServiceProxy,
     gateway_config: &GatewayConfig,
 ) -> anyhow::Result<Router> {
-    // 创建用户服务客户端
-    let config = ConfigLoader::get_global().expect("获取配置失败");
-    let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
-        &config,
-        "user".to_string(),
-    )
-    .await?;
+    info!("构建路由...");
 
-    let user_service = controller::SharedUserService::new(service_client);
-
-    // 构建基础路由
     let mut router = Router::new()
         // 健康检查和指标
         .route("/health", get(health_check))
@@ -92,21 +77,19 @@ pub async fn build_routes(
         .route("/api/files/register-avatar", post(get_register_avatar_url))
         .route("/api/files/validate-register-avatar", post(validate_register_avatar));
 
-    // 添加动态路由
-    let service_proxy = Arc::new(service_proxy);
+    // 添加服务路由
     for route in &gateway_config.routes.routes {
-        router = add_service_route(router, route, service_proxy.clone());
+        router = add_service_route(router, route);
     }
 
-    // 添加用户服务扩展
-    Ok(router.layer(axum::Extension(user_service)))
+    info!("路由构建完成，共 {} 个路由规则", gateway_config.routes.routes.len());
+    Ok(router)
 }
 
 /// 添加服务路由
 fn add_service_route(
     router: Router,
     route: &RouteRule,
-    service_proxy: Arc<ServiceProxy>,
 ) -> Router {
     let path = route.path_prefix.clone();
     let service_type = route.service_type.clone();
@@ -114,12 +97,12 @@ fn add_service_route(
 
     // 创建处理函数的工厂函数
     let create_handler = || {
-        let service_proxy = service_proxy.clone();
         let service_type = service_type.clone();
         move |req: Request<Body>| {
-            let service_proxy = service_proxy.clone();
             let service_type = service_type.clone();
-            async move { service_proxy.forward_request(req, &service_type).await }
+            async move {
+                ServiceProxy::forward_request(req, &service_type).await 
+            }
         }
     };
 

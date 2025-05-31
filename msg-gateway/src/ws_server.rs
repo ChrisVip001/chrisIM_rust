@@ -7,7 +7,6 @@ use common::auth::verify_token_simple;
 use common::config::AppConfig;
 use common::error::Error;
 use common::message::PlatformType;
-use common::service_register_center::{service_register_center, Registration};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -75,55 +74,6 @@ pub struct Claims {
 pub struct WsServer;
 
 impl WsServer {
-    /// 向服务注册中心注册WebSocket服务
-    ///
-    /// 将WebSocket服务注册到Consul，使其他服务能够发现和连接。
-    /// 注册两个服务：WebSocket服务（面向客户端）和gRPC服务（面向内部服务）。
-    ///
-    /// # 参数
-    /// * `config` - 应用配置
-    ///
-    /// # 返回值
-    /// * `Ok(String)` - 注册成功，返回服务ID
-    /// * `Err(Error)` - 注册失败
-    async fn register_service(config: &AppConfig) -> Result<String, Error> {
-        let registry = service_register_center(config);
-
-        // 注册WebSocket服务（面向客户端）
-        let websocket_registration = Registration {
-            id: format!(
-                "{}-{}-{}",
-                &config.websocket.name, &config.websocket.host, &config.websocket.port
-            ),
-            name: config.websocket.name.clone(),
-            host: config.websocket.host.clone(),
-            port: config.websocket.port,
-            tags: config.websocket.tags.clone(),
-            check: None,
-        };
-
-        let websocket_service_id = registry.register(websocket_registration).await?;
-        info!("WebSocket服务注册成功，服务ID: {}", websocket_service_id);
-
-        // 注册gRPC服务（面向内部服务）
-        let grpc_registration = Registration {
-            id: format!(
-                "{}-{}-{}",
-                &config.rpc.ws.name, &config.rpc.ws.host, &config.rpc.ws.port
-            ),
-            name: config.rpc.ws.name.clone(),
-            host: config.rpc.ws.host.clone(),
-            port: config.rpc.ws.port,
-            tags: config.rpc.ws.tags.clone(),
-            check: None,
-        };
-
-        let grpc_service_id = registry.register(grpc_registration).await?;
-        info!("gRPC服务注册成功，服务ID: {}", grpc_service_id);
-
-        Ok(websocket_service_id)
-    }
-
     /// 测试接口
     ///
     /// 提供一个简单的HTTP接口用于测试服务状态和查看连接信息
@@ -159,7 +109,8 @@ impl WsServer {
     ///
     /// # 参数
     /// * `config` - 应用配置
-    pub async fn start(config: Arc<AppConfig>) {
+    /// * `shutdown_rx` - 优雅关闭信号接收器
+    pub async fn start(config: Arc<AppConfig>, mut shutdown_rx: tokio::sync::oneshot::Receiver<()>) {
         // 创建连接管理器和消息通道
         let (tx, rx) = mpsc::channel(1024);
         let hub = Manager::new(tx, &config).await;
@@ -196,7 +147,7 @@ impl WsServer {
         let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
 
         // 在独立任务中启动WebSocket服务器
-        let mut ws = tokio::spawn(async move {
+        let mut ws_task = tokio::spawn(async move {
             info!("WebSocket服务器已启动，监听地址: {}", addr);
             info!(
                 "WebSocket连接URL格式: /ws/{{user_id}}/conn/{{pointer_id}}/{{platform}}/{{token}}"
@@ -205,25 +156,29 @@ impl WsServer {
             axum::serve(listener, router).await.unwrap();
         });
 
-        // 向服务注册中心注册WebSocket服务
-        Self::register_service(&config).await.unwrap();
-
-        // 克隆配置用于RPC服务
-        let config = config.clone();
-
         // 在独立任务中启动RPC服务
-        let mut rpc = tokio::spawn(async move {
+        let mut rpc_task = tokio::spawn(async move {
             // 启动RPC服务器，用于接收来自msg-server的消息推送请求
             MsgRpcService::start(hub, &config)
                 .await
                 .expect("RPC服务器启动失败");
         });
 
-        // 等待任一任务完成，并中止另一个任务
-        // 正常情况下两个服务都会一直运行
+        // 等待关闭信号或任一任务完成
         tokio::select! {
-            _ = (&mut ws) => ws.abort(),
-            _ = (&mut rpc) => rpc.abort(),
+            _ = (&mut shutdown_rx) => {
+                info!("收到关闭信号，正在停止WebSocket网关服务...");
+                ws_task.abort();
+                rpc_task.abort();
+            },
+            _ = (&mut ws_task) => {
+                error!("WebSocket服务器意外退出");
+                rpc_task.abort();
+            },
+            _ = (&mut rpc_task) => {
+                error!("RPC服务器意外退出");
+                ws_task.abort();
+            },
         }
     }
 

@@ -38,8 +38,9 @@ async fn main() -> anyhow::Result<()> {
     // 获取全局配置实例，后续所有服务都会使用这个配置
     let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
+    common::service::init();
+    
     // 初始化日志和分布式链路追踪系统
-    // 根据配置判断是否启用分布式链路追踪功能
     if config.telemetry.enabled {
         // 启动带有分布式链路追踪的日志系统
         // 这将启用OpenTelemetry，用于跨服务的链路追踪
@@ -58,8 +59,6 @@ async fn main() -> anyhow::Result<()> {
     let mut consumer_service = ConsumerService::new(&config).await?;
     info!("消费者服务已初始化");
     
-    // 克隆配置以便在异步任务中使用
-    // Rust的所有权系统要求在异步任务中使用配置时需要克隆
     let config_clone = config.clone();
     
     // 启动生产者服务（ChatRpcService）

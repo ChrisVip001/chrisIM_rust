@@ -7,6 +7,7 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
+use tonic::codegen::Body;
 use tonic::transport::Server;
 use tracing::{error, info, warn};
 // 添加gRPC健康检查相关导入

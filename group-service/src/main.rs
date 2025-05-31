@@ -1,10 +1,11 @@
 use anyhow::Result;
-use std::env;
 use common::config::{AppConfig, Component, ConfigLoader};
 use common::grpc::LoggingInterceptor;
 use sqlx::postgres::PgPoolOptions;
+use std::env;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
+use tonic::codegen::Body;
 use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tonic_reflection::server::Builder as ReflectionBuilder;
@@ -23,11 +24,12 @@ const FILE_DESCRIPTOR_SET: &[u8] = common::proto::group::FILE_DESCRIPTOR_SET;
 async fn main() -> Result<()> {
     // 初始化rustls加密提供程序
     common::service::init_rustls();
-    
+
     // 从环境变量获取配置文件路径
-    let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
+    let config_path =
+        env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
     info!("使用配置文件: {}", config_path);
-    
+
     // 使用指定的配置文件路径初始化全局配置
     let app_config = AppConfig::from_file(Some(&config_path))
         .expect(&format!("无法从路径加载配置: {}", config_path));
@@ -37,13 +39,16 @@ async fn main() -> Result<()> {
     let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
     // 初始化统一服务模块
-    common::service::init((*config).clone());
+    common::service::init();
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
         // 启动带有分布式链路追踪的日志系统
         common::logging::init_telemetry(&config, "group-service")?;
-        info!("链路追踪功能已启用，追踪数据将发送到: {}", config.telemetry.endpoint);
+        info!(
+            "链路追踪功能已启用，追踪数据将发送到: {}",
+            config.telemetry.endpoint
+        );
     } else {
         // 只初始化日志系统
         common::logging::init_from_config(&config)?;
@@ -58,40 +63,21 @@ async fn main() -> Result<()> {
     let addr = format!("{}:{}", host, port).parse::<SocketAddr>()?;
 
     // 初始化数据库连接池
-    let db_pool = match PgPoolOptions::new()
+    let db_pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&config.database.pg_url())
         .await
-    {
-        Ok(pool) => {
-            info!("数据库连接成功");
-            pool
-        }
-        Err(err) => {
-            error!("数据库连接失败: {}", err);
-            return Err(err.into());
-        }
-    };
+        .map_err( |e| anyhow::anyhow!("数据库连接失败:{}", e))?;
 
     // 初始化群组服务
     let group_service = GroupServiceImpl::new(db_pool.clone());
 
-    // 注册服务到服务注册中心
-    let service_id = common::service::register(Component::GroupServer).await?;
-
-    info!(
-        "群组服务已注册到服务注册中心, 服务ID: {}",
-        service_id
-    );
-
     // 设置关闭通道
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let config_clone = config.clone();
-    let service_id_clone = service_id.clone();
     let shutdown_signal_task = tokio::spawn(async move {
-        common::service::shutdown_signal(shutdown_tx, service_id_clone, &config_clone).await
+        common::service::shutdown_signal(shutdown_tx, Component::GroupServer).await
     });
-    
+
     // 创建反射服务
     let reflection_service = ReflectionBuilder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
@@ -102,7 +88,7 @@ async fn main() -> Result<()> {
 
     // 创建gRPC健康检查服务
     let (mut health_reporter, health_service) = health_reporter();
-    
+
     // 设置服务为健康状态 - 只要服务能启动就认为是健康的
     health_reporter
         .set_serving::<GroupServiceServer<GroupServiceImpl>>()
@@ -110,14 +96,18 @@ async fn main() -> Result<()> {
 
     // 启动gRPC服务
     info!("群组服务启动，监听地址: {}", addr);
+    
+    common::service::register(Component::GroupServer)
+        .await?
+        .map_err(|e| anyhow::anyhow!("服务注册失败:{}", e));
 
     // 创建服务器并运行
     let server = Server::builder()
         .add_service(health_service) // 添加健康检查服务
         .add_service(reflection_service) // 添加反射服务
         .add_service(GroupServiceServer::with_interceptor(
-            group_service, 
-            logging_interceptor
+            group_service,
+            logging_interceptor,
         ))
         .serve_with_shutdown(addr, async {
             let _ = shutdown_rx.await;

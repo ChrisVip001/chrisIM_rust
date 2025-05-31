@@ -5,6 +5,7 @@ use common::grpc::LoggingInterceptor;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
+use tonic::codegen::Body;
 use tonic::transport::Server;
 use tonic_reflection::server::Builder as ReflectionBuilder;
 use tracing::{error, info};
@@ -40,7 +41,7 @@ async fn main() -> Result<()> {
     let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
     // 初始化统一服务模块
-    common::service::init((*config).clone());
+    common::service::init();
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
@@ -64,36 +65,20 @@ async fn main() -> Result<()> {
     let addr = format!("{}:{}", host, port).parse::<SocketAddr>()?;
 
     // 初始化数据库连接池
-    let db_pool = match PgPoolOptions::new()
+    let db_pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&config.database.pg_url())
         .await
-    {
-        Ok(pool) => {
-            info!("数据库连接成功");
-            pool
-        }
-        Err(err) => {
-            error!("数据库连接失败: {}", err);
-            return Err(err.into());
-        }
-    };
+        .map_err( |e| anyhow::anyhow!("数据库连接失败:{}", e))?;
 
     // 初始化用户服务
     let user_service = UserServiceImpl::new(db_pool.clone());
 
-    // 注册服务到服务注册中心
-    let service_id = common::service::register(Component::UserServer).await?;
-
-    info!("用户服务准备就绪, 服务ID: {}", service_id);
-
     // 设置关闭通道
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let config_clone = config.clone();
-    let service_id_clone = service_id.clone();
     let shutdown_signal_task =
         tokio::spawn(
-            async move { shutdown_signal(shutdown_tx, service_id_clone, &config_clone).await },
+            async move { shutdown_signal(shutdown_tx, Component::UserServer).await },
         );
 
     // 创建反射服务
@@ -114,30 +99,25 @@ async fn main() -> Result<()> {
 
     // 启动gRPC服务
     info!("用户服务启动，监听地址: {}", addr);
+    common::service::register(Component::UserServer)
+        .await?
+        .map_err(|e| anyhow::anyhow!("服务注册失败:{}", e));
 
-    // 创建服务器并运行，添加反射服务、健康检查服务和拦截器
-    let grpc_server = Server::builder()
-        .add_service(health_service) // 添加健康检查服务
-        .add_service(UserServiceServer::with_interceptor(
-            user_service,
-            logging_interceptor,
-        ))
-        .add_service(reflection_service) // 添加反射服务
+    // 创建服务器并运行
+    let server = Server::builder()
+        .add_service(health_service)     // 健康检查服务
+        .add_service(reflection_service) // 反射服务
+        .add_service(UserServiceServer::with_interceptor(user_service, logging_interceptor))
         .serve_with_shutdown(addr, async {
-            let _ = shutdown_rx.await;
-            info!("接收到关闭信号，gRPC服务器准备关闭");
+            shutdown_rx.await.ok();
         });
 
-    // 运行gRPC服务器
-    if let Err(e) = grpc_server.await {
-        error!("gRPC服务器错误: {}", e);
-    }
-    
+    // 等待服务器关闭
+    server.await?;
     info!("gRPC服务已关闭");
 
     // 等待关闭信号处理完成
-    let _ = shutdown_signal_task.await?;
-
+    shutdown_signal_task.await??;
     // 在程序结束前关闭链路追踪，确保所有数据都被发送
     if config.telemetry.enabled {
         info!("正在关闭链路追踪...");

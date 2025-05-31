@@ -2,35 +2,31 @@ use axum::{
     body::Body,
     http::{Method, Response, StatusCode},
 };
-use common::grpc_client::UserServiceGrpcClient;
 use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug, info};
+use common::proto::user::{GetUserByIdRequest, GetUserByUsernameRequest, UserConfigRequest};
 use crate::proxy::services::common::get_user_id_from_jwt;
 use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
 use crate::auth::jwt::UserInfo;
 
 /// 用户服务处理器
 #[derive(Clone)]
-pub struct UserServiceHandler {
-    client: UserServiceGrpcClient,
-}
+pub struct UserServiceHandler;
 
 impl UserServiceHandler {
-    /// 创建新的用户服务处理器
-    pub fn new(client: UserServiceGrpcClient) -> Self {
-        Self { client }
-    }
 
     /// 处理用户服务请求
     pub async fn handle_request(
-        &mut self,
         method: &Method,
         path: &str,
         body: Value,
         jwt_user_info: Option<UserInfo>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理用户服务请求: {} {}", method, path);
+        
+        // 获取用户服务客户端
+        let mut client = common::service::user_client().await?;
         
         // 从路径提取方法名 - 格式: /api/users/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
@@ -40,20 +36,22 @@ impl UserServiceHandler {
             (&Method::GET, "getUserById") | (&Method::GET, "getUser") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
-                let response = self.client.get_user(&user_id).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let request = GetUserByIdRequest { user_id };
+                let response = client.get_user_by_id(request).await?;
+                let user = response.into_inner().user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
-                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+                Ok(success_response(Self::convert_user_to_json(&user), StatusCode::OK))
             }
 
             // 用户名查询
             (&Method::GET, "getUserByUsername") => {
                 let username = extract_string_param(&body, "username", None)?;
 
-                let response = self.client.get_user_by_username(&username).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let request = GetUserByUsernameRequest { username };
+                let response = client.get_user_by_username(request).await?;
+                let user = response.into_inner().user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
-                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+                Ok(success_response(Self::convert_user_to_json(&user), StatusCode::OK))
             }
 
             // 创建用户
@@ -65,18 +63,18 @@ impl UserServiceHandler {
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url")).unwrap_or_default();
 
                 let request = proto::user::CreateUserRequest {
-                    username: username.to_string(),
-                    email: email.to_string(),
-                    password: password.to_string(),
-                    nickname: nickname.to_string(),
-                    avatar_url: avatar_url.to_string(),
+                    username,
+                    email,
+                    password,
+                    nickname,
+                    avatar_url,
                 };
 
-                let response = self.client.create_user(request).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let response = client.create_user(request).await?;
+                let user = response.into_inner().user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
                 Ok(success_with_message(
-                    self.convert_user_to_json(&user),
+                    Self::convert_user_to_json(&user),
                     "用户创建成功",
                     StatusCode::OK
                 ))
@@ -86,14 +84,11 @@ impl UserServiceHandler {
             (&Method::POST, "updateUser") => {
                 // 从JWT中获取用户ID
                 let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
-                // userid从token中获取
                 let user_id = Some(current_user_id);
                 let nickname = get_optional_string(&body, "nickname", None);
                 let email = get_optional_string(&body, "email", None);
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
-                // 密码不让在此修改
-                // let password = get_optional_string(&body, "password", None);
-                let password = None;
+                let password = None; // 密码不让在此修改
                 let address = get_optional_string(&body, "address", None);
                 let head_image = get_optional_string(&body, "headImage", Some("head_image"));
                 let head_image_thumb = get_optional_string(&body, "headImageThumb", Some("head_image_thumb"));
@@ -116,11 +111,11 @@ impl UserServiceHandler {
                     custom_id,
                 };
 
-                let response = self.client.update_user(request).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let response = client.update_user(request).await?;
+                let user = response.into_inner().user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
                 Ok(success_with_message(
-                    self.convert_user_to_json(&user),
+                    Self::convert_user_to_json(&user),
                     "用户更新成功",
                     StatusCode::OK
                 ))
@@ -142,13 +137,14 @@ impl UserServiceHandler {
                     nickname: "".to_string(),
                 };
 
-                match self.client.register_by_username(request).await {
+                match client.register_by_username(request).await {
                     Ok(response) => {
                         let user = response
+                            .into_inner()
                             .user
                             .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
                         Ok(success_with_message(
-                            self.convert_user_to_json(&user),
+                            Self::convert_user_to_json(&user),
                             "用户注册成功",
                             StatusCode::OK
                         ))
@@ -162,7 +158,6 @@ impl UserServiceHandler {
 
             // 用户手机号注册
             (&Method::POST, "registerByPhone") => {
-
                 let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
                 let phone = extract_string_param(&body,"phone",None)?;
                 let password = extract_string_param(&body,"password",None)?;
@@ -177,13 +172,14 @@ impl UserServiceHandler {
                     nickname: "".to_string(),
                 };
 
-                match self.client.register_by_phone(request).await {
+                match client.register_by_phone(request).await {
                     Ok(response) => {
                         let user = response
+                            .into_inner()
                             .user
                             .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
                         Ok(success_with_message(
-                            self.convert_user_to_json(&user),
+                            Self::convert_user_to_json(&user),
                             "用户注册成功",
                             StatusCode::OK
                         ))
@@ -197,7 +193,6 @@ impl UserServiceHandler {
 
             // 忘记密码
             (&Method::POST, "forgetPassword") => {
-                // let username = extract_string_param(&body, "username", None)?;
                 let password = extract_string_param(&body, "password", None)?;
                 let tenant_id = get_optional_string(&body, "tenantId", Some("tenant_id")).unwrap_or_default();
                 let phone = get_optional_string(&body, "phone", None).unwrap_or_default();
@@ -210,13 +205,14 @@ impl UserServiceHandler {
                     verify_code: verify_code.to_string(),
                 };
 
-                match self.client.forget_password(request).await {
+                match client.forget_password(request).await {
                     Ok(response) => {
                         let user = response
+                            .into_inner()
                             .user
                             .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
                         Ok(success_with_message(
-                            self.convert_user_to_json(&user),
+                            Self::convert_user_to_json(&user),
                             "密码更新成功",
                             StatusCode::OK
                         ))
@@ -231,10 +227,19 @@ impl UserServiceHandler {
             // 用户设置查询
             (&Method::GET, "getUserConfig")=> {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-                let response = self.client.get_user_config(&user_id).await?;
-                let user_config = response.user_config.unwrap_or_default();
+
+                let request = UserConfigRequest {
+                    user_id,
+                    allow_phone_search: Option::from(0i32),
+                    allow_id_search: Option::from(0i32),
+                    auto_load_video: Option::from(0i32),
+                    auto_load_pic: Option::from(0i32),
+                    msg_read_flag: Option::from(0i32),
+                };
+                let response = client.get_user_config(request).await?;
+                let user_config = response.into_inner().user_config.unwrap_or_default();
                 info!("时间: {}", user_config.clone().create_time.unwrap_or_default());
-                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+                Ok(success_response(Self::convert_user_config_to_json(&user_config), StatusCode::OK))
             }
 
             // 保存用户设置
@@ -259,9 +264,9 @@ impl UserServiceHandler {
                     auto_load_pic,
                     msg_read_flag,
                 };
-                let response = self.client.save_user_config(request).await?;
-                let user_config = response.user_config.unwrap_or_default();
-                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+                let response = client.save_user_config(request).await?;
+                let user_config = response.into_inner().user_config.unwrap_or_default();
+                Ok(success_response(Self::convert_user_config_to_json(&user_config), StatusCode::OK))
             }
             
             // 发送手机验证码
@@ -274,22 +279,15 @@ impl UserServiceHandler {
                     action: action.to_string(),
                 };
                 
-                match self.client.send_phone_verification_code(request).await {
-                    Ok(response) => {
-                        if response.success {
-                            Ok(success_with_message(
-                                json!({}),
-                                &response.message,
-                                StatusCode::OK
-                            ))
-                        } else {
-                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
-                        }
-                    }
-                    Err(err) => {
-                        error!("发送验证码失败: {}", err);
-                        Ok(error_response(&format!("发送验证码失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
-                    }
+                let response = client.send_phone_verification_code(request).await?.into_inner();
+                if response.success {
+                    Ok(success_with_message(
+                        json!({}),
+                        &response.message,
+                        StatusCode::OK
+                    ))
+                } else {
+                    Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
                 }
             }
             
@@ -307,22 +305,15 @@ impl UserServiceHandler {
                     action: action.to_string(),
                 };
                 
-                match self.client.verify_phone_code(request).await {
-                    Ok(response) => {
-                        if response.valid {
-                            Ok(success_with_message(
-                                json!({"valid": true}),
-                                &response.message,
-                                StatusCode::OK
-                            ))
-                        } else {
-                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
-                        }
-                    }
-                    Err(err) => {
-                        error!("验证码验证失败: {}", err);
-                        Ok(error_response(&format!("验证码验证失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
-                    }
+                let response = client.verify_phone_code(request).await?.into_inner();
+                if response.valid {
+                    Ok(success_with_message(
+                        json!({"valid": true}),
+                        &response.message,
+                        StatusCode::OK
+                    ))
+                } else {
+                    Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
                 }
             }
 
@@ -335,10 +326,11 @@ impl UserServiceHandler {
                     None => return Ok(error_response("未授权", StatusCode::UNAUTHORIZED))
                 };
 
-                let response = self.client.get_user(&user_id).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let request = GetUserByIdRequest { user_id };
+                let response = client.get_user_by_id(request).await?;
+                let user = response.into_inner().user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
-                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+                Ok(success_response(Self::convert_user_to_json(&user), StatusCode::OK))
             }
 
             // 其他未知方法
@@ -350,7 +342,7 @@ impl UserServiceHandler {
     }
 
     /// 将用户消息转换为JSON
-    fn convert_user_to_json(&self, user: &proto::user::User) -> Value {
+    fn convert_user_to_json(user: &proto::user::User) -> Value {
         json!({
             "id": user.id,
             "username": user.username,
@@ -371,7 +363,7 @@ impl UserServiceHandler {
         })
     }
 
-    fn convert_user_config_to_json(&self, user_config: &proto::user::UserConfig) -> Value {
+    fn convert_user_config_to_json(user_config: &proto::user::UserConfig) -> Value {
         json!({
             "user_id": user_config.user_id,
             "allow_phone_search": user_config.allow_phone_search,

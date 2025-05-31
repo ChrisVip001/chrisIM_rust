@@ -7,28 +7,25 @@
 //! 
 //! ## 核心设计理念
 //! - **统一接口**: 一个模块处理所有服务相关操作
-//! - **零配置**: 自动读取AppConfig，无需手动传参
+//! - **零配置**: 自动读取全局配置，无需手动传参
 //! - **智能缓存**: 自动缓存客户端和连接，避免重复创建
 //! - **自动重试**: 内置重试机制，提高可靠性
 //! - **类型安全**: 编译时检查，减少运行时错误
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::RwLock;
 use tonic::transport::Channel;
 
-use crate::config::{AppConfig, Component};
+use crate::config::{AppConfig, ConfigLoader, Component};
 use crate::Error;
 use crate::service_register_center::{ServiceRegister, service_register_center, typos::Registration};
 
 // ============================================================================
-// 全局状态管理
+// 全局状态管理（简化版）
 // ============================================================================
-
-/// 全局配置
-static CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
 /// 全局服务注册中心
 static REGISTRY: OnceLock<std::sync::Arc<dyn ServiceRegister>> = OnceLock::new();
@@ -40,26 +37,37 @@ static CHANNELS: OnceLock<RwLock<HashMap<String, Channel>>> = OnceLock::new();
 static REGISTERED_SERVICES: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
 
 // ============================================================================
-// 初始化 - 应用启动时调用一次
+// 初始化 - 应用启动时调用（大幅简化）
 // ============================================================================
 
-/// 🎯 初始化服务模块（应用启动时调用一次）
+/// 🎯 初始化服务模块（使用全局配置中心）
+/// 
+/// **注意**: 调用此函数前必须确保 `ConfigLoader::set_global()` 已经调用
 /// 
 /// ```rust
 /// use common::service;
-/// 
+/// use common::config::ConfigLoader;
+///
 /// #[tokio::main]
-/// async fn main() -> Result<()> {
-///     let config = load_config();
-///     service::init(config);  // 只需这一行
+/// async fn main() -> Result<(),Error> {
+///     // 1. 设置全局配置（必须先调用）
+///     use common::config::AppConfig;
+/// use common::Error;
+/// let config = AppConfig::from_file(Some("./config/config.yaml"))?;
+///     ConfigLoader::set_global(config);
+///     
+///     // 2. 初始化服务模块（不再需要传参）
+///     service::init();
 ///     
 ///     // 现在可以在任何地方使用服务
 ///     let user_client = service::user_client().await?;
 ///     Ok(())
 /// }
 /// ```
-pub fn init(config: AppConfig) {
-    CONFIG.set(config.clone()).ok();
+pub fn init() {
+    let config = ConfigLoader::get_global()
+        .expect("全局配置未初始化，请先调用 ConfigLoader::set_global()");
+    
     REGISTRY.set(service_register_center(&config)).ok();
     CHANNELS.set(RwLock::new(HashMap::new())).ok();
     REGISTERED_SERVICES.set(RwLock::new(HashMap::new())).ok();
@@ -71,20 +79,14 @@ pub fn init(config: AppConfig) {
 
 /// 🎯 注册服务到注册中心
 /// 
-/// 自动从AppConfig读取服务信息，无需手动构造Registration
-/// 
-/// ```rust
-/// // 注册用户服务
-/// let service_id = service::register(Component::UserServer).await?;
-/// 
-/// // 程序结束时自动注销
-/// service::deregister(&service_id).await?;
-/// ```
+/// 自动从全局配置读取服务信息，无需手动构造Registration
 pub async fn register(component: Component) -> Result<String, Error> {
-    let config = CONFIG.get().ok_or_else(|| Error::Internal("未初始化配置".to_string()))?;
-    let registry = REGISTRY.get().unwrap();
+    let config = ConfigLoader::get_global()
+        .ok_or_else(|| Error::Internal("全局配置未初始化".to_string()))?;
+    let registry = REGISTRY.get()
+        .ok_or_else(|| Error::Internal("服务注册中心未初始化，请先调用 service::init()".to_string()))?;
 
-    let registration = build_registration(config, component.clone())?;
+    let registration = build_registration(&config, component.clone())?;
     let service_id = registry.register(registration).await?;
     
     // 缓存已注册的服务
@@ -123,13 +125,9 @@ pub async fn deregister_component(component: Component) -> Result<(), Error> {
 /// - 负载均衡
 /// - 连接缓存
 /// - 自动重试
-/// 
-/// ```rust
-/// let channel = service::channel("user-service").await?;
-/// let custom_channel = service::channel("payment-service").await?;
-/// ```
 pub async fn channel(service_name: &str) -> Result<Channel, Error> {
-    let config = CONFIG.get().ok_or_else(|| Error::Internal("未初始化配置".to_string()))?;
+    let config = ConfigLoader::get_global()
+        .ok_or_else(|| Error::Internal("全局配置未初始化".to_string()))?;
     let registry = REGISTRY.get().unwrap();
     let channels_cache = CHANNELS.get().unwrap();
 
@@ -189,28 +187,32 @@ pub async fn channel(service_name: &str) -> Result<Channel, Error> {
 
 /// 🎯 获取用户服务客户端
 pub async fn user_client() -> Result<crate::proto::user::user_service_client::UserServiceClient<Channel>, Error> {
-    let config = CONFIG.get().unwrap();
+    let config = ConfigLoader::get_global()
+        .ok_or_else(|| Error::Internal("全局配置未初始化".to_string()))?;
     let ch = channel(&config.rpc.user.name).await?;
     Ok(crate::proto::user::user_service_client::UserServiceClient::new(ch))
 }
 
 /// 🎯 获取好友服务客户端
 pub async fn friend_client() -> Result<crate::proto::friend::friend_service_client::FriendServiceClient<Channel>, Error> {
-    let config = CONFIG.get().unwrap();
+    let config = ConfigLoader::get_global()
+        .ok_or_else(|| Error::Internal("全局配置未初始化".to_string()))?;
     let ch = channel(&config.rpc.friend.name).await?;
     Ok(crate::proto::friend::friend_service_client::FriendServiceClient::new(ch))
 }
 
 /// 🎯 获取群组服务客户端
 pub async fn group_client() -> Result<crate::proto::group::group_service_client::GroupServiceClient<Channel>, Error> {
-    let config = CONFIG.get().unwrap();
+    let config = ConfigLoader::get_global()
+        .ok_or_else(|| Error::Internal("全局配置未初始化".to_string()))?;
     let ch = channel(&config.rpc.group.name).await?;
     Ok(crate::proto::group::group_service_client::GroupServiceClient::new(ch))
 }
 
 /// 🎯 获取聊天服务客户端
 pub async fn chat_client() -> Result<crate::message::chat_service_client::ChatServiceClient<Channel>, Error> {
-    let config = CONFIG.get().unwrap();
+    let config = ConfigLoader::get_global()
+        .ok_or_else(|| Error::Internal("全局配置未初始化".to_string()))?;
     let ch = channel(&config.rpc.chat.name).await?;
     Ok(crate::message::chat_service_client::ChatServiceClient::new(ch))
 }
@@ -220,7 +222,7 @@ pub async fn chat_client() -> Result<crate::message::chat_service_client::ChatSe
 // ============================================================================
 
 /// 根据组件类型构建服务注册信息
-fn build_registration(config: &AppConfig, component: Component) -> Result<Registration, Error> {
+fn build_registration(config: &Arc<AppConfig>, component: Component) -> Result<Registration, Error> {
     let (name, host, port, tags, health_check) = match component {
         Component::UserServer => {
             let user_config = &config.rpc.user;
@@ -384,33 +386,6 @@ async fn usage_examples() -> Result<()> {
     Ok(())
 }
 
-/// 📊 新旧架构对比
-#[allow(dead_code)]
-async fn architecture_comparison() -> Result<()> {
-    // ❌ 旧架构：三个模块，概念分散，接口复杂
-    /*
-    // 服务注册 - 在 service_register_center 模块
-    let registry = service_register_center(&config);
-    let registration = Registration { ... }; // 手动构造
-    let service_id = registry.register(registration).await?;
-
-    // 服务发现 - 在 service_discovery 模块
-    let resolver = ServiceResolver::new(registry, service_name);
-    let discovery = DynamicServiceDiscovery::new(...);
-    discovery.discovery().await?;
-
-    // 获取客户端 - 在 grpc_client 模块
-    let channel = get_chan(&config, service_name).await?;
-    let client = UserServiceClient::new(channel);
-    */
-
-    // ✅ 新架构：一个模块，概念统一，接口简洁
-    register(Component::UserServer).await?;  // 服务注册
-    let _client = user_client().await?;       // 服务发现 + 客户端获取
-
-    Ok(())
-}
-
 // ============================================================================
 // 高级API - 支持动态服务发现（可选）
 // ============================================================================
@@ -418,13 +393,9 @@ async fn architecture_comparison() -> Result<()> {
 /// 🔧 高级选项：获取带动态服务发现的通道
 /// 
 /// 当需要动态更新服务列表时使用此函数
-/// 
-/// ```rust
-/// let channel = service::dynamic_channel("user-service").await?;
-/// let client = UserServiceClient::new(channel);
-/// ```
 pub async fn dynamic_channel(service_name: &str) -> Result<crate::service_discovery::LbWithServiceDiscovery, Error> {
-    let config = CONFIG.get().ok_or_else(|| Error::Internal("未初始化配置".to_string()))?;
+    let config = ConfigLoader::get_global()
+        .ok_or_else(|| Error::Internal("全局配置未初始化".to_string()))?;
     let registry = REGISTRY.get().unwrap();
 
     // 创建动态服务发现通道
@@ -464,10 +435,6 @@ pub async fn dynamic_channel(service_name: &str) -> Result<crate::service_discov
 /// 🔧 刷新服务通道缓存
 /// 
 /// 手动触发服务列表更新
-/// 
-/// ```rust
-/// service::refresh_channel("user-service").await?;
-/// ```
 pub async fn refresh_channel(service_name: &str) -> Result<(), Error> {
     let channels_cache = CHANNELS.get().unwrap();
     
@@ -486,10 +453,6 @@ pub async fn refresh_channel(service_name: &str) -> Result<(), Error> {
 /// 🔧 刷新所有服务通道缓存
 /// 
 /// 清空所有缓存，下次访问时重新获取服务列表
-/// 
-/// ```rust
-/// service::refresh_all_channels().await?;
-/// ```
 pub async fn refresh_all_channels() -> Result<(), Error> {
     let channels_cache = CHANNELS.get().unwrap();
     
@@ -498,36 +461,6 @@ pub async fn refresh_all_channels() -> Result<(), Error> {
         let mut cache = channels_cache.write().await;
         cache.clear();
     }
-    
-    Ok(())
-}
-
-// ============================================================================
-// API选择指南
-// ============================================================================
-
-/// 🎯 API选择指南
-/// 
-/// ```rust
-/// // 🚀 推荐：99%场景使用静态负载均衡
-/// let client = service::user_client().await?;
-/// 
-/// // 🔧 高级：需要动态更新时使用
-/// let channel = service::dynamic_channel("user-service").await?;
-/// let client = UserServiceClient::new(channel);
-/// 
-/// // 🔄 手动刷新：服务变化时手动更新
-/// service::refresh_channel("user-service").await?;
-/// 
-/// // 🧹 批量刷新：系统维护时清空所有缓存
-/// service::refresh_all_channels().await?;
-/// ```
-#[allow(dead_code)]
-async fn api_selection_guide() -> Result<()> {
-    // 选择决策树：
-    // 1. 服务列表变化频繁（分钟级）？ -> dynamic_channel()
-    // 2. 服务列表变化中等（小时级）？ -> channel() + 定期refresh_channel()  
-    // 3. 服务列表变化很少（天级）？ -> channel()（推荐）
     
     Ok(())
 }
@@ -549,15 +482,17 @@ pub fn init_rustls() {
 /// 监听系统关闭信号(SIGINT, SIGTERM)，并优雅关闭服务
 /// 
 /// ```rust
+/// use tokio::sync::oneshot;
+/// use common::config::Component;
+/// use common::service::shutdown_signal;
 /// let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 /// let shutdown_task = tokio::spawn(async move {
-///     shutdown_signal(shutdown_tx, service_id, &config).await
+///     shutdown_signal(shutdown_tx, Component::UserServer).await
 /// });
 /// ```
 pub async fn shutdown_signal(
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
-    service_id: String,
-    config: &AppConfig,
+    component: Component,
 ) -> Result<()> {
     use tokio::signal;
 
@@ -586,11 +521,7 @@ pub async fn shutdown_signal(
     tracing::info!("接收到关闭信号，开始优雅关闭...");
 
     // 注销服务
-    if let Err(e) = deregister(&service_id).await {
-        tracing::error!("注销服务失败: {}", e);
-    } else {
-        tracing::info!("服务已从注册中心注销: {}", service_id);
-    }
+    deregister_component(component).await?;
 
     // 发送关闭信号
     if let Err(_) = shutdown_tx.send(()) {

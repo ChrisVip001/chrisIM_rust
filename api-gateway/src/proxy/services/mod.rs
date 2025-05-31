@@ -9,4 +9,4 @@ pub mod common;
 pub use user_service::UserServiceHandler;
 pub use friend_service::FriendServiceHandler;
 pub use group_service::GroupServiceHandler;
-pub use common_service::CommonServiceHandler; 
+pub use common_service::CommonServiceHandler;

@@ -7,6 +7,7 @@ pub struct PostgresConfig {
     pub user: String,
     pub password: String,
     pub database: String,
+    pub max_connections: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

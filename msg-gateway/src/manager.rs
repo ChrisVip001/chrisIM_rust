@@ -3,6 +3,7 @@ use std::sync::Arc;
 use common::config::AppConfig;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
+use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 
 pub(crate) use crate::client::Client;
@@ -12,7 +13,7 @@ use common::message::chat_service_client::ChatServiceClient;
 use common::message::{
     ContentType, GroupMemSeq, Msg, MsgResponse, MsgType, PlatformType, SendMsgRequest,
 };
-use common::service_discovery::LbWithServiceDiscovery;
+use common::service::chat_client;
 
 /// 用户ID类型别名
 type UserID = String;
@@ -60,7 +61,7 @@ pub struct Manager {
     
     /// 聊天服务RPC客户端
     /// 用于与msg-server通信，发送消息到Kafka队列
-    pub chat_rpc: ChatServiceClient<LbWithServiceDiscovery>,
+    pub chat_rpc: ChatServiceClient<Channel>,
 }
 
 #[allow(dead_code)]
@@ -83,7 +84,7 @@ impl Manager {
         let cache = cache::cache(config).await;
         
         // 创建与msg-server的gRPC连接
-        let chat_rpc = common::grpc_client::base::get_rpc_client(config, config.rpc.chat.name.clone())
+        let chat_rpc = chat_client()
             .await
             .expect("无法连接到聊天RPC服务");
             

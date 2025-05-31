@@ -1,7 +1,9 @@
 use tracing::info;
 
-use common::config::ConfigLoader;
+use common::config::{ConfigLoader, Component};
 use msg_gateway::ws_server::WsServer;
+use common::service::shutdown_signal;
+use tokio::sync::oneshot;
 
 /// msg-gateway 主程序入口
 /// 
@@ -30,11 +32,14 @@ async fn main() -> anyhow::Result<()> {
     // 使用指定的配置文件路径初始化全局配置
     // 配置包含WebSocket服务器、gRPC服务器、JWT密钥等所有必要信息
     let app_config = common::config::AppConfig::from_file(Some(&config_path))
-        .expect(&format!("无法从路径加载配置: {}", config_path));
+        .map_err(|e| anyhow::anyhow!("无法从配置路径 {} 加载配置: {}", config_path, e))?;
     ConfigLoader::set_global(app_config);
 
     // 确保全局配置可以正常访问
     let config = ConfigLoader::get_global().expect("获取全局配置失败");
+
+    // 初始化统一服务模块
+    common::service::init();
 
     // 初始化日志和链路追踪系统
     // 根据配置判断是否启用分布式链路追踪
@@ -55,15 +60,36 @@ async fn main() -> anyhow::Result<()> {
     info!("  2. gRPC服务器: 接收msg-server的消息推送请求");
     info!("  3. 连接管理: 自动心跳检测、JWT认证、连接状态管理");
     info!("  4. 消息路由: 智能分发单聊和群聊消息");
+
+    // 注册服务到服务注册中心
+    common::service::register(Component::MessageGateway).await?;
+    info!("WebSocket网关服务已注册到服务注册中心");
+
+    // 设置优雅关闭通道
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown_signal_task = tokio::spawn(async move {
+        shutdown_signal(shutdown_tx, Component::MessageGateway).await
+    });
     
     // 启动WebSocket服务器
     // 这会同时启动WebSocket服务器和gRPC服务器
-    WsServer::start(config).await;
+    let ws_task = tokio::spawn(async move {
+        WsServer::start(config, shutdown_rx).await;
+    });
+
+    // 等待关闭信号处理完成
+    let _ = shutdown_signal_task.await?;
+
+    // 等待WebSocket服务器关闭
+    let _ = ws_task.await?;
     
     // 在程序结束前关闭链路追踪，确保所有数据都被发送
-    info!("正在关闭链路追踪...");
-    common::logging::shutdown_telemetry();
-    
+    if ConfigLoader::get_global().map_or(false, |c| c.telemetry.enabled) {
+        info!("正在关闭链路追踪...");
+        common::logging::shutdown_telemetry();
+    }
+
+    info!("WebSocket网关服务已完全关闭");
     Ok(())
 }
 
