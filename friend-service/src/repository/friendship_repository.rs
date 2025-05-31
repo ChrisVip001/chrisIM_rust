@@ -590,7 +590,7 @@ impl FriendshipRepository {
                 u.avatar_url, 
                 u.phone,
                 COALESCE(fr.status, -1) as friendship_status,
-                u.sign,
+                u.sign
             FROM 
                 users u
             LEFT JOIN 

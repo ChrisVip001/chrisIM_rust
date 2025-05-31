@@ -16,6 +16,11 @@ use common::sms::tencent::TencentSmsService;
 use common::config::ConfigLoader;
 use common::sms::VerificationAction;
 use std::str::FromStr;
+use common::grpc_client::base::get_rpc_client;
+use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest};
+use common::proto::friend::friend_service_client::FriendServiceClient;
+use common::proto::user::user_service_client::UserServiceClient;
+use common::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务实现
 pub struct UserServiceImpl {
@@ -23,10 +28,11 @@ pub struct UserServiceImpl {
     user_config_repository: UserConfigRepository,
     sms_service: Arc<dyn SmsService>,
     redis_client: RedisClient,
+    friend_service: FriendServiceClient<LbWithServiceDiscovery>
 }
 
 impl UserServiceImpl {
-    pub fn new(pool: PgPool) -> Self {
+    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         // 获取配置
         let config = ConfigLoader::get_global().expect("获取全局配置失败");
         
@@ -40,13 +46,17 @@ impl UserServiceImpl {
             redis_client.clone(), 
             Arc::new(config.sms.clone())
         ));
-        
-        Self {
+
+        let config = ConfigLoader::get_global().expect("获取全局配置失败");
+        let service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
+
+        Ok(Self {
             repository: UserRepository::new(pool.clone()),
             user_config_repository: UserConfigRepository::new(pool.clone()),
             sms_service,
             redis_client,
-        }
+            friend_service: service_client
+        })
     }
     
     /// 处理用户信息时根据用户配置决定是否显示手机号
@@ -233,7 +243,7 @@ impl UserServiceImpl {
 
     /// 检查用户在线状态
     async fn check_user_online_status(&self, user_id: &str) -> Result<bool, Status> {
-        // 从Redis检查用户是否在线
+        // TODO 从Redis检查用户是否在线
         let mut redis_conn = self.redis_client.get_connection().map_err(|e| {
             error!("获取Redis连接失败: {}", e);
             Status::internal("获取在线状态失败")
@@ -249,13 +259,19 @@ impl UserServiceImpl {
     }
 
     /// 检查用户好友和拉黑状态
-    async fn check_friend_and_blacklist_status(&self, current_user_id: &str, target_user_id: &str) -> Result<(FriendshipStatus, bool), Status> {
-        // 由于客户端创建的复杂性，现在先返回默认状态
-        // 在实际部署中，应该通过服务发现机制连接好友服务
+    async fn check_friend_and_blacklist_status(&self, current_user_id: &str, target_user_id: &str) -> Result<(i32, bool), Status> {
+        let check_friendship_request =  CheckFriendshipRequest {
+            user_id: current_user_id.to_string(),
+            friend_id: target_user_id.to_string(),
+        };
+        let friend_status = self.friend_service.clone().check_friendship(check_friendship_request).await?.into_inner();
         
-        // TODO: 实现通过服务发现连接好友服务
-        // 目前返回默认状态：没有关系，未拉黑
-        Ok((FriendshipStatus::NoRelation, false))
+        let check_block_request = IsBlockedRequest {
+            user_id: current_user_id.to_string(),
+            blocked_user_id: target_user_id.to_string(),
+        };
+        let is_blocked = self.friend_service.clone().is_blocked(check_block_request).await?.into_inner().is_blocked;
+        Ok((friend_status.status, is_blocked))
     }
 }
 

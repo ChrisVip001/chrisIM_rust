@@ -1,21 +1,6 @@
 use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
-use common::proto::friend::{
-    AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse,
-    DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest,
-    GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse,
-    RejectFriendRequestRequest, SendFriendRequestRequest,FriendshipStatus,
-    UnblockUserRequest,BlockUserRequest,UnblockUserResponse,BlockUserResponse,
-    CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
-    DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
-    GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, 
-    SearchPotentialFriendsResponse,
-    GetAllFriendDetailListRequest, GetAllFriendDetailListResponse,
-    ToggleFriendStarRequest, ToggleFriendStarResponse,
-    ToggleFriendTopRequest, ToggleFriendTopResponse,
-    UpdateFriendRemarkRequest, UpdateFriendRemarkResponse,
-    GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo,
-};
+use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse};
 use anyhow;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -845,5 +830,25 @@ impl FriendService for FriendServiceImpl {
                 Err(Status::internal("获取用户黑名单列表失败"))
             }
         }
+    }
+
+    // 是否拉黑状态
+    async fn is_blocked(&self, request: Request<IsBlockedRequest>) -> Result<Response<IsBlockedResponse>, Status> {
+        let req = request.into_inner();
+
+        let user_id = req.user_id.clone();
+        let blocked_user_id = req.blocked_user_id.clone();
+         match self.repository.is_user_blocked(&user_id, &blocked_user_id).await {
+            Ok(is_blocked) => {
+                Ok(Response::new(IsBlockedResponse {
+                    is_blocked,
+                }))
+            },
+            Err(e) => {
+                error!("获取是否拉黑状态失败: {}", e);
+                Err(Status::internal("获取是否拉黑状态失败"))
+            }
+        }
+        
     }
 }

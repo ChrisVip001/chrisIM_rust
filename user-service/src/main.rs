@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
     };
 
     // 初始化用户服务
-    let user_service = UserServiceImpl::new(db_pool.clone());
+    let user_service = UserServiceImpl::new(db_pool.clone()).await?;
 
     // 创建并注册到服务注册中心
     let service_id =
