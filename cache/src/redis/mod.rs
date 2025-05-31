@@ -33,6 +33,9 @@ const REGISTER_CODE_EXPIRE: i64 = 300;
 /// 在线用户集合
 const USER_ONLINE_SET: &str = "user_online_set";
 
+/// 用户平台在线状态前缀
+const USER_PLATFORM_ONLINE_PREFIX: &str = "user_platform_online";
+
 /// 默认序列号步长
 const DEFAULT_SEQ_STEP: i32 = 5000;
 
@@ -656,6 +659,352 @@ impl Cache for RedisCache {
         let mut conn = self.get_connection().await?;
         let result: i64 = conn.scard(USER_ONLINE_SET).await?;
         Ok(result)
+    }
+
+    /// 用户平台登录
+    ///
+    /// 将用户在指定平台标记为在线状态
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_login(&self, user_id: &str, platform: &str) -> Result<(), Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        conn.sadd(&key, platform).await?;
+        Ok(())
+    }
+
+    /// 用户平台登出
+    ///
+    /// 将用户在指定平台标记为离线状态
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_logout(&self, user_id: &str, platform: &str) -> Result<(), Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        conn.srem(&key, platform).await?;
+        
+        // 如果用户在所有平台都下线了，删除整个集合
+        let count: i64 = conn.scard(&key).await?;
+        if count == 0 {
+            conn.del(&key).await?;
+        }
+        
+        Ok(())
+    }
+
+    /// 获取用户在线平台列表
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    ///
+    /// # 返回值
+    /// * `Vec<String>` - 用户在线的平台列表
+    async fn get_user_online_platforms(&self, user_id: &str) -> Result<Vec<String>, Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        let platforms: Vec<String> = conn.smembers(&key).await?;
+        Ok(platforms)
+    }
+
+    /// 检查用户是否在任何平台在线
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    ///
+    /// # 返回值
+    /// * `bool` - 如果用户在任何平台在线则返回true
+    async fn is_user_online_any_platform(&self, user_id: &str) -> Result<bool, Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        let count: i64 = conn.scard(&key).await?;
+        Ok(count > 0)
+    }
+
+    /// 获取用户在线平台数量
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    ///
+    /// # 返回值
+    /// * `i64` - 用户在线的平台数量
+    async fn get_user_platform_count(&self, user_id: &str) -> Result<i64, Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        let count: i64 = conn.scard(&key).await?;
+        Ok(count)
+    }
+
+    /// 存储访问令牌
+    async fn save_access_token(&self, user_id: &str, token: &str, expiry_seconds: u64) -> Result<(), Error> {
+        let key = format!("token:access:{}", user_id);
+        let mut conn = self.get_connection().await?;
+        conn.set_ex(&key, token, expiry_seconds).await?;
+        Ok(())
+    }
+
+    /// 存储刷新令牌
+    async fn save_refresh_token(&self, user_id: &str, token: &str, expiry_seconds: u64) -> Result<(), Error> {
+        let key = format!("token:refresh:{}", user_id);
+        let mut conn = self.get_connection().await?;
+        conn.set_ex(&key, token, expiry_seconds).await?;
+        Ok(())
+    }
+
+    /// 获取用户的访问令牌
+    async fn get_access_token(&self, user_id: &str) -> Result<Option<String>, Error> {
+        let key = format!("token:access:{}", user_id);
+        let mut conn = self.get_connection().await?;
+        let result: Option<String> = conn.get(&key).await?;
+        Ok(result)
+    }
+
+    /// 获取用户的刷新令牌
+    async fn get_refresh_token(&self, user_id: &str) -> Result<Option<String>, Error> {
+        let key = format!("token:refresh:{}", user_id);
+        let mut conn = self.get_connection().await?;
+        let result: Option<String> = conn.get(&key).await?;
+        Ok(result)
+    }
+
+    /// 删除用户的访问令牌
+    async fn delete_access_token(&self, user_id: &str) -> Result<(), Error> {
+        let key = format!("token:access:{}", user_id);
+        let mut conn = self.get_connection().await?;
+        conn.del(&key).await?;
+        Ok(())
+    }
+
+    /// 删除用户的刷新令牌
+    async fn delete_refresh_token(&self, user_id: &str) -> Result<(), Error> {
+        let key = format!("token:refresh:{}", user_id);
+        let mut conn = self.get_connection().await?;
+        conn.del(&key).await?;
+        Ok(())
+    }
+
+    /// 检查令牌是否存在且有效
+    async fn verify_token_exists(&self, user_id: &str, token: &str, token_type: &str) -> Result<bool, Error> {
+        let key = format!("token:{}:{}", token_type, user_id);
+        let mut conn = self.get_connection().await?;
+        let stored_token: Option<String> = conn.get(&key).await?;
+        
+        match stored_token {
+            Some(stored) => Ok(stored == token),
+            None => Ok(false),
+        }
+    }
+
+    /// 存储指定平台的访问令牌
+    async fn save_access_token_for_platform(&self, user_id: &str, token: &str, platform: &str, expiry_seconds: u64) -> Result<(), Error> {
+        let key = format!("token:access:{}:{}", user_id, platform);
+        let mut conn = self.get_connection().await?;
+        conn.set_ex(&key, token, expiry_seconds).await?;
+        Ok(())
+    }
+
+    /// 存储指定平台的刷新令牌
+    async fn save_refresh_token_for_platform(&self, user_id: &str, token: &str, platform: &str, expiry_seconds: u64) -> Result<(), Error> {
+        let key = format!("token:refresh:{}:{}", user_id, platform);
+        let mut conn = self.get_connection().await?;
+        conn.set_ex(&key, token, expiry_seconds).await?;
+        Ok(())
+    }
+
+    /// 获取指定平台的访问令牌
+    async fn get_access_token_for_platform(&self, user_id: &str, platform: &str) -> Result<Option<String>, Error> {
+        let key = format!("token:access:{}:{}", user_id, platform);
+        let mut conn = self.get_connection().await?;
+        let result: Option<String> = conn.get(&key).await?;
+        Ok(result)
+    }
+
+    /// 获取指定平台的刷新令牌
+    async fn get_refresh_token_for_platform(&self, user_id: &str, platform: &str) -> Result<Option<String>, Error> {
+        let key = format!("token:refresh:{}:{}", user_id, platform);
+        let mut conn = self.get_connection().await?;
+        let result: Option<String> = conn.get(&key).await?;
+        Ok(result)
+    }
+
+    /// 删除指定平台的访问令牌
+    async fn delete_access_token_for_platform(&self, user_id: &str, platform: &str) -> Result<(), Error> {
+        let key = format!("token:access:{}:{}", user_id, platform);
+        let mut conn = self.get_connection().await?;
+        conn.del(&key).await?;
+        Ok(())
+    }
+
+    /// 删除指定平台的刷新令牌
+    async fn delete_refresh_token_for_platform(&self, user_id: &str, platform: &str) -> Result<(), Error> {
+        let key = format!("token:refresh:{}:{}", user_id, platform);
+        let mut conn = self.get_connection().await?;
+        conn.del(&key).await?;
+        Ok(())
+    }
+
+    /// 检查用户是否还有任何平台的令牌
+    async fn check_user_has_any_tokens(&self, user_id: &str) -> Result<bool, Error> {
+        let pattern = format!("token:*:{}:*", user_id);
+        let mut conn = self.get_connection().await?;
+        let keys: Vec<String> = conn.keys(&pattern).await?;
+        Ok(!keys.is_empty())
+    }
+
+    /// 删除用户在所有平台的令牌
+    async fn delete_all_user_tokens(&self, user_id: &str) -> Result<(), Error> {
+        let access_pattern = format!("token:access:{}:*", user_id);
+        let refresh_pattern = format!("token:refresh:{}:*", user_id);
+        let mut conn = self.get_connection().await?;
+        
+        // 获取所有相关的键
+        let access_keys: Vec<String> = conn.keys(&access_pattern).await?;
+        let refresh_keys: Vec<String> = conn.keys(&refresh_pattern).await?;
+        
+        // 删除所有键
+        let mut all_keys = access_keys;
+        all_keys.extend(refresh_keys);
+        
+        if !all_keys.is_empty() {
+            conn.del(&all_keys).await?;
+        }
+        
+        Ok(())
+    }
+
+    /// 获取用户在所有平台的登录信息
+    async fn get_user_login_platforms(&self, user_id: &str) -> Result<Vec<String>, Error> {
+        let pattern = format!("token:access:{}:*", user_id);
+        let mut conn = self.get_connection().await?;
+        let keys: Vec<String> = conn.keys(&pattern).await?;
+        
+        // 从键中提取平台名称
+        let platforms: Vec<String> = keys
+            .into_iter()
+            .filter_map(|key| {
+                // 键格式: token:access:user_id:platform
+                let parts: Vec<&str> = key.split(':').collect();
+                if parts.len() == 4 {
+                    Some(parts[3].to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        Ok(platforms)
+    }
+
+    /// 批量检查用户在线状态
+    async fn batch_check_users_online(&self, user_ids: &[String]) -> Result<Vec<(String, bool)>, Error> {
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conn = self.get_connection().await?;
+        let mut results = Vec::with_capacity(user_ids.len());
+
+        // 使用管道批量检查用户是否在全局在线集合中
+        let mut pipe = redis::pipe();
+        for user_id in user_ids {
+            pipe.sismember(USER_ONLINE_SET, user_id);
+        }
+
+        let online_results: Vec<bool> = pipe.query_async(&mut conn).await?;
+
+        // 组装结果
+        for (user_id, is_online) in user_ids.iter().zip(online_results.iter()) {
+            results.push((user_id.clone(), *is_online));
+        }
+
+        Ok(results)
+    }
+
+    /// 批量获取用户在线平台信息
+    async fn batch_get_users_online_platforms(&self, user_ids: &[String]) -> Result<Vec<(String, Vec<String>)>, Error> {
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conn = self.get_connection().await?;
+        let mut results = Vec::with_capacity(user_ids.len());
+
+        // 使用管道批量获取每个用户的在线平台
+        let mut pipe = redis::pipe();
+        for user_id in user_ids {
+            let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+            pipe.smembers(&key);
+        }
+
+        let platform_results: Vec<Vec<String>> = pipe.query_async(&mut conn).await?;
+
+        // 组装结果
+        for (user_id, platforms) in user_ids.iter().zip(platform_results.iter()) {
+            results.push((user_id.clone(), platforms.clone()));
+        }
+
+        Ok(results)
+    }
+
+    /// 批量获取用户完整在线状态信息
+    async fn batch_get_users_online_status(&self, user_ids: &[String]) -> Result<Vec<crate::UserOnlineStatus>, Error> {
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conn = self.get_connection().await?;
+        let mut results = Vec::with_capacity(user_ids.len());
+
+        // 使用管道批量获取全局在线状态和平台信息
+        let mut pipe = redis::pipe();
+        
+        // 添加全局在线状态检查
+        for user_id in user_ids {
+            pipe.sismember(USER_ONLINE_SET, user_id);
+        }
+        
+        // 添加平台在线状态获取
+        for user_id in user_ids {
+            let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+            pipe.smembers(&key);
+        }
+
+        let batch_results: Vec<redis::Value> = pipe.query_async(&mut conn).await?;
+        
+        // 解析结果
+        let user_count = user_ids.len();
+        for (i, user_id) in user_ids.iter().enumerate() {
+            let is_online = if let Some(redis::Value::Int(val)) = batch_results.get(i) {
+                *val == 1
+            } else {
+                false
+            };
+
+            let online_platforms = if let Some(redis::Value::Array(platforms)) = batch_results.get(user_count + i) {
+                platforms.iter()
+                    .filter_map(|v| {
+                        if let redis::Value::BulkString(bytes) = v {
+                            String::from_utf8(bytes.clone()).ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            results.push(crate::UserOnlineStatus::new(
+                user_id.clone(),
+                is_online,
+                online_platforms,
+            ));
+        }
+
+        Ok(results)
     }
 }
 
