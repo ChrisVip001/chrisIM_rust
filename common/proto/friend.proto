@@ -33,6 +33,9 @@ service FriendService {
   // 解除拉黑
   rpc UnblockUser (UnblockUserRequest) returns (UnblockUserResponse);
   
+  // 是否拉黑状态
+  rpc IsBlocked (IsBlockedRequest) returns (IsBlockedResponse);
+  
   // 创建或更新好友分组
   rpc CreateOrUpdateFriendGroup (CreateOrUpdateFriendGroupRequest) returns (FriendGroupResponse);
   
@@ -180,6 +183,12 @@ message BlockUserRequest {
   string reason = 3;         // 拉黑原因（可选）
 }
 
+// 是否拉黑状态请求
+message IsBlockedRequest {
+  string user_id = 1;        // 操作用户ID
+  string blocked_user_id = 2; // 被操作的用户ID
+}
+
 // 拉黑用户响应
 message BlockUserResponse {
   UserBlacklist blacklist = 1;
@@ -194,6 +203,11 @@ message UnblockUserRequest {
 // 解除拉黑响应
 message UnblockUserResponse {
   bool success = 1;
+}
+
+// 是否拉黑状态响应
+message IsBlockedResponse {
+  bool is_blocked = 1;
 }
 
 // 用户黑名单记录
