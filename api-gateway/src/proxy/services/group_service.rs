@@ -49,14 +49,9 @@ impl GroupServiceHandler {
             (&Method::POST, "create") => {
                 let name = extract_string_param(&body, "name", None)?;
                 
-                let description = body.get("description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                let description = get_optional_string(&body,"description",None).unwrap_or_default();
                 
-                let avatar_url = body.get("avatarUrl")
-                    .or_else(|| body.get("avatar_url"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                let avatar_url = get_optional_string(&body,"avatarUrl",Some("avatar_url")).unwrap_or_default();
 
                 // 处理初始成员列表
                 let mut members = Vec::new();
@@ -70,9 +65,9 @@ impl GroupServiceHandler {
 
                 let response = self.client.create_group(
                     &name,
-                    description,
+                    &description,
                     &current_user_id,
-                    avatar_url,
+                    &avatar_url,
                     members
                 ).await?;
 

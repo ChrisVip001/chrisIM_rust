@@ -53,6 +53,14 @@ impl CommonServiceHandler {
             (&Method::POST, "searchFriendsAndGroups") => {
                 let keyword = get_optional_string(&body, "keyword", None).unwrap_or_default();
                 
+                // 如果关键字为空，直接返回空数组
+                if keyword.trim().is_empty() {
+                    return Ok(success_response(json!({
+                        "friends": [],
+                        "groups": []
+                    }), StatusCode::OK));
+                }
+                
                 // 使用friend_client的get_friend_list_with_params接口搜索好友
                 // 该接口支持关键字搜索且在数据库层面执行
                 let friends_response = self.friend_client.get_friend_list_with_params(

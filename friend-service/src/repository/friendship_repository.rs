@@ -957,8 +957,8 @@ impl FriendshipRepository {
         let mut added_friend_ids = Vec::new();
         for friend_id in friend_ids {
             // 检查好友关系
-            if let Ok(Some(status)) = self.check_friendship(user_id, friend_id).await {
-                if status == FriendshipStatus::Accepted {
+            if let Ok(status) = self.check_friend_relation_exists(user_id, friend_id).await {
+                if status  {
                     if sqlx::query!(
                         r#"
                         INSERT INTO friend_group_relation (id, user_id, friend_id, group_id, created_at, updated_at)
@@ -1378,4 +1378,85 @@ impl FriendshipRepository {
         
         Ok(friend)
     }
+    /// 检查两个用户之间是否存在好友关系记录
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `friend_id` - 好友ID
+    ///
+    /// # 返回
+    /// * `Result<bool>` - 是否存在好友关系记录
+    pub async fn check_friend_relation_exists(&self, user_id: &str, friend_id: &str) -> Result<bool> {
+        let result = sqlx::query!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM friend_relation
+            WHERE user_id = $1 AND friend_id = $2
+        ) AS "exists!"
+        "#,
+        user_id,
+        friend_id
+    )
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(result.exists)
+    }
+
+    /// 检查用户请求表中两个用户之间的关系
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `friend_id` - 好友ID
+    ///
+    /// # 返回
+    /// * `Result<Option<Friendship>>` - 如果存在请求关系，返回请求信息
+    pub async fn check_friendship_request(&self, user_id: &str, friend_id: &str) -> Result<Option<Friendship>> {
+        let request = sqlx::query!(
+            r#"
+            SELECT 
+                id, user_id, friend_id, message, status, created_at, updated_at, reject_reason
+            FROM friendships
+            WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+            user_id,
+            friend_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        if let Some(r) = request {
+            // 解析状态值
+            let mut status = r.status.parse::<i32>().unwrap_or(0);
+            
+            // 检查请求是否已过期
+            if status == 0 {
+                let now = Utc::now();
+                let three_days_ago = now - chrono::Duration::days(3);
+                if Utc.from_utc_datetime(&r.created_at) < three_days_ago {
+                    status = 4; // 设置为 Expired 状态
+                }
+            }
+            
+            return Ok(Some(Friendship {
+                id: r.id,
+                user_id: r.user_id,
+                friend_id: r.friend_id,
+                message: r.message.unwrap_or_default(),
+                status,
+                created_at: Utc.from_utc_datetime(&r.created_at),
+                updated_at: Utc.from_utc_datetime(&r.updated_at),
+                reject_reason: r.reject_reason,
+                friend_username: None,
+                friend_nickname: None,
+                friend_avatar_url: None,
+            }));
+        }
+        
+        Ok(None)
+    }
+    
+    
 }
