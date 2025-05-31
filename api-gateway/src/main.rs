@@ -54,11 +54,15 @@ async fn main() -> anyhow::Result<()> {
         error!("IP地理位置服务初始化失败: {}", e);
     }
 
+    // 初始化缓存
+    let cache_instance = cache::cache(&config).await;
+    info!("缓存服务初始化完成");
+
     // 初始化指标系统
     metrics::init_metrics();
 
     // 构建应用
-    let app = build_app(&config).await?;
+    let app = build_app(&config, cache_instance).await?;
 
     // 启动服务器
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
@@ -117,12 +121,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// 构建应用
-async fn build_app(config: &AppConfig) -> anyhow::Result<Router> {
+async fn build_app(config: &AppConfig, cache_instance: std::sync::Arc<dyn cache::Cache>) -> anyhow::Result<Router> {
     // 创建服务代理
     let service_proxy = proxy::ServiceProxy::new().await;
     
     // 构建路由
-    let router = router::build_routes(service_proxy, &config.gateway).await?;
+    let router = router::build_routes(service_proxy, &config.gateway, cache_instance).await?;
     
     // 配置中间件栈
     Ok(router
