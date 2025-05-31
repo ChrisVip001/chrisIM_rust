@@ -513,6 +513,12 @@ impl UserRepository {
             first = false;
         }
 
+        if let Some(address) = data.address {
+            if !first { builder.push(","); }
+            builder.push(" address = COALESCE( ").push_bind(address).push(", custom_id) ");
+            first = false;
+        }
+
         if !first { builder.push(","); }
         builder.push(" updated_at = ").push_bind(Utc::now());
         builder.push(" WHERE id = ").push_bind(id);

@@ -397,7 +397,7 @@ impl UserServiceHandler {
             "createdAt": format_timestamp(user.created_at.clone()),
             "updatedAt": format_timestamp(user.updated_at.clone()),
             "phone" : user.phone,
-            "host" : user.address,
+            "address" : user.address,
             "head_image" : user.head_image,
             "head_image_thumb" : user.head_image_thumb,
             "sex" : user.sex,
