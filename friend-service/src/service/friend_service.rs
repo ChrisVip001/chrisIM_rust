@@ -24,6 +24,7 @@ use common::config::ConfigLoader;
 use common::grpc_client::base::get_rpc_client;
 use common::grpc_client::UserServiceGrpcClient;
 use common::proto::user::user_service_client::UserServiceClient;
+use common::proto::user::{UserConfigRequest, UserConfigResponse, UserConfig};
 use common::service_discovery::LbWithServiceDiscovery;
 use common::service_register_center::service_register_center;
 use crate::repository::friendship_repository::FriendshipRepository;
@@ -645,9 +646,39 @@ impl FriendService for FriendServiceImpl {
         let mut potential_friends: Vec<_> = Vec::with_capacity(users.len());
         
         for (id, username, nickname, avatar_url, phone, friendship_status, sign) in users {
-            // 使用默认隐私设置（这里固定为2表示不显示完整手机号）
-            // 在实际生产环境中，可以从配置系统获取
-            let show_phone = 2; // 2表示不显示手机号，1表示显示
+            // 获取用户配置
+            let mut service_client_clone = self.service_client.clone();
+            let user_config_resp = match service_client_clone.get_user_config(
+                tonic::Request::new(common::proto::user::UserConfigRequest {
+                    user_id: id.clone(),
+                    allow_phone_search: None,
+                    allow_id_search: None,
+                    auto_load_video: None,
+                    auto_load_pic: None,
+                    msg_read_flag: None,
+                    sound_enabled: None,
+                    vibration_enabled: None,
+                    show_phone: None,
+                })
+            ).await {
+                Ok(response) => response.into_inner(),
+                Err(e) => {
+                    error!("获取用户配置失败: {}", e);
+                    // 获取失败时使用默认配置
+                    UserConfigResponse {
+                        user_config: Some(UserConfig {
+                            user_id: id.clone(),
+                            show_phone: Some(2), // 默认不显示手机号
+                            ..Default::default()
+                        })
+                    }
+                }
+            };
+            
+            // 从配置中获取show_phone设置（默认为2表示不显示完整手机号）
+            let show_phone = user_config_resp.user_config
+                .map(|config| config.show_phone.unwrap_or(2))
+                .unwrap_or(2);
             
             // 根据隐私配置处理手机号
             let new_phone = if let Some(phone_str) = phone {
