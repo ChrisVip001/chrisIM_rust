@@ -87,6 +87,7 @@ message UpdateUserRequest {
   optional int32 sex = 9;
   optional string username = 10;
   optional string custom_id = 11;
+  optional string sign = 12;
 }
 
 // 验证密码请求
@@ -137,6 +138,7 @@ message User {
   string tenant_id = 14;
   google.protobuf.Timestamp last_login_time = 15;
   string custom_id = 16;
+  optional string sign = 17;
 }
 
 // 用户注册请求
@@ -168,6 +170,7 @@ message UserConfigRequest{
   optional int32 msg_read_flag = 6;
   optional int32 sound_enabled = 7;
   optional int32 vibration_enabled = 8;
+  optional int32 show_phone = 9;
 }
 
 // 用户设置响应
@@ -187,6 +190,7 @@ message UserConfig {
   google.protobuf.Timestamp update_time = 8;
   optional int32 sound_enabled = 9;
   optional int32 vibration_enabled = 10;
+  optional int32 show_phone = 11;
 }
 
 // 手机验证码请求

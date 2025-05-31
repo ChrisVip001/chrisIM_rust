@@ -572,6 +572,7 @@ impl UserService for UserServiceImpl {
             msg_read_flag: user_config.msg_read_flag,
             sound_enabled: user_config.sound_enabled,
             vibration_enabled: user_config.vibration_enabled,
+            show_phone: user_config.show_phone,
             create_time: user_config.create_time.map(|dt| prost_types::Timestamp {
                 seconds: dt.timestamp(),
                 nanos: dt.timestamp_subsec_nanos() as i32,
@@ -616,6 +617,7 @@ impl UserService for UserServiceImpl {
             msg_read_flag: user_config.msg_read_flag,
             sound_enabled: user_config.sound_enabled,
             vibration_enabled: user_config.vibration_enabled,
+            show_phone: user_config.show_phone,
             create_time: user_config.create_time.map(|dt| prost_types::Timestamp {
                 seconds: dt.timestamp(),
                 nanos: dt.timestamp_subsec_nanos() as i32,

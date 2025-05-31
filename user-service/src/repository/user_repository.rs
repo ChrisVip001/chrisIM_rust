@@ -240,7 +240,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE id = $1
             "#,
@@ -249,8 +249,8 @@ impl UserRepository {
         .fetch_one(&self.pool)
         .await
         .map_err(|err| {
-            if let sqlx::Error::RowNotFound = err {
-                Error::NotFound(format!("用户ID {} 不存在", id))
+            if let sqlx::Error::RowNotFound = &err {
+                Error::NotFound(format!("用户未找到: {}", id))
             } else {
                 error!("查询用户失败: {}", err);
                 Error::Database(err)
@@ -259,7 +259,7 @@ impl UserRepository {
 
         let user = User {
             id: row.id,
-            username: row.username.unwrap_or_default(),
+            username: row.username,
             email: row.email,
             password: row.password,
             nickname: row.nickname,
@@ -270,13 +270,13 @@ impl UserRepository {
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as i32),
+            sex: row.sex,
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
-
         Ok(user)
     }
 
@@ -285,7 +285,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE username = $1
             "#,
@@ -294,8 +294,8 @@ impl UserRepository {
         .fetch_one(&self.pool)
         .await
         .map_err(|err| {
-            if let sqlx::Error::RowNotFound = err {
-                Error::NotFound(format!("用户名 {} 不存在", username))
+            if let sqlx::Error::RowNotFound = &err {
+                Error::NotFound(format!("用户未找到: {}", username))
             } else {
                 error!("查询用户失败: {}", err);
                 Error::Database(err)
@@ -304,7 +304,7 @@ impl UserRepository {
 
         let user = User {
             id: row.id,
-            username: row.username.unwrap_or_default(),
+            username: row.username,
             email: row.email,
             password: row.password,
             nickname: row.nickname,
@@ -315,13 +315,13 @@ impl UserRepository {
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as i32),
+            sex: row.sex,
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
-
         Ok(user)
     }
 
@@ -330,7 +330,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE username = $1 or phone =$1
             "#,
@@ -365,6 +365,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         Ok(user)
@@ -375,7 +376,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE email = $1
             "#,
@@ -410,6 +411,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.updated_at,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         Ok(user)
@@ -420,7 +422,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE phone = $1
             "#,
@@ -454,6 +456,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
         Ok(user)
     }
@@ -512,10 +515,14 @@ impl UserRepository {
             builder.push(" custom_id = COALESCE( ").push_bind(custom_id).push(", custom_id) ");
             first = false;
         }
-
         if let Some(address) = data.address {
             if !first { builder.push(","); }
             builder.push(" address = COALESCE( ").push_bind(address).push(", custom_id) ");
+            first = false;
+        }
+        if let Some(sign) = data.sign {
+            if !first { builder.push(","); }
+            builder.push(" sign = COALESCE( ").push_bind(sign).push(", sign) ");
             first = false;
         }
 
@@ -523,7 +530,7 @@ impl UserRepository {
         builder.push(" updated_at = ").push_bind(Utc::now());
         builder.push(" WHERE id = ").push_bind(id);
         builder.push(" RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id "
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign "
         );
         // 生成最终SQL
         let query = builder.build_query_as::<User>();
@@ -547,6 +554,7 @@ impl UserRepository {
             tenant_id: row.tenant_id,
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         debug!("用户更新成功: {}", updated_user.id);
@@ -600,7 +608,7 @@ impl UserRepository {
         let rows = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE username ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1
             ORDER BY username
@@ -637,6 +645,7 @@ impl UserRepository {
                 tenant_id: row.tenant_id.unwrap_or_default(),
                 last_login_time: row.last_login_time,
                 custom_id: row.custom_id,
+                sign: row.sign,
             })
             .collect();
 

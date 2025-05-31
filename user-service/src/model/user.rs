@@ -24,6 +24,7 @@ pub struct User {
     pub tenant_id: String,
     pub last_login_time: Option<DateTime<Utc>>,
     pub custom_id: String,
+    pub sign: Option<String>,
 }
 
 /// 创建用户请求数据
@@ -51,6 +52,7 @@ pub struct UpdateUserData {
     pub user_id: Option<String>,
     pub username: Option<String>,
     pub custom_id: Option<String>,
+    pub sign: Option<String>,
 }
 
 impl From<User> for user::User {
@@ -83,6 +85,7 @@ impl From<User> for user::User {
                 nanos: dt.timestamp_subsec_nanos() as i32,
             }),
             custom_id: user.custom_id,
+            sign: user.sign,
         }
     }
 }
@@ -122,6 +125,7 @@ impl From<user::UpdateUserRequest> for UpdateUserData {
             user_id: req.user_id,
             username: req.username,
             custom_id: req.custom_id,
+            sign: req.sign,
         }
     }
 }
