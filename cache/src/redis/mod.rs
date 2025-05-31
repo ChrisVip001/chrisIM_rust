@@ -33,6 +33,9 @@ const REGISTER_CODE_EXPIRE: i64 = 300;
 /// 在线用户集合
 const USER_ONLINE_SET: &str = "user_online_set";
 
+/// 用户平台在线状态前缀
+const USER_PLATFORM_ONLINE_PREFIX: &str = "user_platform_online";
+
 /// 默认序列号步长
 const DEFAULT_SEQ_STEP: i32 = 5000;
 
@@ -658,6 +661,83 @@ impl Cache for RedisCache {
         Ok(result)
     }
 
+    /// 用户平台登录
+    ///
+    /// 将用户在指定平台标记为在线状态
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_login(&self, user_id: &str, platform: &str) -> Result<(), Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        conn.sadd(&key, platform).await?;
+        Ok(())
+    }
+
+    /// 用户平台登出
+    ///
+    /// 将用户在指定平台标记为离线状态
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_logout(&self, user_id: &str, platform: &str) -> Result<(), Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        conn.srem(&key, platform).await?;
+        
+        // 如果用户在所有平台都下线了，删除整个集合
+        let count: i64 = conn.scard(&key).await?;
+        if count == 0 {
+            conn.del(&key).await?;
+        }
+        
+        Ok(())
+    }
+
+    /// 获取用户在线平台列表
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    ///
+    /// # 返回值
+    /// * `Vec<String>` - 用户在线的平台列表
+    async fn get_user_online_platforms(&self, user_id: &str) -> Result<Vec<String>, Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        let platforms: Vec<String> = conn.smembers(&key).await?;
+        Ok(platforms)
+    }
+
+    /// 检查用户是否在任何平台在线
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    ///
+    /// # 返回值
+    /// * `bool` - 如果用户在任何平台在线则返回true
+    async fn is_user_online_any_platform(&self, user_id: &str) -> Result<bool, Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        let count: i64 = conn.scard(&key).await?;
+        Ok(count > 0)
+    }
+
+    /// 获取用户在线平台数量
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    ///
+    /// # 返回值
+    /// * `i64` - 用户在线的平台数量
+    async fn get_user_platform_count(&self, user_id: &str) -> Result<i64, Error> {
+        let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+        let mut conn = self.get_connection().await?;
+        let count: i64 = conn.scard(&key).await?;
+        Ok(count)
+    }
+
     /// 存储访问令牌
     async fn save_access_token(&self, user_id: &str, token: &str, expiry_seconds: u64) -> Result<(), Error> {
         let key = format!("token:access:{}", user_id);
@@ -816,6 +896,115 @@ impl Cache for RedisCache {
             .collect();
         
         Ok(platforms)
+    }
+
+    /// 批量检查用户在线状态
+    async fn batch_check_users_online(&self, user_ids: &[String]) -> Result<Vec<(String, bool)>, Error> {
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conn = self.get_connection().await?;
+        let mut results = Vec::with_capacity(user_ids.len());
+
+        // 使用管道批量检查用户是否在全局在线集合中
+        let mut pipe = redis::pipe();
+        for user_id in user_ids {
+            pipe.sismember(USER_ONLINE_SET, user_id);
+        }
+
+        let online_results: Vec<bool> = pipe.query_async(&mut conn).await?;
+
+        // 组装结果
+        for (user_id, is_online) in user_ids.iter().zip(online_results.iter()) {
+            results.push((user_id.clone(), *is_online));
+        }
+
+        Ok(results)
+    }
+
+    /// 批量获取用户在线平台信息
+    async fn batch_get_users_online_platforms(&self, user_ids: &[String]) -> Result<Vec<(String, Vec<String>)>, Error> {
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conn = self.get_connection().await?;
+        let mut results = Vec::with_capacity(user_ids.len());
+
+        // 使用管道批量获取每个用户的在线平台
+        let mut pipe = redis::pipe();
+        for user_id in user_ids {
+            let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+            pipe.smembers(&key);
+        }
+
+        let platform_results: Vec<Vec<String>> = pipe.query_async(&mut conn).await?;
+
+        // 组装结果
+        for (user_id, platforms) in user_ids.iter().zip(platform_results.iter()) {
+            results.push((user_id.clone(), platforms.clone()));
+        }
+
+        Ok(results)
+    }
+
+    /// 批量获取用户完整在线状态信息
+    async fn batch_get_users_online_status(&self, user_ids: &[String]) -> Result<Vec<crate::UserOnlineStatus>, Error> {
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut conn = self.get_connection().await?;
+        let mut results = Vec::with_capacity(user_ids.len());
+
+        // 使用管道批量获取全局在线状态和平台信息
+        let mut pipe = redis::pipe();
+        
+        // 添加全局在线状态检查
+        for user_id in user_ids {
+            pipe.sismember(USER_ONLINE_SET, user_id);
+        }
+        
+        // 添加平台在线状态获取
+        for user_id in user_ids {
+            let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
+            pipe.smembers(&key);
+        }
+
+        let batch_results: Vec<redis::Value> = pipe.query_async(&mut conn).await?;
+        
+        // 解析结果
+        let user_count = user_ids.len();
+        for (i, user_id) in user_ids.iter().enumerate() {
+            let is_online = if let Some(redis::Value::Int(val)) = batch_results.get(i) {
+                *val == 1
+            } else {
+                false
+            };
+
+            let online_platforms = if let Some(redis::Value::Array(platforms)) = batch_results.get(user_count + i) {
+                platforms.iter()
+                    .filter_map(|v| {
+                        if let redis::Value::BulkString(bytes) = v {
+                            String::from_utf8(bytes.clone()).ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            results.push(crate::UserOnlineStatus::new(
+                user_id.clone(),
+                is_online,
+                online_platforms,
+            ));
+        }
+
+        Ok(results)
     }
 }
 

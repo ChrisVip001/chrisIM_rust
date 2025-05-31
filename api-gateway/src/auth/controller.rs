@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use common::auth::jwt::UserInfo;
+use std::fmt;
 
 /// 平台类型枚举
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,12 @@ pub enum PlatformType {
     Android,
     Desktop,
     Unknown,
+}
+
+impl fmt::Display for PlatformType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 impl From<&str> for PlatformType {
@@ -336,7 +343,7 @@ pub async fn refresh_token(
         &user_info.tenant_name,
         extra,
         cache_instance,
-        platform,
+        platform.clone(),
     )
     .await?;
 
@@ -414,9 +421,15 @@ async fn build_login_response(
         debug!("用户{}已标记为在线状态", user_id);
     }
 
-    // 为不同平台创建不同的token键，支持多平台同时登录
+    // 将用户在指定平台标记为在线状态
     let platform_str = platform.as_str();
-    
+    if let Err(e) = cache_instance.user_platform_login(&user_id.to_string(), platform_str).await {
+        error!("将用户{}在{}平台标记为在线状态失败: {}", user_id, platform_str, e);
+        // 不影响登录流程，继续执行
+    } else {
+        debug!("用户{}已在{}平台标记为在线状态", user_id, platform_str);
+    }
+
     // 将访问令牌存储到Redis中，按平台分别存储
     if let Err(e) = cache_instance.save_access_token_for_platform(
         &user_id.to_string(), 
@@ -467,17 +480,27 @@ async fn build_login_response(
     Ok(login_response)
 }
 
+/// 从用户信息中提取平台类型
+fn extract_platform_from_user_info(user_info: &UserInfo) -> PlatformType {
+    user_info.extra
+        .get("platform")
+        .map(|platform_str| PlatformType::from(platform_str.as_str()))
+        .unwrap_or(PlatformType::Unknown)
+}
+
 /// 处理用户登出请求（支持指定平台登出）
 pub async fn logout(
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
-    headers: HeaderMap,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Extension(user_info): Extension<UserInfo>,
 ) -> Result<impl IntoResponse, Error> {
+    let user_id = user_info.user_id.to_string();
     debug!("用户登出请求：用户ID {}", user_id);
-    // 获取token
-    // 提取平台信息
-    let platform = extract_platform_info(&headers);
+
+    // 从JWT token中提取平台信息
+    let platform = extract_platform_from_user_info(&user_info);
     let platform_str = platform.as_str();
+
+    debug!("用户{}从{}平台登出", user_id, platform_str);
 
     // 删除指定平台的访问令牌
     if let Err(e) = cache_instance.delete_access_token_for_platform(&user_id, platform_str).await {
@@ -493,13 +516,22 @@ pub async fn logout(
         debug!("用户{}在{}平台的刷新令牌已删除", user_id, platform_str);
     }
 
+    // 将用户从指定平台的在线状态中移除
+    if let Err(e) = cache_instance.user_platform_logout(&user_id, platform_str).await {
+        error!("将用户{}从{}平台在线状态移除失败: {}", user_id, platform_str, e);
+    } else {
+        debug!("用户{}已从{}平台在线状态中移除", user_id, platform_str);
+    }
+
     // 检查用户是否还有其他平台的登录token，如果没有则清理在线状态
     let has_other_tokens = cache_instance.check_user_has_any_tokens(&user_id).await.unwrap_or(true);
-    if !has_other_tokens {
+    let is_online_any_platform = cache_instance.is_user_online_any_platform(&user_id).await.unwrap_or(true);
+    
+    if !has_other_tokens || !is_online_any_platform {
         if let Err(e) = cache_instance.user_logout(&user_id).await {
             error!("清理用户{}在线状态失败: {}", user_id, e);
         } else {
-            debug!("用户{}已从在线状态中移除", user_id);
+            debug!("用户{}已从全局在线状态中移除", user_id);
         }
     }
 
@@ -518,15 +550,32 @@ pub async fn logout(
 /// 处理用户全平台登出请求
 pub async fn logout_all_platforms(
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Extension(user_info): Extension<UserInfo>,
 ) -> Result<impl IntoResponse, Error> {
+    let user_id = user_info.user_id.to_string();
     debug!("用户全平台登出请求：用户ID {}", user_id);
 
-    // 清理用户的在线状态
+    // 先获取用户在线的平台列表
+    let platforms = match cache_instance.get_user_online_platforms(&user_id).await {
+        Ok(platforms) => platforms,
+        Err(e) => {
+            warn!("获取用户{}在线平台失败: {}", user_id, e);
+            vec![]
+        }
+    };
+
+    // 从所有平台移除在线状态
+    for platform in &platforms {
+        if let Err(e) = cache_instance.user_platform_logout(&user_id, platform).await {
+            error!("将用户{}从{}平台移除失败: {}", user_id, platform, e);
+        }
+    }
+
+    // 清理用户的全局在线状态
     if let Err(e) = cache_instance.user_logout(&user_id).await {
-        error!("清理用户{}在线状态失败: {}", user_id, e);
+        error!("清理用户{}全局在线状态失败: {}", user_id, e);
     } else {
-        debug!("用户{}已从在线状态中移除", user_id);
+        debug!("用户{}已从全局在线状态中移除", user_id);
     }
 
     // 删除所有平台的令牌
@@ -536,12 +585,13 @@ pub async fn logout_all_platforms(
         debug!("用户{}所有平台的令牌已删除", user_id);
     }
 
-    info!("用户{}全平台登出成功", user_id);
+    info!("用户{}全平台登出成功，涉及平台: {:?}", user_id, platforms);
 
     // 返回成功响应
     Ok(success_response(
         serde_json::json!({
-            "message": "全平台登出成功"
+            "message": "全平台登出成功",
+            "platforms_logged_out": platforms
         }),
         StatusCode::OK
     ))
@@ -550,30 +600,183 @@ pub async fn logout_all_platforms(
 /// 获取用户在线平台信息
 pub async fn get_user_platforms(
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
-    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Extension(user_info): Extension<UserInfo>,
 ) -> Result<impl IntoResponse, Error> {
+    let user_id = user_info.user_id.to_string();
     debug!("获取用户{}的在线平台信息", user_id);
 
-    // 获取用户在所有平台的登录信息
-    let platforms = match cache_instance.get_user_login_platforms(&user_id).await {
+    // 获取用户在所有平台的登录token信息（基于token）
+    let token_platforms = match cache_instance.get_user_login_platforms(&user_id).await {
         Ok(platforms) => platforms,
         Err(e) => {
-            error!("获取用户{}的平台信息失败: {}", user_id, e);
-            return Ok(error_response(
-                &format!("获取平台信息失败: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ));
+            error!("获取用户{}的token平台信息失败: {}", user_id, e);
+            vec![]
         }
     };
 
-    debug!("用户{}当前在线平台: {:?}", user_id, platforms);
+    // 获取用户在线平台信息（基于在线状态）
+    let online_platforms = match cache_instance.get_user_online_platforms(&user_id).await {
+        Ok(platforms) => platforms,
+        Err(e) => {
+            error!("获取用户{}的在线平台信息失败: {}", user_id, e);
+            vec![]
+        }
+    };
+
+    // 获取在线平台数量
+    let platform_count = cache_instance.get_user_platform_count(&user_id).await.unwrap_or(0);
+
+    debug!("用户{}当前token平台: {:?}, 在线平台: {:?}", user_id, token_platforms, online_platforms);
 
     // 返回成功响应
     Ok(success_response(
         serde_json::json!({
             "user_id": user_id,
-            "platforms": platforms,
-            "platform_count": platforms.len()
+            "token_platforms": token_platforms,
+            "online_platforms": online_platforms,
+            "platform_count": platform_count,
+            "message": "平台信息获取成功"
+        }),
+        StatusCode::OK
+    ))
+}
+
+/// 批量获取好友在线状态请求
+#[derive(Debug, Deserialize)]
+pub struct BatchGetFriendsOnlineRequest {
+    /// 好友用户ID列表
+    pub user_ids: Vec<String>,
+}
+
+/// 批量获取好友在线状态响应
+#[derive(Debug, Serialize)]
+pub struct BatchGetFriendsOnlineResponse {
+    /// 好友在线状态列表
+    pub friends_status: Vec<cache::UserOnlineStatus>,
+    /// 请求的用户数量
+    pub total_count: usize,
+    /// 在线用户数量
+    pub online_count: usize,
+    /// 消息
+    pub message: String,
+}
+
+/// 批量获取好友在线状态
+/// 
+/// 支持一次性查询多个用户的在线状态信息，包括全局在线状态和各平台在线情况
+pub async fn batch_get_friends_online_status(
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(user_info): Extension<UserInfo>,
+    Json(request): Json<BatchGetFriendsOnlineRequest>,
+) -> Result<impl IntoResponse, Error> {
+    let requester_user_id = user_info.user_id.to_string();
+    debug!("用户{}批量查询{}个好友的在线状态", requester_user_id, request.user_ids.len());
+
+    // 验证请求参数
+    if request.user_ids.is_empty() {
+        return Ok(error_response("用户ID列表不能为空", StatusCode::BAD_REQUEST));
+    }
+
+    if request.user_ids.len() > 100 {
+        return Ok(error_response("一次最多只能查询100个用户的在线状态", StatusCode::BAD_REQUEST));
+    }
+
+    // 去重用户ID
+    let mut unique_user_ids: Vec<String> = request.user_ids.clone();
+    unique_user_ids.sort();
+    unique_user_ids.dedup();
+
+    // 批量获取用户在线状态
+    let friends_status = match cache_instance.batch_get_users_online_status(&unique_user_ids).await {
+        Ok(status_list) => status_list,
+        Err(e) => {
+            error!("批量获取用户在线状态失败: {}", e);
+            return Ok(error_response(
+                "获取好友在线状态失败",
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
+        }
+    };
+
+    // 统计在线用户数量
+    let online_count = friends_status.iter().filter(|status| status.is_online).count();
+    let total_count = friends_status.len();
+
+    info!(
+        "用户{}成功查询{}个好友的在线状态，其中{}个在线",
+        requester_user_id, total_count, online_count
+    );
+
+    // 构建响应
+    let response = BatchGetFriendsOnlineResponse {
+        friends_status,
+        total_count,
+        online_count,
+        message: "好友在线状态获取成功".to_string(),
+    };
+
+    Ok(success_response(response, StatusCode::OK))
+}
+
+/// 简化版批量检查好友在线状态
+/// 
+/// 只返回用户ID和在线状态的简单映射，适用于只需要知道在线/离线状态的场景
+pub async fn batch_check_friends_online(
+    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(user_info): Extension<UserInfo>,
+    Json(request): Json<BatchGetFriendsOnlineRequest>,
+) -> Result<impl IntoResponse, Error> {
+    let requester_user_id = user_info.user_id.to_string();
+    debug!("用户{}批量检查{}个好友的简单在线状态", requester_user_id, request.user_ids.len());
+
+    // 验证请求参数
+    if request.user_ids.is_empty() {
+        return Ok(error_response("用户ID列表不能为空", StatusCode::BAD_REQUEST));
+    }
+
+    if request.user_ids.len() > 200 {
+        return Ok(error_response("一次最多只能查询200个用户的在线状态", StatusCode::BAD_REQUEST));
+    }
+
+    // 去重用户ID
+    let mut unique_user_ids: Vec<String> = request.user_ids.clone();
+    unique_user_ids.sort();
+    unique_user_ids.dedup();
+
+    // 批量检查用户在线状态
+    let online_status_list = match cache_instance.batch_check_users_online(&unique_user_ids).await {
+        Ok(status_list) => status_list,
+        Err(e) => {
+            error!("批量检查用户在线状态失败: {}", e);
+            return Ok(error_response(
+                "检查好友在线状态失败",
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
+        }
+    };
+
+    // 统计在线用户数量
+    let online_count = online_status_list.iter().filter(|(_, is_online)| *is_online).count();
+    let total_count = online_status_list.len();
+
+    info!(
+        "用户{}成功检查{}个好友的在线状态，其中{}个在线",
+        requester_user_id, total_count, online_count
+    );
+
+    // 构建响应数据结构
+    let mut online_status_map = std::collections::HashMap::new();
+    for (user_id, is_online) in online_status_list {
+        online_status_map.insert(user_id, is_online);
+    }
+
+    // 返回成功响应
+    Ok(success_response(
+        serde_json::json!({
+            "online_status": online_status_map,
+            "total_count": total_count,
+            "online_count": online_count,
+            "message": "好友在线状态检查成功"
         }),
         StatusCode::OK
     ))

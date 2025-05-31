@@ -17,7 +17,7 @@ use crate::middleware::get_client_ip;
 /// 认证中间件
 pub async fn auth_middleware(
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Response {
     let config = match ConfigLoader::get_global() {
@@ -92,14 +92,11 @@ pub async fn auth_middleware(
         }
     };
 
-    // 从请求头提取平台信息
-    let headers = req.headers();
-    let system_type = headers
-        .get("system-type")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("unknown");
-
-    let platform = PlatformType::from(system_type);
+    // 从JWT token中提取平台信息，而不是从请求头
+    let platform = user_info.extra
+        .get("platform")
+        .map(|platform_str| PlatformType::from(platform_str.as_str()))
+        .unwrap_or(PlatformType::Unknown);
     let platform_str = platform.as_str();
 
     debug!(
@@ -164,9 +161,7 @@ pub async fn auth_middleware(
         user_info.user_id, user_info.username, platform_str, path
     );
 
-    // 将用户信息和平台信息添加到请求扩展中
-    let mut request = req;
-    request.extensions_mut().insert(user_info);
-    request.extensions_mut().insert(platform);
-    next.run(request).await
+    // 将用户信息添加到请求扩展中
+    req.extensions_mut().insert(user_info);
+    next.run(req).await
 }

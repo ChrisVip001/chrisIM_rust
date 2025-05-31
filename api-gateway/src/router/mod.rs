@@ -101,14 +101,26 @@ pub async fn build_routes(
         .route("/api/user/login", post(controller::login))
         .route("/api/user/loginByPhone", post(controller::login_by_phone))
         .route("/api/user/refresh", post(controller::refresh_token))
-        .route("/api/user/logout", post(controller::logout))
-        .route("/api/user/logout-all/{user_id}", post(controller::logout_all_platforms))
-        .route("/api/user/platforms/{user_id}", get(controller::get_user_platforms))
         // 文件上传路由（无需认证）
         .route("/api/files/presigned-url", post(get_presigned_upload_url))
         .route("/api/files/validate-upload", post(validate_file_upload))
         .route("/api/files/register-avatar", post(get_register_avatar_url))
         .route("/api/files/validate-register-avatar", post(validate_register_avatar));
+
+    // 需要认证的路由
+    let authenticated_routes = Router::new()
+        // 用户管理路由
+        .route("/api/user/logout", post(controller::logout))
+        .route("/api/user/logout-all", post(controller::logout_all_platforms))
+        .route("/api/user/platforms", get(controller::get_user_platforms))
+        // 好友在线状态查询路由
+        .route("/api/friends/online-status", post(controller::batch_get_friends_online_status))
+        .route("/api/friends/online-check", post(controller::batch_check_friends_online))
+        .layer(axum::Extension(cache_instance.clone()))
+        .layer(middleware::from_fn(auth_middleware));
+
+    // 合并路由
+    router = router.merge(authenticated_routes);
 
     // 添加动态路由
     let service_proxy = Arc::new(service_proxy);

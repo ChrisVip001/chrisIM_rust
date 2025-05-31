@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use common::message::GroupMemSeq;
+use serde::{Deserialize, Serialize};
 
 use common::config::AppConfig;
 use common::error::Error;
@@ -95,6 +96,51 @@ pub trait Cache: Sync + Send + Debug {
 
     /// 在线用户计数
     async fn online_count(&self) -> Result<i64, Error>;
+
+    /// 用户平台登录
+    /// 
+    /// 将用户在指定平台标记为在线状态
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_login(&self, user_id: &str, platform: &str) -> Result<(), Error>;
+
+    /// 用户平台登出
+    /// 
+    /// 将用户在指定平台标记为离线状态
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_logout(&self, user_id: &str, platform: &str) -> Result<(), Error>;
+
+    /// 获取用户在线平台列表
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `Vec<String>` - 用户在线的平台列表
+    async fn get_user_online_platforms(&self, user_id: &str) -> Result<Vec<String>, Error>;
+
+    /// 检查用户是否在任何平台在线
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `bool` - 如果用户在任何平台在线则返回true
+    async fn is_user_online_any_platform(&self, user_id: &str) -> Result<bool, Error>;
+
+    /// 获取用户在线平台数量
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `i64` - 用户在线的平台数量
+    async fn get_user_platform_count(&self, user_id: &str) -> Result<i64, Error>;
 
     /// 存储访问令牌
     /// 
@@ -228,6 +274,59 @@ pub trait Cache: Sync + Send + Debug {
     /// # 返回值
     /// * `Vec<String>` - 用户已登录的平台列表
     async fn get_user_login_platforms(&self, user_id: &str) -> Result<Vec<String>, Error>;
+
+    /// 批量检查用户在线状态
+    /// 
+    /// # 参数
+    /// * `user_ids` - 用户ID列表
+    /// 
+    /// # 返回值
+    /// * `Vec<(String, bool)>` - 用户ID和对应的在线状态列表
+    async fn batch_check_users_online(&self, user_ids: &[String]) -> Result<Vec<(String, bool)>, Error>;
+
+    /// 批量获取用户在线平台信息
+    /// 
+    /// # 参数
+    /// * `user_ids` - 用户ID列表
+    /// 
+    /// # 返回值
+    /// * `Vec<(String, Vec<String>)>` - 用户ID和对应的在线平台列表
+    async fn batch_get_users_online_platforms(&self, user_ids: &[String]) -> Result<Vec<(String, Vec<String>)>, Error>;
+
+    /// 批量获取用户完整在线状态信息
+    /// 
+    /// # 参数
+    /// * `user_ids` - 用户ID列表
+    /// 
+    /// # 返回值
+    /// * `Vec<UserOnlineStatus>` - 用户在线状态信息列表
+    async fn batch_get_users_online_status(&self, user_ids: &[String]) -> Result<Vec<UserOnlineStatus>, Error>;
+}
+
+/// 用户在线状态信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserOnlineStatus {
+    /// 用户ID
+    pub user_id: String,
+    /// 是否在线（全局状态）
+    pub is_online: bool,
+    /// 在线平台列表
+    pub online_platforms: Vec<String>,
+    /// 在线平台数量
+    pub platform_count: i64,
+}
+
+impl UserOnlineStatus {
+    /// 创建新的用户在线状态
+    pub fn new(user_id: String, is_online: bool, online_platforms: Vec<String>) -> Self {
+        let platform_count = online_platforms.len() as i64;
+        Self {
+            user_id,
+            is_online,
+            online_platforms,
+            platform_count,
+        }
+    }
 }
 
 /// 根据配置创建缓存实例
