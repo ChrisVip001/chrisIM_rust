@@ -193,18 +193,14 @@ impl FriendServiceHandler {
             
             // 获取黑名单列表
             (&Method::POST, "getBlacklist") => {
-                let page = get_i64_param(&body, "page", 1);
-                let page_size = get_i64_param(&body, "pageSize", 20);
-                
-                let response = self.client.get_user_blacklist(&current_user_id, page, page_size).await?;
+                let response = self.client.get_user_blacklist(&current_user_id).await?;
                 
                 let blacklist_items = response.blacklist.iter()
                     .map(|item| self.convert_blacklist_with_info_to_json(item))
                     .collect::<Vec<_>>();
                 
                 Ok(success_response(json!({
-                    "blacklist": blacklist_items,
-                    "total": response.total
+                    "blacklist": blacklist_items
                 }), StatusCode::OK))
             }
 

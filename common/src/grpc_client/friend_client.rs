@@ -295,13 +295,9 @@ impl FriendServiceGrpcClient {
     pub async fn get_user_blacklist(
         &mut self,
         user_id: &str,
-        page: i64,
-        page_size: i64,
     ) -> Result<crate::proto::friend::GetUserBlacklistResponse> {
         let request = Request::new(crate::proto::friend::GetUserBlacklistRequest {
             user_id: user_id.to_string(),
-            page,
-            page_size,
         });
 
         let response = self.service_client.get_user_blacklist(request).await?;

@@ -216,8 +216,6 @@ message UserBlacklistWithInfo {
 // 获取黑名单列表请求
 message GetUserBlacklistRequest {
   string user_id = 1;                    // 用户ID
-  int64 page = 2;                        // 页码
-  int64 page_size = 3;                   // 每页数量
 }
 
 // 获取黑名单列表响应

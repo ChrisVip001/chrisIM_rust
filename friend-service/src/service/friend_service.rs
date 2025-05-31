@@ -781,23 +781,12 @@ impl FriendService for FriendServiceImpl {
         let req = request.into_inner();
         
         let user_id = req.user_id.clone();
-        let page = if req.page > 0 { Some(req.page) } else { None };
-        let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
         
         // 检查用户是否存在
         self.check_user_exists(&user_id).await?;
         
-        // 获取黑名单总数
-        let total = match self.repository.count_user_blacklist(&user_id).await {
-            Ok(count) => count,
-            Err(e) => {
-                error!("获取用户黑名单总数失败: {}", e);
-                return Err(Status::internal("获取用户黑名单总数失败"));
-            }
-        };
-        
         // 获取带用户信息的黑名单列表
-        match self.repository.get_user_blacklist_with_info(&user_id, page, page_size).await {
+        match self.repository.get_user_blacklist_with_info(&user_id, None, None).await {
             Ok(blacklist_with_info) => {
                 let blacklist_protos = blacklist_with_info
                     .into_iter()
@@ -813,7 +802,7 @@ impl FriendService for FriendServiceImpl {
                 
                 Ok(Response::new(GetUserBlacklistResponse {
                     blacklist: blacklist_protos,
-                    total,
+                    total: 0, // 保留字段，但不再使用
                 }))
             }
             Err(e) => {

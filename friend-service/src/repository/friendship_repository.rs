@@ -873,11 +873,6 @@ impl FriendshipRepository {
         page: Option<i64>,
         page_size: Option<i64>,
     ) -> Result<Vec<(UserBlacklist, Option<String>, Option<String>, Option<String>)>> {
-        // 默认分页参数
-        let page = page.unwrap_or(1);
-        let page_size = page_size.unwrap_or(20);
-        let offset = (page - 1) * page_size;
-        
         // 查询用户黑名单，并联合用户表获取用户信息
         let rows = sqlx::query!(
             r#"
@@ -894,11 +889,8 @@ impl FriendshipRepository {
             LEFT JOIN users u ON ub.blocked_user_id = u.id
             WHERE ub.user_id = $1
             ORDER BY ub.created_at DESC
-            LIMIT $2 OFFSET $3
             "#,
-            user_id,
-            page_size,
-            offset
+            user_id
         )
         .fetch_all(&self.pool)
         .await?;
