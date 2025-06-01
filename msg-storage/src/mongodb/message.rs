@@ -12,7 +12,7 @@ use tracing::log::{debug, warn};
 
 use common::config::AppConfig;
 use common::error::Error;
-use common::message::{GroupMemSeq, Msg};
+use common::proto::message::{GroupMemSeq, Msg};
 
 use crate::message::{MsgRecBoxCleaner, MsgRecBoxRepo};
 use crate::mongodb::utils::to_doc;
@@ -297,7 +297,7 @@ impl MsgRecBoxCleaner for MsgBox {
 mod tests {
     use std::ops::Deref;
 
-    use common::message::{MsgType, PlatformType};
+    use common::proto::message::{MsgType, PlatformType};
     use super::super::test::MongoDbTester;
 
     use super::*;

@@ -22,7 +22,7 @@ pub mod friend {
 }
 
 
-pub mod group_message {
+pub mod message {
     tonic::include_proto!("messages");
 
     // 生成用于反射的文件描述符集

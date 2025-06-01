@@ -183,16 +183,41 @@ message Group {
   google.protobuf.Timestamp updated_at = 8;
 }
 
+message GroupMembersIdRequest { string group_id = 1; }
+
+/// group information also related to database
+message GroupInfo {
+  string id = 1;
+  string owner = 2;
+  string name = 3;
+  string avatar = 4;
+  string description = 5;
+  string announcement = 6;
+  int64 create_time = 7;
+  int64 update_time = 8;
+}
+
 // 成员
 message Member {
-  string id = 1;
+  string id = 1;                                // 成员记录ID (VARCHAR(36) PRIMARY KEY)
+  string group_id = 2;                          // 群组ID (VARCHAR(36) NOT NULL)
+  string user_id = 3;                           // 用户ID (VARCHAR(36) NOT NULL)
+  optional string username = 4;                 // 用户名（从users表关联）
+  optional string nickname = 5;                 // 昵称（从users表关联）
+  optional string avatar_url = 6;               // 头像URL（从users表关联）
+  MemberRole role = 7;                          // 成员角色 (VARCHAR(10) NOT NULL DEFAULT 'MEMBER')
+  google.protobuf.Timestamp joined_at = 8;      // 加入时间 (TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)
+}
+
+message GetMemberReq {
+  string user_id = 1;
   string group_id = 2;
-  string user_id = 3;
-  optional string username = 4;
-  optional string nickname = 5;
-  optional string avatar_url = 6;
-  MemberRole role = 7;
-  google.protobuf.Timestamp joined_at = 8;
+  repeated string mem_ids = 3;
+}
+
+message GetGroupAndMembersResp {
+  GroupInfo group = 1;
+  repeated Member members = 2;
 }
 
 // 用户的群组
@@ -409,7 +434,18 @@ message UpdateMemberSettingsRequest {
   string nickname_in_group = 4;
 }
 
-// 新增消息定义 - 群二维码
+// 群邀请（与group_invitations表对应）
+message GroupInvitation {
+  string id = 1;                                        // 邀请记录ID (VARCHAR(36) PRIMARY KEY)
+  string group_id = 2;                                  // 群组ID (VARCHAR(36) NOT NULL)
+  string inviter_id = 3;                                // 邀请人ID (VARCHAR(36) NOT NULL)
+  string invitee_id = 4;                                // 被邀请人ID (VARCHAR(36) NOT NULL)
+  string status = 5;                                    // 邀请状态：PENDING、ACCEPTED、REJECTED (VARCHAR(10) NOT NULL DEFAULT 'PENDING')
+  google.protobuf.Timestamp created_at = 6;             // 创建时间 (TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)
+  google.protobuf.Timestamp updated_at = 7;             // 更新时间 (TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)
+}
+
+// 群二维码（与group_qrcodes表对应）
 message GroupQrcode {
   string id = 1;
   string group_id = 2;
@@ -433,4 +469,23 @@ message GroupQrcodeResponse {
 
 message GetGroupQrcodeRequest {
   string group_id = 1;
+}
+
+/// 创建群组请求对象
+message GroupCreate {
+  string id = 1;                    // 群组ID
+  string owner = 2;                 // 群主ID
+  string avatar = 3;                // 群头像
+  string group_name = 4;            // 群名称
+  repeated string members_id = 5;   // 群成员ID列表
+}
+
+/// 群组更新信息
+message GroupUpdate {
+  string id = 1;            // 群组ID
+  string name = 2;          // 群名称
+  string avatar = 3;        // 群头像
+  string description = 4;   // 群描述
+  string announcement = 5;  // 群公告
+  int64 update_time = 6;    // 更新时间
 } 

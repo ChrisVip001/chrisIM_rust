@@ -69,8 +69,8 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use common::message::msg_service_server::MsgServiceServer;
-    use common::message::Msg;
+    use common::proto::message::msg_service_server::MsgServiceServer;
+    use common::proto::message::Msg;
     use msg_gateway::rpc;
     use tonic::server::NamedService;
 

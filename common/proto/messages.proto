@@ -205,6 +205,12 @@ message MsgResponse {
   string err = 4;        // 错误信息（空字符串表示成功）
 }
 
+message SaveGroupMsgRequest {
+  Msg message = 1;
+  bool need_to_history = 2;
+  repeated GroupMemSeq members = 3;
+}
+
 /// 群成员序列号信息
 /// 用于群聊消息的序列号管理和推送控制
 message GroupMemSeq {
@@ -214,17 +220,19 @@ message GroupMemSeq {
   bool need_update = 4;  // 是否需要更新到数据库
 }
 
+message SendMsgResponse {}
+
 /// 消息服务接口
 /// 提供消息发送和推送的gRPC服务
 service MsgService {
   /// 通过RPC发送消息
-  rpc SendMessage(SendMsgRequest) returns (MsgResponse);
+   rpc SendMessage(SendMsgRequest) returns (SendMsgResponse);
   
   /// 通过WebSocket向用户发送单聊消息
-  rpc SendMsgToUser(SendMsgRequest) returns (MsgResponse);
+  rpc SendMsgToUser(SendMsgRequest) returns (SendMsgResponse);
   
   /// 通过WebSocket向用户发送群聊消息
-  rpc SendGroupMsgToUser(SendGroupMsgRequest) returns (MsgResponse);
+  rpc SendGroupMsgToUser(SendGroupMsgRequest) returns (SendMsgResponse);
 }
 
 /// 聊天服务接口
@@ -232,4 +240,58 @@ service MsgService {
 service ChatService { 
   /// 发送消息到Kafka队列
   rpc SendMsg(SendMsgRequest) returns (MsgResponse); 
+}
+
+/// 消息内容（包含@提及功能）
+message MsgContent {
+  string content = 1;           // 消息文本内容
+  optional Mention mention = 2; // @提及信息
+}
+
+/// @提及信息
+message Mention {
+  bool all = 1;                   // 是否@所有人
+  repeated string user_ids = 2;   // 被@的用户ID列表
+}
+
+/// 单聊消息内容
+/// 用于发送单聊消息或群聊消息，通过websocket连接客户端
+/// 接收来自客户端的消息后发送到消息队列(MQ)
+/// 只为其他RPC服务提供发送消息功能
+message Single {
+  string content = 2;           // 消息内容
+  ContentType content_type = 3; // 消息类型
+}
+
+/// 保存消息请求
+message SaveMessageRequest {
+  Msg message = 1;          // 要保存的消息
+  bool need_to_history = 2; // 是否需要保存到历史记录
+}
+
+/// 获取数据库消息请求
+message GetDbMsgRequest {
+  string user_id = 1;  // 用户ID
+  int64 start = 2;     // 开始序列号
+  int64 end = 3;       // 结束序列号
+}
+
+/// 获取数据库消息列表请求
+message GetDbMessagesRequest {
+  string user_id = 1;    // 用户ID
+  int64 send_start = 2;  // 发送开始时间
+  int64 send_end = 3;    // 发送结束时间
+  int64 start = 4;       // 开始序列号
+  int64 end = 5;         // 结束序列号
+}
+
+/// 删除消息请求
+message DelMsgRequest {
+  string user_id = 1;         // 用户ID
+  repeated int64 msg_id = 2;  // 要删除的消息ID列表
+}
+
+/// 保存最大序列号请求
+message SaveMaxSeqRequest { 
+  string user_id = 1;  // 用户ID
 }

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use tonic::Request;
 
-use crate::message::chat_service_client::ChatServiceClient;
-use crate::message::{SendMsgRequest, MsgResponse};
+use crate::proto::message::chat_service_client::ChatServiceClient;
+use crate::proto::message::{SendMsgRequest, MsgResponse};
 use crate::service_discovery::LbWithServiceDiscovery;
 
 /// 聊天服务gRPC客户端

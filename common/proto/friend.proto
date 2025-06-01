@@ -248,13 +248,13 @@ message GetUserBlacklistResponse {
 
 // 好友分组
 message FriendGroup {
-  string id = 1;
-  string user_id = 2;
-  string group_name = 3;
-  int32 sort_order = 4;
-  google.protobuf.Timestamp created_at = 5;
-  google.protobuf.Timestamp updated_at = 6;
-  int32 friend_count = 7;  // 分组内好友数量
+  string id = 1;                                // 分组ID (VARCHAR(36) PRIMARY KEY)
+  string user_id = 2;                           // 用户ID (VARCHAR(36) NOT NULL)
+  string group_name = 3;                        // 分组名称 (VARCHAR(50) NOT NULL)
+  int32 sort_order = 4;                         // 排序顺序 (INT DEFAULT 0)
+  google.protobuf.Timestamp created_at = 5;     // 创建时间 (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+  google.protobuf.Timestamp updated_at = 6;     // 更新时间 (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+  int32 friend_count = 7;                       // 分组内好友数量（计算字段）
 }
 
 // 创建或更新好友分组请求
@@ -394,4 +394,116 @@ message UpdateFriendRemarkRequest {
 message UpdateFriendRemarkResponse {
   bool success = 1;          // 操作是否成功
   DetailedFriend friend = 2; // 更新后的好友信息
+}
+
+/// 创建好友申请请求
+message FsCreate {
+  string user_id = 1;           // 申请者用户ID
+  string friend_id = 2;         // 被申请者用户ID
+  optional string apply_msg = 3; // 申请消息
+  optional string req_remark = 4; // 申请备注
+  string source = 5;            // 申请来源
+}
+
+/// 更新好友申请请求（仅用于更新好友申请请求）
+message FsUpdate {
+  string id = 1;          // 好友申请ID
+  string apply_msg = 2;   // 申请消息
+  string req_remark = 3;  // 申请备注
+}
+
+/// 同意好友申请响应
+message AgreeReply {
+  string fs_id = 1;                // 好友申请ID
+  optional string resp_msg = 2;    // 响应消息
+  optional string resp_remark = 3; // 响应备注
+}
+
+/// 好友数据库记录
+message FriendDb {
+  int64 id = 1;                // 数据库记录ID
+  string fs_id = 2;            // 好友关系ID
+  string user_id = 3;          // 用户ID
+  string friend_id = 4;        // 好友ID
+  FriendshipStatus status = 5; // 好友状态
+  optional string remark = 6;  // 备注
+  string source = 7;           // 来源
+  int64 create_time = 8;       // 创建时间
+  int64 update_time = 9;       // 更新时间
+}
+
+/// 好友信息（详细版本）
+message FriendInfo {
+  string id = 1;              // 好友用户ID
+  string name = 2;            // 好友姓名
+  string avatar = 3;          // 好友头像
+  string gender = 4;          // 好友性别
+  int32 age = 5;              // 好友年龄
+  optional string region = 6; // 好友地区
+  string account = 7;         // 好友账号
+  string signature = 8;       // 好友个性签名
+  optional string email = 9;  // 好友邮箱
+}
+
+/// 带用户信息的好友关系
+message FriendshipWithUser {
+  string fs_id = 1;             // 好友关系ID
+  string user_id = 2;           // 用户ID
+  string name = 3;              // 用户姓名
+  string avatar = 4;            // 用户头像
+  string gender = 5;            // 用户性别
+  int32 age = 6;                // 用户年龄
+  optional string region = 7;   // 用户地区
+  FriendshipStatus status = 8;  // 好友状态
+  optional string apply_msg = 9; // 申请消息
+  string source = 10;           // 申请来源
+  int64 create_time = 11;       // 创建时间
+  string account = 12;          // 用户账号
+  optional string remark = 13;  // 备注
+  optional string email = 14;   // 用户邮箱
+}
+
+/// 完整的好友信息（来自原message.proto）
+message FriendComplete {
+  string fs_id = 1;             // 好友关系ID
+  string friend_id = 2;         // 好友用户ID
+  string account = 3;           // 好友账号
+  string name = 4;              // 好友姓名
+  string avatar = 5;            // 好友头像
+  string gender = 6;            // 好友性别
+  int32 age = 7;                // 好友年龄
+  optional string region = 8;   // 好友地区
+  FriendshipStatus status = 9;  // 好友状态
+  optional string remark = 10;  // 备注
+  optional string email = 11;   // 好友邮箱
+  string source = 12;           // 申请来源
+  string signature = 13;        // 好友个性签名
+  int64 create_time = 14;       // 创建时间
+  int64 update_time = 15;       // 更新时间
+}
+
+/// 完整的好友关系信息（来自原message.proto）
+message FriendshipComplete {
+  string id = 1;                    // 好友关系ID
+  string user_id = 2;               // 用户ID
+  string friend_id = 3;             // 好友ID
+  FriendshipStatus status = 4;      // 好友状态
+  optional string apply_msg = 5;    // 申请消息
+  optional string req_remark = 6;   // 申请备注
+  optional string resp_msg = 7;     // 响应消息
+  optional string resp_remark = 8;  // 响应备注
+  string source = 9;                // 申请来源
+  int64 create_time = 10;           // 创建时间
+  int64 update_time = 11;           // 更新时间
+}
+
+
+// 好友分组关系（与friend_group_relation表对应）
+message FriendGroupRelation {
+  string id = 1;                                // 关系ID (VARCHAR(36) PRIMARY KEY)
+  string user_id = 2;                           // 用户ID (VARCHAR(36) NOT NULL)
+  string friend_id = 3;                         // 好友ID (VARCHAR(36) NOT NULL)
+  string group_id = 4;                          // 分组ID (VARCHAR(36) NOT NULL)
+  google.protobuf.Timestamp created_at = 5;     // 创建时间 (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+  google.protobuf.Timestamp updated_at = 6;     // 更新时间 (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
 }

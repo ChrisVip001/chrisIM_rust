@@ -8,7 +8,7 @@ use tracing::{debug, error};
 use common::proto::user::user_service_client::UserServiceClient;
 use common::proto::friend::friend_service_client::FriendServiceClient;
 use common::proto::group::group_service_client::GroupServiceClient;
-use common::message::chat_service_client::ChatServiceClient;
+use common::proto::message::chat_service_client::ChatServiceClient;
 use common::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient, ChatServiceGrpcClient};
 use common::config::{AppConfig, ConfigLoader};
 use common::service_discovery::LbWithServiceDiscovery;

@@ -9,8 +9,8 @@ use crate::manager::Manager;
 use common::config::{AppConfig, Component};
 use common::error::Error;
 use common::grpc::LoggingInterceptor;
-use common::message::msg_service_server::MsgServiceServer;
-use common::message::{
+use common::proto::message::msg_service_server::MsgServiceServer;
+use common::proto::message::{
     msg_service_server::MsgService, SendGroupMsgRequest, SendMsgRequest, SendMsgResponse,
 };
 

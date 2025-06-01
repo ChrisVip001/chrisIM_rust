@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use common::error::Error;
-use common::message::Msg;
+use common::proto::message::Msg;
 
 use crate::message::MsgStoreRepo;
 

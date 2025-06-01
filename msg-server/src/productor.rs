@@ -14,8 +14,8 @@ use tonic_health::server::HealthReporter;
 
 use common::config::{AppConfig, Component};
 use common::grpc::LoggingInterceptor;
-use common::message::chat_service_server::{ChatService, ChatServiceServer};
-use common::message::{MsgResponse, MsgType, SendMsgRequest};
+use common::proto::message::chat_service_server::{ChatService, ChatServiceServer};
+use common::proto::message::{MsgResponse, MsgType, SendMsgRequest};
 
 /// 聊天消息RPC服务实现
 /// 

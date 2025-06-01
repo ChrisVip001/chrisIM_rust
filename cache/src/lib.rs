@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::message::GroupMemSeq;
+use common::proto::message::GroupMemSeq;
 use serde::{Deserialize, Serialize};
 
 use common::config::AppConfig;

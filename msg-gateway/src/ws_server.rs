@@ -6,7 +6,7 @@ use axum::Router;
 use common::auth::verify_token_simple;
 use common::config::AppConfig;
 use common::error::Error;
-use common::message::PlatformType;
+use common::proto::message::PlatformType;
 use common::service_register_center::{service_register_center, Registration};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -190,7 +190,7 @@ impl WsServer {
             .with_state(app_state);
 
         // 构建监听地址
-        let addr = format!("{}:{}", config.websocket.host, config.websocket.port);
+        let addr = format!("{}:{}", "0.0.0.0", config.websocket.port);
 
         // 启动TCP监听器
         let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();

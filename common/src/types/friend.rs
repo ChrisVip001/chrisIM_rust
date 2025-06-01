@@ -1,10 +1,13 @@
 use crate::error::Error;
-use crate::message::{
-    DeleteFriendRequest, Friend, FriendDb, Friendship, FriendshipStatus, FriendshipWithUser, User,
+use crate::proto::friend::{
+    DeleteFriendRequest, Friend, FriendDb, Friendship, FriendshipStatus, FriendshipWithUser
 };
+use crate::proto::user::User;
 use sqlx::postgres::PgRow;
 use sqlx::{FromRow, Row};
 use std::fmt::{Display, Formatter};
+use chrono::{DateTime, Utc};
+use prost_types::Timestamp;
 
 impl Display for FriendshipStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -12,8 +15,8 @@ impl Display for FriendshipStatus {
             FriendshipStatus::Pending => write!(f, "Pending"),
             FriendshipStatus::Accepted => write!(f, "Accepted"),
             FriendshipStatus::Rejected => write!(f, "Rejected"),
-            FriendshipStatus::Blacked => write!(f, "Blacked"),
-            FriendshipStatus::Deleted => write!(f, "Deleted"),
+            FriendshipStatus::Blocked => write!(f, "Blocked"),
+            FriendshipStatus::Expired => write!(f, "Expired"),
         }
     }
 }
@@ -24,9 +27,9 @@ pub enum FsStatus {
     Pending,
     Accepted,
     Rejected,
-    /// / blacklist
-    Blacked,
-    Deleted,
+    /// blacklist
+    Blocked,
+    Expired,
 }
 
 impl From<FsStatus> for FriendshipStatus {
@@ -35,28 +38,35 @@ impl From<FsStatus> for FriendshipStatus {
             FsStatus::Pending => Self::Pending,
             FsStatus::Accepted => Self::Accepted,
             FsStatus::Rejected => Self::Rejected,
-            FsStatus::Blacked => Self::Blacked,
-            FsStatus::Deleted => Self::Deleted,
+            FsStatus::Blocked => Self::Blocked,
+            FsStatus::Expired => Self::Expired,
         }
     }
 }
 
 impl FromRow<'_, PgRow> for Friendship {
     fn from_row(row: &'_ PgRow) -> Result<Self, sqlx::Error> {
-        let status: FsStatus = row.try_get("status")?;
-        let status = FriendshipStatus::from(status);
+        let created_at: Option<DateTime<Utc>> = row.try_get("created_at").ok();
+        let updated_at: Option<DateTime<Utc>> = row.try_get("updated_at").ok();
+
         Ok(Self {
             id: row.try_get("id")?,
             user_id: row.try_get("user_id")?,
             friend_id: row.try_get("friend_id")?,
-            status: status as i32,
-            apply_msg: row.try_get("apply_msg")?,
-            req_remark: row.try_get("req_remark")?,
-            resp_msg: row.try_get("resp_msg")?,
-            resp_remark: row.try_get("resp_remark")?,
-            source: row.try_get("source")?,
-            create_time: row.try_get("create_time")?,
-            update_time: row.try_get("update_time")?,
+            status: row.try_get("status")?,
+            created_at: created_at.map(|dt| Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+            updated_at: updated_at.map(|dt| Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+            message: row.try_get("message").unwrap_or_default(),
+            reject_reason: row.try_get("reject_reason").ok(),
+            friend_username: row.try_get("friend_username").ok(),
+            friend_nickname: row.try_get("friend_nickname").ok(),
+            friend_avatar_url: row.try_get("friend_avatar_url").ok(),
         })
     }
 }
@@ -81,24 +91,18 @@ impl FromRow<'_, PgRow> for FriendDb {
 
 impl FromRow<'_, PgRow> for Friend {
     fn from_row(row: &'_ PgRow) -> Result<Self, sqlx::Error> {
-        let status: FsStatus = row.try_get("status").unwrap_or_default();
-        let status = FriendshipStatus::from(status);
+        let friendship_created_at: Option<DateTime<Utc>> = row.try_get("friendship_created_at").ok();
+
         Ok(Self {
-            fs_id: row.try_get("fs_id").unwrap_or_default(),
-            friend_id: row.try_get("friend_id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            account: row.try_get("account").unwrap_or_default(),
-            avatar: row.try_get("avatar").unwrap_or_default(),
-            gender: row.try_get("gender").unwrap_or_default(),
-            age: row.try_get("age").unwrap_or_default(),
-            region: row.try_get("region").unwrap_or_default(),
-            status: status as i32,
+            id: row.try_get("id").unwrap_or_default(),
             remark: row.try_get("remark").unwrap_or_default(),
-            source: row.try_get("source").unwrap_or_default(),
-            update_time: row.try_get("update_time").unwrap_or_default(),
-            signature: row.try_get("signature").unwrap_or_default(),
-            create_time: row.try_get("create_time").unwrap_or_default(),
-            email: row.try_get("email").unwrap_or_default(),
+            username: row.try_get("username").ok(),
+            nickname: row.try_get("nickname").ok(),
+            avatar_url: row.try_get("avatar_url").ok(),
+            friendship_created_at: friendship_created_at.map(|dt| Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
         })
     }
 }
@@ -106,14 +110,20 @@ impl FromRow<'_, PgRow> for Friend {
 impl From<User> for FriendshipWithUser {
     fn from(value: User) -> Self {
         Self {
+            fs_id: String::new(),
             user_id: value.id,
-            name: value.name,
-            account: value.account,
-            avatar: value.avatar,
-            gender: value.gender,
-            age: value.age,
-            region: value.region,
-            ..Default::default()
+            name: value.username,
+            avatar: value.avatar_url.unwrap_or_default(),
+            gender: String::new(), // User中没有gender字段
+            age: 0, // User中没有age字段
+            region: None,
+            status: 0,
+            apply_msg: None,
+            source: String::new(),
+            create_time: 0,
+            account: String::new(), // User中没有account字段
+            remark: None,
+            email: Option::from(value.email),
         }
     }
 }
@@ -142,21 +152,12 @@ impl FromRow<'_, PgRow> for FriendshipWithUser {
 impl From<User> for Friend {
     fn from(value: User) -> Self {
         Self {
-            fs_id: String::new(),
-            friend_id: value.id,
-            name: value.name,
-            account: value.account,
-            avatar: value.avatar,
-            gender: value.gender,
-            age: value.age,
-            region: value.region,
-            status: 0,
-            remark: None,
-            source: "".to_string(),
-            update_time: 0,
-            signature: value.signature,
-            create_time: 0,
-            email: value.email,
+            id: String::new(),
+            remark: Option::from(String::new()),
+            username: Option::from(value.username),
+            nickname: value.nickname,
+            avatar_url: value.avatar_url,
+            friendship_created_at: None,
         }
     }
 }
@@ -171,9 +172,6 @@ impl DeleteFriendRequest {
             return Err(Error::BadRequest("friend id is none".to_string()));
         }
 
-        if self.fs_id.is_empty() {
-            return Err(Error::BadRequest("friendship id is none".to_string()));
-        }
         Ok(())
     }
 }

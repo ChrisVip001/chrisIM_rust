@@ -3,7 +3,7 @@ use axum::{
     http::{Method, Response, StatusCode},
 };
 use common::grpc_client::ChatServiceGrpcClient;
-use common::message::{Msg, SendMsgRequest, MsgType, ContentType, PlatformType};
+use common::proto::message::{Msg, SendMsgRequest, MsgType, ContentType, PlatformType};
 use serde_json::{json, Value};
 use tracing::{error, debug};
 use chrono::Utc;

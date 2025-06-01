@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
-use common::message::PlatformType;
+use common::proto::message::PlatformType;
 use futures::stream::SplitSink;
 use futures::SinkExt;
 use std::sync::Arc;
