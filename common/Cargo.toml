@@ -51,6 +51,9 @@ once_cell = "1.21.3"
 rs-consul = "0.11.0"  # 使用最新版本
 hostname = "0.4"  # 用于获取主机名
 http = "0.2.12"
+image = "0.23"
+imageproc = "0.22"
+rusttype = "0.9.3"
 
 [features]
 default = []

@@ -6,6 +6,7 @@ use common::grpc_client::UserServiceGrpcClient;
 use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug, info};
+use common::proto::user::CaptchaImageRequest;
 use crate::proxy::services::common::get_user_id_from_jwt;
 use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
 use crate::auth::jwt::UserInfo;
@@ -187,6 +188,8 @@ impl UserServiceHandler {
                 let username = extract_string_param(&body,"username",None)?;
                 let password = extract_string_param(&body,"password",None)?;
                 let phone = extract_string_param(&body,"phone",None)?;
+                let image_code = extract_string_param(&body,"image_code",Some("image_code"))?;
+                let image_code_key = extract_string_param(&body,"image_code_key",Some("image_code_key"))?;
 
                 let request = proto::user::RegisterRequest {
                     tenant_id,
@@ -195,6 +198,8 @@ impl UserServiceHandler {
                     phone,
                     verify_code: "".to_string(),
                     nickname: "".to_string(),
+                    image_code,
+                    image_code_key
                 };
 
                 match self.client.register_by_username(request).await {
@@ -222,6 +227,8 @@ impl UserServiceHandler {
                 let phone = extract_string_param(&body,"phone",None)?;
                 let password = extract_string_param(&body,"password",None)?;
                 let msg_code = extract_string_param(&body,"msgCode",Some("msg_code"))?;
+                let image_code = extract_string_param(&body,"image_code",Some("image_code"))?;
+                let image_code_key = extract_string_param(&body,"image_code_key",Some("image_code_key"))?;
 
                 let request = proto::user::RegisterRequest {
                     tenant_id,
@@ -230,6 +237,8 @@ impl UserServiceHandler {
                     verify_code: msg_code,
                     username: "".to_string(),
                     nickname: "".to_string(),
+                    image_code,
+                    image_code_key
                 };
 
                 match self.client.register_by_phone(request).await {
@@ -435,6 +444,26 @@ impl UserServiceHandler {
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
                 Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+            }
+
+            // 图片验证码生成
+            (&Method::POST, "genCaptchaImage")=> {
+                let width = get_optional_string(&body, "width", Some("width")).unwrap_or("150".to_string());
+                let height = get_optional_string(&body, "height", Some("height")).unwrap_or("50".to_string());
+                let font_size = get_optional_string(&body, "font_size", Some("font_size")).unwrap_or("30".to_string());
+                let request = proto::user::CaptchaImageRequest {
+                    width: width.parse()?,
+                    height: height.parse()?,
+                    font_size: font_size.parse()?,
+                };
+                let response = self.client.gen_captcha_image(request).await?;
+                let code_key = response.code_key;
+                let image_content = response.image_content;
+                let ret_data = json!({
+                    "code_key": code_key,
+                    "image_content": image_content,
+                });
+                Ok(success_response(ret_data, StatusCode::OK))
             }
 
             // 其他未知方法

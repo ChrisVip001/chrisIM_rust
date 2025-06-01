@@ -56,6 +56,8 @@ service UserService {
   
   // 修改手机号
   rpc UpdatePhone (UpdatePhoneRequest) returns (UpdatePhoneResponse);
+
+  rpc generateCaptchaImage (CaptchaImageRequest) returns (CaptchaImageResponse);
 }
 
 // 创建用户请求
@@ -158,6 +160,8 @@ message RegisterRequest {
   string tenant_id = 4;
   string phone = 5;
   string verify_code = 6;
+  string image_code = 7; // 图片验证码
+  string image_code_key = 8; // 图片验证码Key
 }
 
 // 忘记密码请求
@@ -253,6 +257,20 @@ message UpdatePhoneResponse {
   bool success = 1;
   string message = 2;
   optional User user = 3; // 更新后的用户信息
+}
+
+// 图片验证码请求
+message CaptchaImageRequest {
+  int32 width = 1; // 图片宽度
+  int32 height = 2; // 图片高度
+  float font_size = 3; // 字体大小
+}
+
+// 图片验证码响应
+message CaptchaImageResponse {
+  bool success = 1;
+  string imageContent = 2; // 图片验证码base64
+  string codeKey = 3; // redis存储图片验证码的Key
 }
 
 // 增强的用户详情响应

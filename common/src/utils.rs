@@ -2,11 +2,15 @@ use crate::{Error, Result};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHasher};
+use image::{DynamicImage, ImageBuffer, Rgb};
+use redis::{Client as RedisClient, Commands};
+use imageproc::drawing::draw_text_mut;
 use rand::distr::Alphanumeric;
 use rand::Rng;
 use uuid::Uuid;
 use regex::Regex;
-
+use rusttype::{Font, Scale};
+use crate::config::ConfigLoader;
 // 导入雪花ID模块
 use crate::snowflake::SNOWFLAKE;
 
@@ -127,4 +131,80 @@ pub fn generate_user_custom_id() -> String {
     // 拼接前缀
     format!("myid-{}", random_id)
 }
+
+/// 图片验证码生成
+pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_size: &f32) -> Vec<u8> {
+    // 图片尺寸
+    let width = width;
+    let height = height;
+
+    // 创建一个白色背景的图片（使用 Rgb<u8>）
+    let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(*width, *height, Rgb([255, 255, 255]));
+
+    // 使用 DynamicImage 包装
+    let mut img = DynamicImage::ImageRgb8(img);
+
+    // 加载字体文件
+    let font_data = include_bytes!("../assets/Roboto-Regular.ttf"); // 确保路径正确
+    let font = Font::try_from_bytes(font_data).expect("加载字体失败");
+
+    // 设置字体大小和颜色
+    let scale = Scale::uniform(font_size.clone());
+    let color = Rgb([0, 0, 0]); // 黑色
+
+    // 在图片上绘制文本
+    draw_text_mut(img.as_mut_rgb8().unwrap(),color,10,10,scale,&font,text_code);
+
+    // 将图片转换为字节流
+    let mut buffer = Vec::new();
+    img.write_to(&mut buffer, image::ImageOutputFormat::Png)
+        .expect("写入图片失败");
+
+    buffer
+
+}
+
+/// 生成随机验证码文本
+pub fn generate_captcha_text() -> String {
+    let mut rng = rand::thread_rng();
+    (0..6) // 生成 6 位数字
+        .map(|_| rng.gen_range(0..10).to_string())
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// 图片验证码保存
+pub fn save_image_code(code_str: &str, captcha_text: &str, expire_time: &u32) -> () {
+    // 获取配置
+    let config = ConfigLoader::get_global().expect("获取全局配置失败");
+    // 创建Redis客户端
+    let redis_url = config.redis.url();
+    let mut redis_client = RedisClient::open(redis_url).expect("创建Redis客户端失败");
+    // 存储验证码到redis,有效时间expire_time秒
+    redis_client.set_ex::<&str, &str, ()>(code_str, captcha_text, *expire_time as u64)
+        .expect("存储验证码到Redis失败");
+}
+
+/// 图片验证码校验
+const IMAGE_CODE_PREFIX: &str = "image:verification:code";
+pub fn verify_image_code(code_key: &str, input_code: &str) -> bool {
+    // 获取配置
+    let config = ConfigLoader::get_global().expect("获取全局配置失败");
+    // 创建Redis客户端
+    let redis_url = config.redis.url();
+    let mut redis_client = RedisClient::open(redis_url).expect("创建Redis客户端失败");
+    let get_code_key = format!("{}:{}", IMAGE_CODE_PREFIX, code_key);
+    let redis_code_value: String = redis_client.get(&get_code_key).unwrap_or("0".to_string());
+    if redis_code_value == input_code {
+        // 匹配成功，删除redis中存储数据
+        let del_stat: () = redis_client.del(get_code_key).unwrap_or(());
+        true
+    } else {
+        false
+    }
+}
+
+
+
+
 

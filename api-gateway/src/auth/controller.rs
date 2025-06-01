@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use common::auth::jwt::UserInfo;
 use std::fmt;
+use common::utils::verify_image_code;
 
 /// 平台类型枚举
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +70,10 @@ pub struct LoginRequest {
     pub password: String,
     /// 租户ID
     pub tenant_id: String,
+    /// 图片验证码
+    pub image_code: String,
+    /// 图片验证码Key
+    pub image_code_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +84,10 @@ pub struct LoginByPhoneRequest {
     pub verify_code: String,
     /// 租户ID
     pub tenant_id: String,
+    /// 图片验证码
+    pub image_code: String,
+    /// 图片验证码Key
+    pub image_code_key: String,
 }
 
 /// 登录响应
@@ -132,7 +141,7 @@ fn extract_platform_info(headers: &HeaderMap) -> PlatformType {
         .unwrap_or("unknown");
 
     let platform = PlatformType::from(system_type);
-    
+
     debug!("检测到登录平台: {:?}, 原始system-type: {}", platform, system_type);
 
     platform
@@ -195,6 +204,11 @@ pub async fn login_by_phone(
         code: login_req.verify_code,
         action: "login".to_string(),
     };
+
+    // 图片验证码校验
+    if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
+        return Err(Error::Authentication("图片验证码错误".to_string()));
+    }
 
     // 调用用户服务验证手机验证码
     let response = match user_service.verify_phone_code_login(verify_request).await {
@@ -261,6 +275,11 @@ pub async fn login(
         username: login_req.username.clone(),
         password: login_req.password,
     };
+
+    // 图片验证码校验
+    if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
+        return Err(Error::Authentication("图片验证码错误".to_string()));
+    }
 
     // 调用用户服务验证密码
     let response = match user_service.verify_password(verify_request).await {
@@ -432,8 +451,8 @@ async fn build_login_response(
 
     // 将访问令牌存储到Redis中，按平台分别存储
     if let Err(e) = cache_instance.save_access_token_for_platform(
-        &user_id.to_string(), 
-        &access_token, 
+        &user_id.to_string(),
+        &access_token,
         platform_str,
         jwt_config.expiry_seconds
     ).await {
@@ -445,7 +464,7 @@ async fn build_login_response(
 
     // 将刷新令牌存储到Redis中，按平台分别存储
     if let Err(e) = cache_instance.save_refresh_token_for_platform(
-        &user_id.to_string(), 
+        &user_id.to_string(),
         &refresh_token,
         platform_str,
         jwt_config.refresh_expiry_seconds
@@ -526,7 +545,7 @@ pub async fn logout(
     // 检查用户是否还有其他平台的登录token，如果没有则清理在线状态
     let has_other_tokens = cache_instance.check_user_has_any_tokens(&user_id).await.unwrap_or(true);
     let is_online_any_platform = cache_instance.is_user_online_any_platform(&user_id).await.unwrap_or(true);
-    
+
     if !has_other_tokens || !is_online_any_platform {
         if let Err(e) = cache_instance.user_logout(&user_id).await {
             error!("清理用户{}在线状态失败: {}", user_id, e);
@@ -662,7 +681,7 @@ pub struct BatchGetFriendsOnlineResponse {
 }
 
 /// 批量获取好友在线状态
-/// 
+///
 /// 支持一次性查询多个用户的在线状态信息，包括全局在线状态和各平台在线情况
 pub async fn batch_get_friends_online_status(
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
@@ -719,7 +738,7 @@ pub async fn batch_get_friends_online_status(
 }
 
 /// 简化版批量检查好友在线状态
-/// 
+///
 /// 只返回用户ID和在线状态的简单映射，适用于只需要知道在线/离线状态的场景
 pub async fn batch_check_friends_online(
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
