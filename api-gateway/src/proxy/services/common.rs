@@ -20,7 +20,7 @@ static GRPC_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| {
 /// 通用响应生成辅助函数 - 成功响应
 pub fn success_response<T: serde::Serialize>(data: T, status_code: StatusCode) -> axum::response::Response<Body> {
     (
-        status_code,
+        StatusCode::OK,
         Json(json!({
             "code": status_code.as_u16(),
             "data": data,
@@ -32,7 +32,7 @@ pub fn success_response<T: serde::Serialize>(data: T, status_code: StatusCode) -
 /// 通用响应生成辅助函数 - 成功带消息
 pub fn success_with_message<T: serde::Serialize>(data: T, message: &str, status_code: StatusCode) -> axum::response::Response<Body> {
     (
-        status_code,
+        StatusCode::OK,
         Json(json!({
             "code": status_code.as_u16(),
             "data": data,
