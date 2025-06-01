@@ -126,6 +126,7 @@ pub struct PotentialFriend {
     pub avatar_url: Option<String>,
     pub phone: Option<String>,
     pub friendship_status: i32,
+    pub sign: Option<String>,
 }
 
 impl PotentialFriend {
@@ -137,6 +138,7 @@ impl PotentialFriend {
             avatar_url: self.avatar_url.clone(),
             phone: self.phone.clone(),
             friendship_status: self.friendship_status,
+            sign: self.sign.clone(),
         }
     }
     
@@ -147,6 +149,7 @@ impl PotentialFriend {
         avatar_url: Option<String>,
         phone: Option<String>,
         friendship_status: i32,
+        sign: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -155,6 +158,7 @@ impl PotentialFriend {
             avatar_url,
             phone,
             friendship_status,
+            sign
         }
     }
 }

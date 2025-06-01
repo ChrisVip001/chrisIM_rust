@@ -1,35 +1,36 @@
+use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
-use common::proto::friend::{
-    AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse,
-    DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest,
-    GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse,
-    RejectFriendRequestRequest, SendFriendRequestRequest,FriendshipStatus,
-    UnblockUserRequest,BlockUserRequest,UnblockUserResponse,BlockUserResponse,
-    CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
-    DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
-    GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, 
-    SearchPotentialFriendsResponse,
-    GetAllFriendDetailListRequest, GetAllFriendDetailListResponse,
-    ToggleFriendStarRequest, ToggleFriendStarResponse,
-    ToggleFriendTopRequest, ToggleFriendTopResponse,
-    UpdateFriendRemarkRequest, UpdateFriendRemarkResponse,
-};
+use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType};
+use anyhow;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
-
+use common::config::ConfigLoader;
+use common::grpc_client::base::get_rpc_client;
+use common::grpc_client::UserServiceGrpcClient;
+use common::proto::user::user_service_client::UserServiceClient;
+use common::proto::user::{UserConfigRequest, UserConfigResponse, UserConfig};
+use common::service_discovery::LbWithServiceDiscovery;
+use common::service_register_center::service_register_center;
 use crate::repository::friendship_repository::FriendshipRepository;
 use crate::model::friendship::{PotentialFriend, DetailedFriend};
+use crate::model::user_blacklist::UserBlacklist;
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
+    service_client: UserServiceClient<LbWithServiceDiscovery>,
 }
 
 impl FriendServiceImpl {
-    pub fn new(pool: PgPool) -> Self {
-        Self {
+    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
+        let config = ConfigLoader::get_global().expect("Failed to get global config");
+
+        let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
+
+        Ok(Self {
             repository: FriendshipRepository::new(pool),
-        }
+            service_client,
+        })
     }
 
     // 检查用户是否存在的辅助方法
@@ -57,9 +58,9 @@ impl FriendServiceImpl {
         }
         
         // 检查好友关系
-        match self.repository.check_friendship(user_id, friend_id).await {
+        match self.repository.check_friend_relation_exists(&user_id, &friend_id).await {
             Ok(status) => {
-                if status != Some(FriendshipStatus::Accepted) {
+                if !status {
                     return Err(Status::failed_precondition("不是好友关系，无法设置星标状态"));
                 }
             },
@@ -92,11 +93,10 @@ impl FriendServiceImpl {
             Ok(_) => {},
             Err(e) => return Err(e),
         }
-        
         // 检查好友关系
-        match self.repository.check_friendship(user_id, friend_id).await {
+        match self.repository.check_friend_relation_exists(&user_id, &friend_id).await {
             Ok(status) => {
-                if status != Some(FriendshipStatus::Accepted) {
+                if !status {
                     return Err(Status::failed_precondition("不是好友关系，无法设置置顶状态"));
                 }
             },
@@ -148,32 +148,85 @@ impl FriendService for FriendServiceImpl {
         self.check_user_exists(&friend_id).await?;
 
         // 检查是否已存在好友关系
-        match self.repository.check_friendship(&user_id, &friend_id).await {
-            Ok(Some(status)) => {
-                // 如果状态是Pending或Accepted，则不允许重复发送请求
-                // 如果是Rejected，则允许重新发送请求
-                match status {
-                    FriendshipStatus::Accepted => {
-                        return Err(Status::already_exists("已经存在好友关系"));
-                    }
-                    FriendshipStatus::Pending | FriendshipStatus::Rejected | FriendshipStatus::Expired => {
-                        match self.repository.delete_friend(&user_id, &friend_id).await{
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("删除好友关系失败: {}", e);
-                                return Err(Status::internal("内部服务错误"));
-                            }
-                        }
-                    }
-                    FriendshipStatus::Blocked => {
-                        return Err(Status::already_exists("好友关系已被锁定"));
-                    }
+        match self.repository.check_friend_relation_exists(&user_id, &friend_id).await {
+            Ok(status) => {
+                if status {
+                    return Err(Status::already_exists("已经存在好友关系"));
                 }
-                // 对于Rejected状态，允许重新发送请求
             },
-            Ok(None) => {},
             Err(e) => {
                 error!("检查好友关系失败: {}", e);
+                return Err(Status::internal("内部服务错误"));
+            }
+        }
+
+        // 检查是否已经拉黑
+        match self.repository.is_user_blocked(&friend_id, &user_id).await {
+            Ok(status) => {
+                if status {
+                    return Err(Status::already_exists("你已被拉黑，无法添加好友"));
+                }
+            },
+            Err(e) => {
+                error!("检查拉黑关系失败: {}", e);
+                return Err(Status::internal("内部服务错误"));
+            }
+        }
+
+        /**
+         * 好友请求处理逻辑流程：
+         * 1. 检查是否存在历史好友请求记录
+         * 2. 如果存在记录，根据请求方向和状态进行处理：
+         *    - 对方发来的请求(friend_id == user_id)：
+         *      * 已接受(1)：返回错误(已是好友)
+         *      * 待处理(0)：返回错误(需先处理对方请求)
+         *      *
+         *      * 已拒绝(2)/已过期(4)：清理历史记录，允许创建新请求
+         *    - 自己发出的请求(user_id == user_id)：
+         *      * 已接受(1)：返回错误(已是好友)
+         *      * 其他状态(0/2/4)：清理历史记录，允许创建新请求
+         * 3. 如果没有记录或历史记录已处理，继续创建新的好友请求
+         */
+        match self.repository.check_friendship_request(&user_id, &friend_id).await {
+            Ok(Some(request)) => {
+                // 处理对方发送的请求
+                if request.friend_id == user_id {
+                    match request.status {
+                        1 => return Err(Status::already_exists("已经存在好友关系")),
+                        0 => return Err(Status::already_exists("对方已经发送好友请求给你，请先处理对方的请求")),
+                        2 | 4 => {
+                            // 已拒绝或已过期，删除旧请求
+                            if let Err(e) = self.repository.delete_friend(&user_id, &friend_id).await {
+                                error!("删除历史好友请求失败: {}", e);
+                                return Err(Status::internal("内部服务错误"));
+                            }
+                        },
+                        _ => {} // 其他状态码，继续处理
+                    }
+                }
+                
+                // 处理自己发送的请求
+                if request.user_id == user_id {
+                    match request.status {
+                        1 => return Err(Status::already_exists("已经存在好友关系")),
+                        0 | 2 | 4 => {
+                            // 发送中、已拒绝或已过期，删除旧请求
+                            if let Err(e) = self.repository.delete_friend(&user_id, &friend_id).await {
+                                error!("删除历史好友请求失败: {}", e);
+                                return Err(Status::internal("内部服务错误"));
+                            }
+                        },
+                        _ => {} // 其他状态码，继续处理
+                    }
+                }
+                
+                // 历史请求已处理，继续创建新请求
+            },
+            Ok(None) => {
+                // 没有请求记录，继续创建新请求
+            },
+            Err(e) => {
+                error!("检查好友请求关系失败: {}", e);
                 return Err(Status::internal("内部服务错误"));
             }
         }
@@ -378,18 +431,56 @@ impl FriendService for FriendServiceImpl {
 
         let user_id = req.user_id;
         let friend_id = req.friend_id;
-
-        match self.repository.check_friendship(&user_id, &friend_id).await {
-            Ok(status) => {
-                Ok(Response::new(CheckFriendshipResponse {
-                    status: status.map(|s| s as i32).unwrap_or(0),
-                }))
-            }
+        // 查询好友关系。已有好友返回状态0 ，待处理状态是1，已申请状态是2 ，没有好友状态返回None
+        
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        self.check_user_exists(&friend_id).await?;
+        
+        // 首先检查是否已经是好友关系
+        match self.repository.check_friend_relation_exists(&user_id, &friend_id).await {
+            Ok(exists) => {
+                if exists {
+                    // 已是好友关系，返回状态0
+                    return Ok(Response::new(CheckFriendshipResponse {
+                        status: FriendRelationType::IsFriend as i32,
+                    }));
+                }
+            },
             Err(e) => {
                 error!("检查好友关系失败: {}", e);
-                Err(Status::internal("检查好友关系失败"))
+                return Err(Status::internal("内部服务错误"));
             }
         }
+        
+        // 检查是否有待处理的好友请求
+        match self.repository.check_friendship_request(&user_id, &friend_id).await {
+            Ok(Some(request)) => {
+                if request.friend_id == user_id {
+                    // 对方发送的好友请求，待处理状态是1
+                    return Ok(Response::new(CheckFriendshipResponse {
+                        status: FriendRelationType::PendingRequest as i32,
+                    }));
+                } else if request.user_id == user_id {
+                    // 自己发送的好友请求，已申请状态是2
+                    return Ok(Response::new(CheckFriendshipResponse {
+                        status: FriendRelationType::Applied as i32,
+                    }));
+                }
+            },
+            Ok(None) => {
+                // 没有找到好友请求
+            },
+            Err(e) => {
+                error!("检查好友请求关系失败: {}", e);
+                return Err(Status::internal("内部服务错误"));
+            }
+        }
+        
+        // 没有任何好友关系或请求，返回状态3 (没有好友状态)
+        Ok(Response::new(CheckFriendshipResponse {
+            status: FriendRelationType::NoFriend as i32,
+        }))
     }
 
     // 拉黑用户
@@ -401,6 +492,7 @@ impl FriendService for FriendServiceImpl {
 
         let user_id = req.user_id.clone();
         let blocked_user_id = req.blocked_user_id.clone();
+        let reason = if req.reason.is_empty() { None } else { Some(req.reason) };
 
         // 检查用户是否存在
         self.check_user_exists(&user_id).await?;
@@ -414,11 +506,11 @@ impl FriendService for FriendServiceImpl {
             return Err(Status::already_exists("该用户已被拉黑"));
         }
 
-        match self.repository.block_user(&user_id, &blocked_user_id).await {
-            Ok(success) => {
-                info!("用户 {} 成功拉黑用户 {}", user_id, blocked_user_id);
+        match self.repository.block_user(&user_id, &blocked_user_id, reason).await {
+            Ok(blacklist) => {
+                info!("用户 {} 成功拉黑用户 {}，好友关系状态已更新为拉黑（如果存在）", user_id, blocked_user_id);
                 Ok(Response::new(BlockUserResponse {
-                    success,
+                    blacklist: Some(blacklist.to_proto()),
                 }))
             }
             Err(e) => {
@@ -452,7 +544,7 @@ impl FriendService for FriendServiceImpl {
 
         match self.repository.unblock_user(&user_id, &blocked_user_id).await {
             Ok(success) => {
-                info!("用户 {} 成功解除拉黑用户 {}", user_id, blocked_user_id);
+                info!("用户 {} 成功解除拉黑用户 {}，好友关系已自动恢复（如果之前存在）", user_id, blocked_user_id);
                 Ok(Response::new(UnblockUserResponse {
                     success,
                 }))
@@ -626,15 +718,67 @@ impl FriendService for FriendServiceImpl {
         };
         
         // 转换为PotentialFriend对象
-        let potential_friends: Vec<_> = users
-            .into_iter()
-            .map(|(id, username, nickname, avatar_url, phone, friendship_status)| {
-                let friend = PotentialFriend::from_tuple(
-                    id, username, nickname, avatar_url, phone, friendship_status
-                );
-                friend.to_proto()
-            })
-            .collect();
+        let mut potential_friends: Vec<_> = Vec::with_capacity(users.len());
+        
+        for (id, username, nickname, avatar_url, phone, friendship_status, sign) in users {
+            // 获取用户配置
+            let mut service_client_clone = self.service_client.clone();
+            let user_config_resp = match service_client_clone.get_user_config(
+                tonic::Request::new(common::proto::user::UserConfigRequest {
+                    user_id: id.clone(),
+                    allow_phone_search: None,
+                    allow_id_search: None,
+                    auto_load_video: None,
+                    auto_load_pic: None,
+                    msg_read_flag: None,
+                    sound_enabled: None,
+                    vibration_enabled: None,
+                    show_phone: None,
+                })
+            ).await {
+                Ok(response) => response.into_inner(),
+                Err(e) => {
+                    error!("获取用户配置失败: {}", e);
+                    // 获取失败时使用默认配置
+                    UserConfigResponse {
+                        user_config: Some(UserConfig {
+                            user_id: id.clone(),
+                            show_phone: Some(2), // 默认不显示手机号
+                            ..Default::default()
+                        })
+                    }
+                }
+            };
+            
+            // 从配置中获取show_phone设置（默认为2表示不显示完整手机号）
+            let show_phone = user_config_resp.user_config
+                .map(|config| config.show_phone.unwrap_or(2))
+                .unwrap_or(2);
+            
+            // 根据隐私配置处理手机号
+            let new_phone = if let Some(phone_str) = phone {
+                if show_phone == 2 { // 2表示不显示手机号
+                    // 将手机号处理为脱敏状态
+                    if !phone_str.is_empty() && phone_str.len() >= 7 {
+                        let prefix = &phone_str[0..3];
+                        let suffix = &phone_str[phone_str.len() - 4..];
+                        let stars = "*".repeat(phone_str.len() - 7);
+                        Some(format!("{}{}{}", prefix, stars, suffix))
+                    } else {
+                        Some(phone_str)
+                    }
+                } else {
+                    Some(phone_str) // 保持原样显示
+                }
+            } else {
+                None
+            };
+            
+            let friend = PotentialFriend::from_tuple(
+                id, username, nickname, avatar_url, new_phone, friendship_status, sign
+            );
+            potential_friends.push(friend.to_proto());
+        }
         
         Ok(Response::new(SearchPotentialFriendsResponse {
             users: potential_friends,
@@ -740,9 +884,9 @@ impl FriendService for FriendServiceImpl {
         self.check_user_exists(&user_id).await?;
         
         // 检查好友关系
-        match self.repository.check_friendship(&user_id, &friend_id).await {
+        match self.repository.check_friend_relation_exists(&user_id, &friend_id).await {
             Ok(status) => {
-                if status != Some(FriendshipStatus::Accepted) {
+                if !status {
                     return Err(Status::failed_precondition("不是好友关系，无法更新备注"));
                 }
             },
@@ -768,5 +912,64 @@ impl FriendService for FriendServiceImpl {
                 Err(Status::internal(format!("更新好友备注失败: {}", e)))
             }
         }
+    }
+
+    // 获取用户黑名单列表
+    async fn get_user_blacklist(
+        &self,
+        request: Request<GetUserBlacklistRequest>,
+    ) -> Result<Response<GetUserBlacklistResponse>, Status> {
+        let req = request.into_inner();
+        
+        let user_id = req.user_id.clone();
+        
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        
+        // 获取带用户信息的黑名单列表
+        match self.repository.get_user_blacklist_with_info(&user_id, None, None).await {
+            Ok(blacklist_with_info) => {
+                let blacklist_protos = blacklist_with_info
+                    .into_iter()
+                    .map(|(blacklist, username, nickname, avatar_url)| {
+                        UserBlacklistWithInfo {
+                            blacklist: Some(blacklist.to_proto()),
+                            username,
+                            nickname,
+                            avatar_url,
+                        }
+                    })
+                    .collect();
+                
+                Ok(Response::new(GetUserBlacklistResponse {
+                    blacklist: blacklist_protos,
+                    total: 0, // 保留字段，但不再使用
+                }))
+            }
+            Err(e) => {
+                error!("获取用户黑名单列表失败: {}", e);
+                Err(Status::internal("获取用户黑名单列表失败"))
+            }
+        }
+    }
+
+    // 是否拉黑状态
+    async fn is_blocked(&self, request: Request<IsBlockedRequest>) -> Result<Response<IsBlockedResponse>, Status> {
+        let req = request.into_inner();
+
+        let user_id = req.user_id.clone();
+        let blocked_user_id = req.blocked_user_id.clone();
+         match self.repository.is_user_blocked(&user_id, &blocked_user_id).await {
+            Ok(is_blocked) => {
+                Ok(Response::new(IsBlockedResponse {
+                    is_blocked,
+                }))
+            },
+            Err(e) => {
+                error!("获取是否拉黑状态失败: {}", e);
+                Err(Status::internal("获取是否拉黑状态失败"))
+            }
+        }
+        
     }
 }

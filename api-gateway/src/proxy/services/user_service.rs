@@ -27,7 +27,7 @@ impl UserServiceHandler {
         
         // 获取用户服务客户端
         let mut client = common::service::user_client().await?;
-        
+
         // 从路径提取方法名 - 格式: /api/users/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
 
@@ -41,6 +41,25 @@ impl UserServiceHandler {
                 let user = response.into_inner().user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
                 Ok(success_response(Self::convert_user_to_json(&user), StatusCode::OK))
+            }
+
+            // 增强的用户查询（包含好友状态、拉黑状态、在线状态）
+            (&Method::GET, "getEnhancedUserById") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+
+                let response = self.client.get_enhanced_user(current_user_id, &user_id).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+
+                let result = json!({
+                    "user": self.convert_user_to_json(&user),
+                    "isBlocked": response.is_blocked,
+                    "friendStatus": response.friend_status,
+                    "isOnline": response.is_online
+                });
+
+                Ok(success_response(result, StatusCode::OK))
             }
 
             // 用户名查询
@@ -93,6 +112,7 @@ impl UserServiceHandler {
                 let head_image = get_optional_string(&body, "headImage", Some("head_image"));
                 let head_image_thumb = get_optional_string(&body, "headImageThumb", Some("head_image_thumb"));
                 let custom_id = get_optional_string(&body, "customId", Some("custom_id"));
+                let sign = get_optional_string(&body, "sign", Some("sign"));
                 let sex = get_optional_string(&body, "sex", None)
                     .and_then(|s| s.parse::<i32>().ok());
                 let username = get_optional_string(&body, "username", None);
@@ -109,6 +129,7 @@ impl UserServiceHandler {
                     sex,
                     username,
                     custom_id,
+                    sign,
                 };
 
                 let response = client.update_user(request).await?;
@@ -119,6 +140,40 @@ impl UserServiceHandler {
                     "用户更新成功",
                     StatusCode::OK
                 ))
+            }
+
+            // 用户注销
+            (&Method::POST, "deactivateUser") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+
+                // 获取手机号和验证码
+                let phone = extract_string_param(&body, "phone", None)?;
+                let verify_code = extract_string_param(&body, "verifyCode", Some("verify_code"))?;
+
+                let request = proto::user::DeactivateUserRequest {
+                    user_id: current_user_id.to_string(),
+                    phone,
+                    verify_code,
+                };
+
+                match self.client.deactivate_user(request).await {
+                    Ok(response) => {
+                        if response.success {
+                            Ok(success_with_message(
+                                json!({}),
+                                "用户注销成功",
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("用户注销失败: {}", err);
+                        Ok(error_response(&format!("用户注销失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
             }
 
             // 用户账号密码注册(不校验验证码)
@@ -226,10 +281,10 @@ impl UserServiceHandler {
 
             // 用户设置查询
             (&Method::GET, "getUserConfig")=> {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let current_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let request = UserConfigRequest {
-                    user_id,
+                    user_id: current_user_id,
                     allow_phone_search: Option::from(0i32),
                     allow_id_search: Option::from(0i32),
                     auto_load_video: Option::from(0i32),
@@ -244,7 +299,8 @@ impl UserServiceHandler {
 
             // 保存用户设置
             (&Method::POST, "saveUserConfig")=> {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
                 let allow_phone_search = get_optional_string(&body, "allowPhoneSearch", Some("allow_phone_search"))
                     .and_then(|s| s.parse::<i32>().ok());
                 let allow_id_search = get_optional_string(&body, "allowIdSearch", Some("allow_id_search"))
@@ -255,14 +311,23 @@ impl UserServiceHandler {
                     .and_then(|s| s.parse::<i32>().ok());
                 let msg_read_flag = get_optional_string(&body, "msgReadFlag", Some("msg_read_flag"))
                     .and_then(|s| s.parse::<i32>().ok());
+                let sound_enabled = get_optional_string(&body, "soundEnabled", Some("sound_enabled"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let vibration_enabled = get_optional_string(&body, "vibrationEnabled", Some("vibration_enabled"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let show_phone = get_optional_string(&body, "showPhone", Some("show_phone"))
+                    .and_then(|s| s.parse::<i32>().ok());
 
                 let request = proto::user::UserConfigRequest {
-                    user_id: user_id.to_string(),
+                    user_id: current_user_id.to_string(),
                     allow_phone_search,
                     allow_id_search,
                     auto_load_video,
                     auto_load_pic,
                     msg_read_flag,
+                    sound_enabled,
+                    vibration_enabled,
+                    show_phone,
                 };
                 let response = client.save_user_config(request).await?;
                 let user_config = response.into_inner().user_config.unwrap_or_default();
@@ -317,16 +382,45 @@ impl UserServiceHandler {
                 }
             }
 
-            //根据token获取用户信息(用户id等信息已经在jwt_user_info里了用id查找用户详细信息)
-            (&Method::GET, "getUserInfo") => {
-                let user_id = match &jwt_user_info {
-                    Some(user_info) => {
-                        user_info.user_id.to_string()
-                    },
-                    None => return Ok(error_response("未授权", StatusCode::UNAUTHORIZED))
+            // 修改手机号（密码+新手机验证码）
+            (&Method::POST, "updatePhone") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let password = extract_string_param(&body, "password", None)?;
+                let new_phone = extract_string_param(&body, "newPhone", Some("new_phone"))?;
+                let verify_code = extract_string_param(&body, "verifyCode", Some("verify_code"))?;
+
+                let request = proto::user::UpdatePhoneRequest {
+                    user_id: current_user_id.to_string(),
+                    password,
+                    new_phone: new_phone.clone(),
+                    verify_code,
                 };
 
-                let request = GetUserByIdRequest { user_id };
+                // 调用后端服务
+                match self.client.update_phone(request).await {
+                    Ok(response) => {
+                        if response.success {
+                            Ok(success_with_message(
+                                json!({"phone": new_phone}),
+                                "手机号更新成功",
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("更新手机号失败: {}", err);
+                        Ok(error_response(&format!("更新手机号失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
+            }
+
+            //根据token获取用户信息(用户id等信息已经在jwt_user_info里了用id查找用户详细信息)
+            (&Method::GET, "getUserInfo") => {
+
+                let request = GetUserByIdRequest { user_id:current_user_id };
                 let response = client.get_user_by_id(request).await?;
                 let user = response.into_inner().user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
@@ -352,7 +446,7 @@ impl UserServiceHandler {
             "createdAt": format_timestamp(user.created_at.clone()),
             "updatedAt": format_timestamp(user.updated_at.clone()),
             "phone" : user.phone,
-            "host" : user.address,
+            "address" : user.address,
             "head_image" : user.head_image,
             "head_image_thumb" : user.head_image_thumb,
             "sex" : user.sex,
@@ -360,6 +454,7 @@ impl UserServiceHandler {
             "tenant_id" : user.tenant_id,
             "last_login_time" : format_timestamp(user.last_login_time.clone()),
             "custom_id" : user.custom_id,
+            "sign" : user.sign,
         })
     }
 
@@ -371,6 +466,9 @@ impl UserServiceHandler {
             "auto_load_video": user_config.auto_load_video,
             "auto_load_pic": user_config.auto_load_pic,
             "msg_read_flag": user_config.msg_read_flag,
+            "sound_enabled": user_config.sound_enabled,
+            "vibration_enabled": user_config.vibration_enabled,
+            "show_phone": user_config.show_phone,
             "create_time": format_timestamp(user_config.create_time.clone()),
             "update_time": format_timestamp(user_config.update_time.clone()),
         })

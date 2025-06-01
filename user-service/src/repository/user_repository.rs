@@ -68,7 +68,7 @@ impl UserRepository {
             INSERT INTO users (id, username, password, phone, tenant_id, custom_id)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id,sign
             "#,
             id.to_string(),
             data.username.clone(),
@@ -102,6 +102,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
         debug!("用户注册成功: {}", user.id);
         Ok(user)
@@ -130,7 +131,7 @@ impl UserRepository {
             SET password = $1
             WHERE id = $2 
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id ,sign
             "#,
             password_hash,
             user.id
@@ -160,6 +161,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
         debug!("修改密码成功: {}", user.username);
         Ok(user)
@@ -194,7 +196,7 @@ impl UserRepository {
             INSERT INTO users (id, username, email, password, nickname, avatar_url, custom_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id ,sign
             "#,
             id.to_string(),
             data.username,
@@ -229,6 +231,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         debug!("用户创建成功: {}", user.id);
@@ -240,7 +243,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE id = $1
             "#,
@@ -249,8 +252,8 @@ impl UserRepository {
         .fetch_one(&self.pool)
         .await
         .map_err(|err| {
-            if let sqlx::Error::RowNotFound = err {
-                Error::NotFound(format!("用户ID {} 不存在", id))
+            if let sqlx::Error::RowNotFound = &err {
+                Error::NotFound(format!("用户未找到: {}", id))
             } else {
                 error!("查询用户失败: {}", err);
                 Error::Database(err)
@@ -270,13 +273,13 @@ impl UserRepository {
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as i32),
+            sex: row.sex,
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
-
         Ok(user)
     }
 
@@ -285,7 +288,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE username = $1
             "#,
@@ -294,8 +297,8 @@ impl UserRepository {
         .fetch_one(&self.pool)
         .await
         .map_err(|err| {
-            if let sqlx::Error::RowNotFound = err {
-                Error::NotFound(format!("用户名 {} 不存在", username))
+            if let sqlx::Error::RowNotFound = &err {
+                Error::NotFound(format!("用户未找到: {}", username))
             } else {
                 error!("查询用户失败: {}", err);
                 Error::Database(err)
@@ -315,13 +318,13 @@ impl UserRepository {
             address: row.address,
             head_image: row.head_image,
             head_image_thumb: row.head_image_thumb,
-            sex: row.sex.map(|x| x as i32),
+            sex: row.sex,
             user_stat: row.user_stat.unwrap_or_default() as i32,
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
-
         Ok(user)
     }
 
@@ -330,7 +333,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE username = $1 or phone =$1
             "#,
@@ -365,6 +368,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         Ok(user)
@@ -375,7 +379,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE email = $1
             "#,
@@ -410,6 +414,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.updated_at,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         Ok(user)
@@ -420,7 +425,7 @@ impl UserRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE phone = $1
             "#,
@@ -454,6 +459,7 @@ impl UserRepository {
             tenant_id: row.tenant_id.unwrap_or_default(),
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
         Ok(user)
     }
@@ -512,12 +518,22 @@ impl UserRepository {
             builder.push(" custom_id = COALESCE( ").push_bind(custom_id).push(", custom_id) ");
             first = false;
         }
+        if let Some(address) = data.address {
+            if !first { builder.push(","); }
+            builder.push(" address = COALESCE( ").push_bind(address).push(", custom_id) ");
+            first = false;
+        }
+        if let Some(sign) = data.sign {
+            if !first { builder.push(","); }
+            builder.push(" sign = COALESCE( ").push_bind(sign).push(", sign) ");
+            first = false;
+        }
 
         if !first { builder.push(","); }
         builder.push(" updated_at = ").push_bind(Utc::now());
         builder.push(" WHERE id = ").push_bind(id);
         builder.push(" RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id "
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign "
         );
         // 生成最终SQL
         let query = builder.build_query_as::<User>();
@@ -541,13 +557,14 @@ impl UserRepository {
             tenant_id: row.tenant_id,
             last_login_time: row.last_login_time,
             custom_id: row.custom_id,
+            sign: row.sign,
         };
 
         debug!("用户更新成功: {}", updated_user.id);
         Ok(updated_user)
     }
 
-    /// 验证用户密码
+    /// 验证用户密码(用户名或手机号验证)
     pub async fn verify_user_password(&self, username: &str, password: &str) -> Result<User> {
         // 查询用户
         let user = self.get_user_by_username_phone(username).await?;
@@ -560,6 +577,21 @@ impl UserRepository {
         }
 
         Ok(user)
+    }
+
+    /// 验证用户密码(id验证)
+    pub async fn verify_user_password_by_id(&self, username: &str, password: &str) -> Result<bool> {
+        // 查询用户
+        let user = self.get_user_by_username_phone(username).await?;
+
+        // 验证密码
+        let is_valid = verify_password(password, &user.password)?;
+
+        if !is_valid {
+            return Err(Error::Authentication("密码不正确".to_string()));
+        }
+
+        Ok(true)
     }
 
     /// 搜索用户
@@ -579,7 +611,7 @@ impl UserRepository {
         let rows = sqlx::query!(
             r#"
             SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
-            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
             FROM users
             WHERE username ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1
             ORDER BY username
@@ -616,6 +648,7 @@ impl UserRepository {
                 tenant_id: row.tenant_id.unwrap_or_default(),
                 last_login_time: row.last_login_time,
                 custom_id: row.custom_id,
+                sign: row.sign,
             })
             .collect();
 
@@ -637,5 +670,77 @@ impl UserRepository {
         .get("total");
 
         Ok((users, total as i32))
+    }
+
+    /// 注销用户账号（软删除+匿名化）
+    pub async fn deactivate_user(&self, user_id: &str) -> Result<bool> {
+        // 获取用户信息
+        let _user = self.get_user_by_id(user_id).await?;
+        
+        // 生成匿名用户名和随机密码
+        let anon_username = format!("deactivated_{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
+        let anon_password = hash_password(&Uuid::new_v4().to_string())?;
+        
+        // 为手机号生成随机值（保留前缀，确保唯一性）
+        let anon_phone = format!("deact{}", Uuid::new_v4().to_string().replace("-", "").chars().take(8).collect::<String>());
+        
+        // 执行用户注销操作 - 软删除和匿名化处理
+        // 1. 将用户状态修改为已注销(3)
+        // 2. 匿名化用户敏感信息
+        let result = sqlx::query!(
+            r#"
+            UPDATE users
+            SET 
+                username = $1,
+                email = NULL,
+                password = $2,
+                nickname = '已注销用户',
+                avatar_url = NULL,
+                phone = $3,
+                address = NULL,
+                head_image = NULL,
+                head_image_thumb = NULL,
+                user_stat = 3,
+                updated_at = NOW()
+            WHERE id = $4
+            "#,
+            anon_username,
+            anon_password,
+            anon_phone,
+            user_id
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|err| {
+            error!("注销用户失败: {}", err);
+            Error::Database(err)
+        })?;
+        
+        debug!("成功注销用户: {}, 影响行数: {}", user_id, result.rows_affected());
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 更新用户手机号
+    pub async fn update_phone(&self, user_id: &str, new_phone: &str) -> Result<User> {
+        // 检查用户是否存在
+        let _user = self.get_user_by_id(user_id).await?;
+        // 执行更新
+        sqlx::query!(
+            r#"
+            UPDATE users
+            SET phone = $1, updated_at = NOW()
+            WHERE id = $2
+            "#,
+            new_phone,
+            user_id
+        )
+            .execute(&self.pool)
+            .await
+            .map_err(|err| {
+                error!("更新用户手机号失败: {}", err);
+                Error::Database(err)
+            })?;
+        // 获取更新后的用户信息
+        self.get_user_by_id(user_id).await
     }
 }

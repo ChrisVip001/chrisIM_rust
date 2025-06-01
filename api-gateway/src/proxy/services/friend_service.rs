@@ -29,7 +29,7 @@ impl FriendServiceHandler {
         let mut client = common::service::friend_client().await?;
 
         // 从JWT中获取用户ID
-        let user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+        let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
 
         // 从路径提取方法名 - 格式: /api/friends/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
@@ -41,12 +41,12 @@ impl FriendServiceHandler {
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
                 
                 // 校验是否尝试添加自己为好友
-                if friend_id == user_id {
+                if friend_id == current_user_id {
                     return Ok(error_response("不能添加自己为好友", StatusCode::BAD_REQUEST));
                 }
                 
                 let request = proto::friend::SendFriendRequestRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     friend_id: friend_id.clone(),
                     message: message.clone(),
                 };
@@ -54,7 +54,7 @@ impl FriendServiceHandler {
                 let response = client.send_friend_request(request).await?;
                 let friendship = response.into_inner().friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
 
-                Ok(success_response(Self::convert_friendship_to_json(&friendship, &user_id), StatusCode::OK))
+                Ok(success_response(Self::convert_friendship_to_json(&friendship, &current_user_id), StatusCode::OK))
             }
 
             // 接受好友请求
@@ -62,14 +62,14 @@ impl FriendServiceHandler {
                 let request_id = extract_string_param(&body, "requestId", Some("request_id"))?;
 
                 let request = proto::friend::AcceptFriendRequestRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     request_id: request_id.clone(),
                 };
 
                 let response = client.accept_friend_request(request).await?;
                 let friendship = response.into_inner().friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
 
-                Ok(success_response(Self::convert_friendship_to_json(&friendship, &user_id), StatusCode::OK))
+                Ok(success_response(Self::convert_friendship_to_json(&friendship, &current_user_id), StatusCode::OK))
             }
 
             // 拒绝好友请求
@@ -78,7 +78,7 @@ impl FriendServiceHandler {
                 let request_id = get_optional_string(&body, "requestId", Some("request_id")).unwrap_or_default();
 
                 let request = proto::friend::RejectFriendRequestRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     reason: reason.clone(),
                     request_id: request_id.clone(),
                 };
@@ -86,7 +86,7 @@ impl FriendServiceHandler {
                 let response = client.reject_friend_request(request).await?;
                 let friendship = response.into_inner().friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
 
-                Ok(success_response(Self::convert_friendship_to_json(&friendship, &user_id), StatusCode::OK))
+                Ok(success_response(Self::convert_friendship_to_json(&friendship, &current_user_id), StatusCode::OK))
             }
 
             // 获取好友列表 (废弃)
@@ -99,7 +99,7 @@ impl FriendServiceHandler {
                 let keyword = get_optional_string(&body, "keyword", None).unwrap_or_default();
 
                 let request = proto::friend::GetFriendListRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     page,
                     page_size,
                     sort_by: sort_by.to_string(),
@@ -123,16 +123,16 @@ impl FriendServiceHandler {
                 let page_size = get_i64_param(&body, "pageSize", 20);
                 
                 let request = proto::friend::GetFriendRequestsRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     page,
                     page_size,
                 };
 
                 let response = client.get_friend_requests(request).await?;
                 let inner = response.into_inner();
-                
+
                 let requests = inner.requests.iter()
-                    .map(|r| Self::convert_friendship_to_json(r, &user_id))
+                    .map(|r| Self::convert_friendship_to_json(r, &current_user_id))
                     .collect::<Vec<_>>();
 
                 Ok(success_response(json!({
@@ -145,7 +145,7 @@ impl FriendServiceHandler {
             (&Method::POST, "getDetailList") | (&Method::GET, "getAllFriends") => {
                 // 调用无分页好友详细列表接口
                 let request = proto::friend::GetAllFriendDetailListRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                 };
 
                 let response = client.get_all_friend_detail_list(request).await?;
@@ -164,7 +164,7 @@ impl FriendServiceHandler {
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let request = proto::friend::DeleteFriendRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     friend_id: friend_id.clone(),
                 };
 
@@ -179,7 +179,7 @@ impl FriendServiceHandler {
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
 
                 let request = proto::friend::CheckFriendshipRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     friend_id: friend_id.clone(),
                 };
 
@@ -187,12 +187,11 @@ impl FriendServiceHandler {
                 let inner = response.into_inner();
 
                 let status_text = match inner.status {
-                    0 => "PENDING",
-                    1 => "ACCEPTED",
-                    2 => "REJECTED",
-                    3 => "BLOCKED",
-                    4 => "EXPIRED",
-                    _ => "UNKNOWN"
+                    0 => "IS_FRIEND",
+                    1 => "PENDING_REQUEST",
+                    2 => "APPLIED",
+                    3 => "NO_FRIEND",
+                    _ => "NO_FRIEND"
                 };
 
                 Ok(success_response(
@@ -207,16 +206,26 @@ impl FriendServiceHandler {
             // 拉黑用户
             (&Method::POST, "block") => {
                 let blocked_user_id = extract_string_param(&body, "blockedUserId", Some("blocked_user_id"))?;
+                // 提取可选的拉黑原因
+                let reason = get_optional_string(&body, "reason", None);
 
                 let request = proto::friend::BlockUserRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     blocked_user_id: blocked_user_id.clone(),
+                    reason: reason.as_deref()
                 };
 
                 let response = client.block_user(request).await?;
                 let inner = response.into_inner();
 
-                Ok(success_response(inner.success, StatusCode::OK))
+                // 获取并返回黑名单记录
+                let blacklist = inner.blacklist.ok_or_else(|| anyhow::anyhow!("黑名单记录为空"))?;
+
+                let result = json!({
+                    "success": true,
+                    "blacklist": Self::convert_blacklist_to_json(&blacklist)
+                });
+                Ok(success_response(result, StatusCode::OK))
             }
 
             // 解除拉黑
@@ -224,7 +233,7 @@ impl FriendServiceHandler {
                 let blocked_user_id = extract_string_param(&body, "blockedUserId", Some("blocked_user_id"))?;
 
                 let request = proto::friend::UnblockUserRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     blocked_user_id: blocked_user_id.clone(),
                 };
 
@@ -232,6 +241,19 @@ impl FriendServiceHandler {
                 let inner = response.into_inner();
 
                 Ok(success_response(inner.success, StatusCode::OK))
+            }
+
+            // 获取黑名单列表
+            (&Method::POST, "getBlacklist") => {
+                let response = self.client.get_user_blacklist(&current_user_id).await?;
+
+                let blacklist_items = response.blacklist.iter()
+                    .map(|item| self.convert_blacklist_with_info_to_json(item))
+                    .collect::<Vec<_>>();
+
+                Ok(success_response(json!({
+                    "blacklist": blacklist_items
+                }), StatusCode::OK))
             }
 
             // 创建或更新好友分组
@@ -248,7 +270,7 @@ impl FriendServiceHandler {
 
                 let request = proto::friend::CreateOrUpdateFriendGroupRequest {
                     id,
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     group_name: group_name.clone(),
                     sort_order,
                     friend_ids: friend_ids.clone(),
@@ -272,7 +294,7 @@ impl FriendServiceHandler {
 
                 let request = proto::friend::DeleteFriendGroupRequest {
                     id: id.clone(),
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                 };
 
                 let response = client.delete_friend_group(request).await?;
@@ -284,7 +306,7 @@ impl FriendServiceHandler {
             // 获取好友分组列表
             (&Method::GET, "getGroups") => {
                 let request = proto::friend::GetFriendGroupsRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                 };
 
                 let response = client.get_friend_groups(request).await?;
@@ -301,7 +323,7 @@ impl FriendServiceHandler {
 
                 let request = proto::friend::GetGroupFriendsRequest {
                     group_id: group_id.clone(),
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                 };
 
                 let response = client.get_group_friends(request).await?;
@@ -320,7 +342,7 @@ impl FriendServiceHandler {
                 let search_term = extract_string_param(&body, "searchTerm", Some("search_term"))?;
                 
                 let request = proto::friend::SearchPotentialFriendsRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     search_term: search_term.clone(),
                 };
 
@@ -347,7 +369,7 @@ impl FriendServiceHandler {
                 let is_starred = body.get("isStarred").and_then(|v| v.as_bool()).unwrap_or(true);
 
                 let request = proto::friend::ToggleFriendStarRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     friend_id: friend_id.clone(),
                     is_starred,
                 };
@@ -364,7 +386,7 @@ impl FriendServiceHandler {
                 let is_top = body.get("isTop").and_then(|v| v.as_bool()).unwrap_or(true);
 
                 let request = proto::friend::ToggleFriendTopRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     friend_id: friend_id.clone(),
                     is_top,
                 };
@@ -381,7 +403,7 @@ impl FriendServiceHandler {
                 let remark = extract_string_param(&body, "remark", Some("remark"))?;
                 
                 let request = proto::friend::UpdateFriendRemarkRequest {
-                    user_id: user_id.clone(),
+                    user_id: current_user_id.clone(),
                     friend_id: friend_id.clone(),
                     remark: remark.clone(),
                 };
@@ -477,6 +499,7 @@ impl FriendServiceHandler {
             "nickname": friend.nickname,
             "avatarUrl": friend.avatar_url,
             "phone": friend.phone,
+            "sign": friend.sign,
             "friendshipStatus": friend.friendship_status,
             "friendshipStatusText": status_text
         })
@@ -506,4 +529,31 @@ impl FriendServiceHandler {
             "friendType": friend_type_text
         })
     }
-} 
+
+    // 将黑名单记录转换为JSON
+    fn convert_blacklist_to_json(blacklist: &proto::friend::UserBlacklist) -> Value {
+        json!({
+            "id": blacklist.id,
+            "userId": blacklist.user_id,
+            "blockedUserId": blacklist.blocked_user_id,
+            "reason": blacklist.reason,
+            "createdAt": timestamp_to_datetime_string(&blacklist.created_at)
+        })
+    }
+
+    // 将带用户信息的黑名单记录转换为JSON
+    fn convert_blacklist_with_info_to_json(blacklist_with_info: &proto::friend::UserBlacklistWithInfo) -> Value {
+        let blacklist_data = blacklist_with_info.blacklist.as_ref();
+
+        json!({
+            "id": blacklist_data.map(|bl| bl.id.clone()).unwrap_or_default(),
+            "userId": blacklist_data.map(|bl| bl.user_id.clone()).unwrap_or_default(),
+            "blockedUserId": blacklist_data.map(|bl| bl.blocked_user_id.clone()).unwrap_or_default(),
+            "reason": blacklist_data.and_then(|bl| bl.reason.clone()),
+            "createdAt": blacklist_data.map(|bl| timestamp_to_datetime_string(&bl.created_at)).unwrap_or_default(),
+            "username": blacklist_with_info.username,
+            "nickname": blacklist_with_info.nickname,
+            "avatarUrl": blacklist_with_info.avatar_url
+        })
+    }
+}

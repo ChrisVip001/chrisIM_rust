@@ -57,9 +57,24 @@ pub struct ValidateRegisterAvatarRequest {
     pub md5: String,
 }
 
-/// 构建路由
+/// 构建应用路由
+///
+/// 这个函数负责构建整个应用的路由系统，包括：
+/// - 认证路由（登录、注册、刷新令牌等）
+/// - 受保护的API路由（需要JWT验证）
+/// - 健康检查和指标端点
+/// - 文件上传路由
+///
+/// # 参数
+/// * `service_proxy` - 用于代理服务请求的代理器
+/// * `gateway_config` - 网关配置
+/// * `cache_instance` - 缓存实例，用于Redis操作
+///
+/// # 返回值
+/// * `Result<Router, anyhow::Error>` - 成功时返回构建好的路由器，失败时返回错误
 pub async fn build_routes(
     gateway_config: &GatewayConfig,
+    cache_instance: std::sync::Arc<dyn cache::Cache>,
 ) -> anyhow::Result<Router> {
     info!("构建路由...");
 
@@ -77,19 +92,37 @@ pub async fn build_routes(
         .route("/api/files/register-avatar", post(get_register_avatar_url))
         .route("/api/files/validate-register-avatar", post(validate_register_avatar));
 
+    // 需要认证的路由
+    let authenticated_routes = Router::new()
+        // 用户管理路由
+        .route("/api/user/logout", post(controller::logout))
+        .route("/api/user/logout-all", post(controller::logout_all_platforms))
+        .route("/api/user/platforms", get(controller::get_user_platforms))
+        // 好友在线状态查询路由
+        .route("/api/friends/online-status", post(controller::batch_get_friends_online_status))
+        .route("/api/friends/online-check", post(controller::batch_check_friends_online))
+        .layer(axum::Extension(cache_instance.clone()))
+        .layer(middleware::from_fn(auth_middleware));
+
+    // 合并路由
+    router = router.merge(authenticated_routes);
+
     // 添加服务路由
     for route in &gateway_config.routes.routes {
-        router = add_service_route(router, route);
+        router = add_service_route(router, route, cache_instance.clone());
     }
 
-    info!("路由构建完成，共 {} 个路由规则", gateway_config.routes.routes.len());
-    Ok(router)
+    // 添加用户服务扩展和缓存扩展
+    Ok(router
+        .layer(axum::Extension(user_service))
+        .layer(axum::Extension(cache_instance)))
 }
 
 /// 添加服务路由
 fn add_service_route(
     router: Router,
     route: &RouteRule,
+    cache_instance: Arc<dyn cache::Cache>,
 ) -> Router {
     let path = route.path_prefix.clone();
     let service_type = route.service_type.clone();
@@ -101,7 +134,7 @@ fn add_service_route(
         move |req: Request<Body>| {
             let service_type = service_type.clone();
             async move {
-                ServiceProxy::forward_request(req, &service_type).await 
+                ServiceProxy::forward_request(req, &service_type).await
             }
         }
     };
@@ -110,7 +143,9 @@ fn add_service_route(
     
     // 根据认证要求添加路由
     let route_handler = if require_auth {
-        any(create_handler()).layer(middleware::from_fn(auth_middleware))
+        any(create_handler())
+            .layer(axum::Extension(cache_instance.clone()))
+            .layer(middleware::from_fn(auth_middleware))
     } else {
         any(create_handler())
     };
@@ -118,7 +153,9 @@ fn add_service_route(
     // 添加精确路径和通配符路径
     let wildcard_path = format!("{}/{{*path}}", path);
     let wildcard_handler = if require_auth {
-        any(create_handler()).layer(middleware::from_fn(auth_middleware))
+        any(create_handler())
+            .layer(axum::Extension(cache_instance.clone()))
+            .layer(middleware::from_fn(auth_middleware))
     } else {
         any(create_handler())
     };

@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
         .map_err( |e| anyhow::anyhow!("数据库连接失败:{}", e))?;
 
     // 初始化用户服务
-    let user_service = UserServiceImpl::new(db_pool.clone());
+    let user_service = UserServiceImpl::new(db_pool.clone()).await?;
 
     // 设置关闭通道
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

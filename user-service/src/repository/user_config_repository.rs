@@ -22,7 +22,7 @@ impl UserConfigRepository {
         let row = sqlx::query!(
             r#"
             SELECT id, user_id, allow_phone_search, allow_id_search, auto_load_video, auto_load_pic, msg_read_flag,
-                   create_time,update_time
+                   sound_enabled, vibration_enabled, show_phone, create_time, update_time
             FROM user_config
             WHERE user_id = $1
             "#,
@@ -42,6 +42,9 @@ impl UserConfigRepository {
                     auto_load_video: row.auto_load_video,
                     auto_load_pic: row.auto_load_pic,
                     msg_read_flag: row.msg_read_flag,
+                    sound_enabled: row.sound_enabled,
+                    vibration_enabled: row.vibration_enabled,
+                    show_phone: row.show_phone,
                     create_time: row.create_time,
                     update_time: row.update_time,
                 })
@@ -51,11 +54,14 @@ impl UserConfigRepository {
                 Ok(UserConfig {
                     id: 0, // 使用默认值 0 作为占位符
                     user_id: id.to_string(),
-                    allow_phone_search: Option::from(2),  // 设置默认值
-                    allow_id_search: Option::from(2),     // 设置默认值
+                    allow_phone_search: Option::from(1),  // 设置默认值
+                    allow_id_search: Option::from(1),     // 设置默认值
                     auto_load_video: Option::from(2),    // 设置默认值
                     auto_load_pic: Option::from(2),       // 设置默认值
-                    msg_read_flag: Option::from(2),       // 设置默认值
+                    msg_read_flag: Option::from(1),       // 设置默认值
+                    sound_enabled: Option::from(1),       // 设置默认值
+                    vibration_enabled: Option::from(2),   // 设置默认值
+                    show_phone: Option::from(2),          // 设置默认值
                     create_time: Some(Utc::now()),
                     update_time: Some(Utc::now()),
                 })
@@ -98,12 +104,27 @@ impl UserConfigRepository {
                 builder.push(" msg_read_flag = COALESCE( ").push_bind(msg_read_flag).push(", msg_read_flag) ");
                 first = false;
             }
+            if let Some(sound_enabled) = data.sound_enabled {
+                if !first { builder.push(","); }
+                builder.push(" sound_enabled = COALESCE( ").push_bind(sound_enabled).push(", sound_enabled) ");
+                first = false;
+            }
+            if let Some(vibration_enabled) = data.vibration_enabled {
+                if !first { builder.push(","); }
+                builder.push(" vibration_enabled = COALESCE( ").push_bind(vibration_enabled).push(", vibration_enabled) ");
+                first = false;
+            }
+            if let Some(show_phone) = data.show_phone {
+                if !first { builder.push(","); }
+                builder.push(" show_phone = COALESCE( ").push_bind(show_phone).push(", show_phone) ");
+                first = false;
+            }
 
             if !first { builder.push(","); }
             builder.push(" update_time = ").push_bind(Utc::now());
             builder.push(" WHERE user_id = ").push_bind(&data.user_id);
             builder.push(" RETURNING id, user_id, allow_phone_search, allow_id_search, auto_load_video, 
-                auto_load_pic, msg_read_flag,create_time,update_time "
+                auto_load_pic, msg_read_flag, sound_enabled, vibration_enabled, show_phone, create_time, update_time "
             );
             // 生成最终SQL
             let query = builder.build_query_as::<UserConfig>();
@@ -116,6 +137,9 @@ impl UserConfigRepository {
                 auto_load_video: row.auto_load_video,
                 auto_load_pic: row.auto_load_pic,
                 msg_read_flag: row.msg_read_flag,
+                sound_enabled: row.sound_enabled,
+                vibration_enabled: row.vibration_enabled,
+                show_phone: row.show_phone,
                 create_time: row.create_time,
                 update_time: row.update_time,
             })
@@ -124,10 +148,10 @@ impl UserConfigRepository {
             let row = sqlx::query!(
                 r#"
                 INSERT INTO user_config (user_id, allow_phone_search, allow_id_search, auto_load_video, 
-                                         auto_load_pic,msg_read_flag)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id, user_id, allow_phone_search, allow_id_search, auto_load_video, auto_load_pic, msg_read_flag,
-                create_time,update_time
+                                         auto_load_pic, msg_read_flag, sound_enabled, vibration_enabled, show_phone)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id, user_id, allow_phone_search, allow_id_search, auto_load_video, auto_load_pic, 
+                          msg_read_flag, sound_enabled, vibration_enabled, show_phone, create_time, update_time
                 "#,
                 data.user_id,
                 data.allow_phone_search,
@@ -135,6 +159,9 @@ impl UserConfigRepository {
                 data.auto_load_video,
                 data.auto_load_pic,
                 data.msg_read_flag,
+                data.sound_enabled,
+                data.vibration_enabled,
+                data.show_phone,
             )
             .fetch_one(&self.pool)
             .await?;
@@ -146,6 +173,9 @@ impl UserConfigRepository {
                 auto_load_video: row.auto_load_video,
                 auto_load_pic: row.auto_load_pic,
                 msg_read_flag: row.msg_read_flag,
+                sound_enabled: row.sound_enabled,
+                vibration_enabled: row.vibration_enabled,
+                show_phone: row.show_phone,
                 create_time: row.create_time,
                 update_time: row.update_time,
             })

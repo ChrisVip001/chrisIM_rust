@@ -33,6 +33,9 @@ service FriendService {
   // 解除拉黑
   rpc UnblockUser (UnblockUserRequest) returns (UnblockUserResponse);
   
+  // 是否拉黑状态
+  rpc IsBlocked (IsBlockedRequest) returns (IsBlockedResponse);
+  
   // 创建或更新好友分组
   rpc CreateOrUpdateFriendGroup (CreateOrUpdateFriendGroupRequest) returns (FriendGroupResponse);
   
@@ -59,6 +62,9 @@ service FriendService {
   
   // 更新好友备注
   rpc UpdateFriendRemark (UpdateFriendRemarkRequest) returns (UpdateFriendRemarkResponse);
+  
+  // 获取黑名单列表
+  rpc GetUserBlacklist (GetUserBlacklistRequest) returns (GetUserBlacklistResponse);
 }
 
 // 发送好友请求
@@ -128,7 +134,7 @@ message CheckFriendshipRequest {
 
 // 检查好友关系响应
 message CheckFriendshipResponse {
-  FriendshipStatus status = 1;
+  FriendRelationType status = 1;
 }
 
 // 好友关系响应
@@ -170,15 +176,30 @@ enum FriendshipStatus {
   EXPIRED = 4;  // 过期状态
 }
 
+// 好友关系类型（用于CheckFriendship接口）
+enum FriendRelationType {
+  IS_FRIEND = 0;      // 已是好友
+  PENDING_REQUEST = 1; // 对方发送的请求待处理
+  APPLIED = 2;        // 自己发送的请求
+  NO_FRIEND = 3;      // 没有好友关系
+}
+
 // 拉黑用户请求
 message BlockUserRequest {
   string user_id = 1;        // 操作用户ID
   string blocked_user_id = 2; // 被拉黑用户ID
+  string reason = 3;         // 拉黑原因（可选）
+}
+
+// 是否拉黑状态请求
+message IsBlockedRequest {
+  string user_id = 1;        // 操作用户ID
+  string blocked_user_id = 2; // 被操作的用户ID
 }
 
 // 拉黑用户响应
 message BlockUserResponse {
-  bool success = 1;
+  UserBlacklist blacklist = 1;
 }
 
 // 解除拉黑请求
@@ -190,6 +211,39 @@ message UnblockUserRequest {
 // 解除拉黑响应
 message UnblockUserResponse {
   bool success = 1;
+}
+
+// 是否拉黑状态响应
+message IsBlockedResponse {
+  bool is_blocked = 1;
+}
+
+// 用户黑名单记录
+message UserBlacklist {
+  string id = 1;                         // 黑名单记录ID
+  string user_id = 2;                    // 用户ID（拉黑操作的发起者）
+  string blocked_user_id = 3;            // 被拉黑用户ID
+  optional string reason = 4;            // 拉黑原因
+  google.protobuf.Timestamp created_at = 5; // 拉黑时间
+}
+
+// 带用户信息的黑名单记录
+message UserBlacklistWithInfo {
+  UserBlacklist blacklist = 1;           // 黑名单记录
+  optional string username = 2;          // 被拉黑用户的用户名
+  optional string nickname = 3;          // 被拉黑用户的昵称
+  optional string avatar_url = 4;        // 被拉黑用户的头像
+}
+
+// 获取黑名单列表请求
+message GetUserBlacklistRequest {
+  string user_id = 1;                    // 用户ID
+}
+
+// 获取黑名单列表响应
+message GetUserBlacklistResponse {
+  repeated UserBlacklistWithInfo blacklist = 1; // 黑名单列表（带用户信息）
+  int64 total = 2;                             // 总数
 }
 
 // 好友分组
@@ -270,6 +324,7 @@ message PotentialFriend {
   optional string avatar_url = 4;     // 头像地址
   optional string phone = 5;          // 手机号（可能会根据隐私设置处理）
   FriendshipStatus friendship_status = 6; // 好友关系状态，如果有的话
+  optional string sign = 7; // 个性签名
 }
 
 // 好友类型

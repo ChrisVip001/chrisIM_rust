@@ -12,6 +12,9 @@ service UserService {
   // 通过ID获取用户
   rpc GetUserById (GetUserByIdRequest) returns (UserResponse);
   
+  // 增强的通过ID获取用户（包含好友状态、拉黑状态、在线状态）
+  rpc GetEnhancedUserById (GetEnhancedUserByIdRequest) returns (EnhancedUserResponse);
+  
   // 通过用户名获取用户
   rpc GetUserByUsername (GetUserByUsernameRequest) returns (UserResponse);
   
@@ -47,6 +50,12 @@ service UserService {
   
   // 验证手机验证码
   rpc VerifyPhoneCode (VerifyPhoneCodeRequest) returns (VerifyPhoneCodeResponse);
+  
+  // 注销用户账号
+  rpc DeactivateUser (DeactivateUserRequest) returns (DeactivateUserResponse);
+  
+  // 修改手机号
+  rpc UpdatePhone (UpdatePhoneRequest) returns (UpdatePhoneResponse);
 }
 
 // 创建用户请求
@@ -61,6 +70,12 @@ message CreateUserRequest {
 // 按ID获取用户请求
 message GetUserByIdRequest {
   string user_id = 1;
+}
+
+// 按ID获取用户请求
+message GetEnhancedUserByIdRequest {
+  string current_user_id = 1;
+  string user_id = 2;
 }
 
 // 按用户名获取用户请求
@@ -81,6 +96,7 @@ message UpdateUserRequest {
   optional int32 sex = 9;
   optional string username = 10;
   optional string custom_id = 11;
+  optional string sign = 12;
 }
 
 // 验证密码请求
@@ -131,6 +147,7 @@ message User {
   string tenant_id = 14;
   google.protobuf.Timestamp last_login_time = 15;
   string custom_id = 16;
+  optional string sign = 17;
 }
 
 // 用户注册请求
@@ -160,6 +177,9 @@ message UserConfigRequest{
   optional int32 auto_load_video = 4;
   optional int32 auto_load_pic = 5;
   optional int32 msg_read_flag = 6;
+  optional int32 sound_enabled = 7;
+  optional int32 vibration_enabled = 8;
+  optional int32 show_phone = 9;
 }
 
 // 用户设置响应
@@ -177,6 +197,9 @@ message UserConfig {
   optional int32 msg_read_flag = 6;
   google.protobuf.Timestamp create_time = 7;
   google.protobuf.Timestamp update_time = 8;
+  optional int32 sound_enabled = 9;
+  optional int32 vibration_enabled = 10;
+  optional int32 show_phone = 11;
 }
 
 // 手机验证码请求
@@ -202,4 +225,50 @@ message VerifyPhoneCodeRequest {
 message VerifyPhoneCodeResponse {
   bool valid = 1;
   string message = 2;
+}
+
+// 用户注销请求
+message DeactivateUserRequest {
+  string user_id = 1;
+  string phone = 2;    // 需要验证手机号
+  string verify_code = 3;  // 需要提供验证码
+}
+
+// 用户注销响应
+message DeactivateUserResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 修改手机号请求
+message UpdatePhoneRequest {
+  string user_id = 1;     // 用户ID
+  string password = 2;    // 用户密码，用于验证身份
+  string new_phone = 3;   // 新手机号
+  string verify_code = 4; // 新手机号的验证码
+}
+
+// 修改手机号响应
+message UpdatePhoneResponse {
+  bool success = 1;
+  string message = 2;
+  optional User user = 3; // 更新后的用户信息
+}
+
+// 增强的用户详情响应
+message EnhancedUserResponse {
+  User user = 1;                    // 用户基本信息
+  bool is_blocked = 2;              // 是否已拉黑
+  FriendshipStatus friend_status = 3; // 好友状态
+  bool is_online = 4;               // 在线状态
+}
+
+// 好友关系状态枚举
+enum FriendshipStatus {
+  NO_RELATION = 0;      // 无关系
+  PENDING = 1;          // 待确认
+  ACCEPTED = 2;         // 已接受（好友）
+  REJECTED = 3;         // 已拒绝
+  BLOCKED = 4;          // 已拉黑
+  EXPIRED = 5;          // 已过期
 }

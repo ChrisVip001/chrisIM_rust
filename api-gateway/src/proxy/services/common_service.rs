@@ -23,7 +23,7 @@ use crate::auth::jwt::UserInfo;
 pub struct CommonServiceHandler;
 
 impl CommonServiceHandler {
-    
+
     /// 处理通用服务请求
     pub async fn handle_request(
         method: &Method,
@@ -43,7 +43,15 @@ impl CommonServiceHandler {
             // 模糊查询当前用户的好友和群聊（并行调用）
             (&Method::POST, "searchFriendsAndGroups") => {
                 let keyword = get_optional_string(&body, "keyword", None).unwrap_or_default();
-                
+
+                // 如果关键字为空，直接返回空数组
+                if keyword.trim().is_empty() {
+                    return Ok(success_response(json!({
+                        "friends": [],
+                        "groups": []
+                    }), StatusCode::OK));
+                }
+
                 // 并行调用好友服务和群组服务
                 let (friends_result, groups_result) = tokio::join!(
                     Self::search_friends(&user_id, &keyword),
@@ -60,7 +68,7 @@ impl CommonServiceHandler {
                     error!("搜索群组失败: {}", e);
                     Vec::new() // 如果群组搜索失败，返回空数组而不是整个请求失败
                 });
-                
+
                 // 返回分类结果
                 Ok(success_response(json!({
                     "friends": friends,
@@ -116,22 +124,22 @@ impl CommonServiceHandler {
     /// 获取用户信息（独立的异步方法）
     async fn get_user_info(user_id: &str) -> anyhow::Result<Value> {
         let mut user_client = common::service::user_client().await?;
-        
+
         let request = proto::user::GetUserByIdRequest {
             user_id: user_id.to_string(),
         };
-        
+
         let user_response = user_client.get_user_by_id(request).await?;
         let user = user_response.into_inner().user
             .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-        
+
         Ok(Self::convert_user_to_json(&user))
     }
 
     /// 搜索好友（独立的异步方法）
     async fn search_friends(user_id: &str, keyword: &str) -> anyhow::Result<Vec<Value>> {
         let mut friend_client = common::service::friend_client().await?;
-        
+
         let request = GetFriendListRequest {
             user_id: user_id.to_string(),
             page: 1,
@@ -139,36 +147,36 @@ impl CommonServiceHandler {
             sort_by: String::new(),
             keyword: keyword.to_string(),
         };
-        
+
         let friends_response = friend_client.get_friend_list(request).await?;
         let friends = friends_response.into_inner().friends
             .iter()
             .map(|f| Self::convert_friend_to_json(f))
             .collect();
-            
+
         Ok(friends)
     }
 
     /// 搜索群组（独立的异步方法）
     async fn search_groups(user_id: &str, keyword: &str) -> anyhow::Result<Vec<Value>> {
         let mut group_client = common::service::group_client().await?;
-        
+
         let request = SearchUserGroupsRequest {
             user_id: user_id.to_string(),
             keyword: keyword.to_string(),
             page: 1,
             page_size: 5000,
         };
-        
+
         let groups_response = group_client.search_user_groups(request).await?;
         let groups = groups_response.into_inner().groups
             .iter()
             .map(|g| Self::convert_user_group_to_json(g))
             .collect();
-            
+
         Ok(groups)
     }
-    
+
     // ===== 转换方法，将不同服务的数据转换为JSON格式 =====
     
     /// 将详细好友信息转换为JSON
@@ -249,4 +257,4 @@ impl CommonServiceHandler {
             "lastLoginTime": timestamp_to_datetime_string(&user.last_login_time),
         })
     }
-} 
+}
