@@ -146,10 +146,10 @@ impl FriendServiceHandler {
                 let response = self.client.check_friendship(&current_user_id, &friend_id).await?;
 
                 let status_text = match response.status {
-                    0 => "IS_FRIEND",
-                    1 => "PENDING_REQUEST",
-                    2 => "APPLIED",
-                    3 => "NO_FRIEND",
+                    1 => "IS_FRIEND",
+                    2 => "PENDING_REQUEST",
+                    3 => "APPLIED",
+                    0 => "NO_FRIEND",
                     _ => "NO_FRIEND"
                 };
 

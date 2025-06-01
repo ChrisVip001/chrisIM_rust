@@ -178,10 +178,10 @@ enum FriendshipStatus {
 
 // 好友关系类型（用于CheckFriendship接口）
 enum FriendRelationType {
-  IS_FRIEND = 0;      // 已是好友
-  PENDING_REQUEST = 1; // 对方发送的请求待处理
-  APPLIED = 2;        // 自己发送的请求
-  NO_FRIEND = 3;      // 没有好友关系
+  NO_FRIEND = 0;      // 没有好友关系
+  IS_FRIEND = 1;      // 已是好友
+  PENDING_REQUEST = 2; // 对方发送的请求待处理
+  APPLIED = 3;        // 自己发送的请求
 }
 
 // 拉黑用户请求
