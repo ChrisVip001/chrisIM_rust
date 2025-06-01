@@ -146,6 +146,18 @@ fn build_cors_layer() -> CorsLayer {
             "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
             "http://localhost:5173".parse::<HeaderValue>().unwrap(),
             "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
+            // 添加更多开发端口支持
+            "http://localhost:63342".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:63342".parse::<HeaderValue>().unwrap(),
+            "http://localhost:8080".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
+            "http://localhost:8081".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:8081".parse::<HeaderValue>().unwrap(),
+            // 常见的开发端口
+            "http://localhost:3001".parse::<HeaderValue>().unwrap(),
+            "http://localhost:3002".parse::<HeaderValue>().unwrap(),
+            "http://localhost:8000".parse::<HeaderValue>().unwrap(),
+            "http://localhost:9000".parse::<HeaderValue>().unwrap(),
         ])
         .allow_methods([
             axum::http::Method::GET,
@@ -161,6 +173,9 @@ fn build_cors_layer() -> CorsLayer {
             axum::http::header::ACCEPT,
             axum::http::header::ORIGIN,
             axum::http::header::USER_AGENT,
+            // 添加更多常用的请求头
+            axum::http::header::CACHE_CONTROL,
+            axum::http::header::PRAGMA,
         ])
         .allow_credentials(true)
         .max_age(Duration::from_secs(3600))
