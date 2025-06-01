@@ -493,13 +493,38 @@ impl UserService for UserServiceImpl {
         // 检查好友关系和拉黑状态
         let (friend_status, is_blocked) = self.check_friend_and_blacklist_status(&req.current_user_id, &req.user_id).await?;
 
-        // 返回增强的响应
-        Ok(Response::new(EnhancedUserResponse {
-            user: Some(ProtoUser::from(processed_user)),
-            is_blocked,
-            friend_status: friend_status as i32,
-            is_online,
-        }))
+        // 如果是好友关系，查找对应的好友关系列表
+        if friend_status == 1 {
+            let friend_relation_request = Request::new(common::proto::friend::GetFriendRelationRequest {
+                user_id: req.current_user_id.clone(),
+                friend_id: req.user_id.clone(),
+            });
+            
+            let friend_relation_resp = self.friend_service.clone().get_friend_relation(friend_relation_request).await?.into_inner();
+            
+            // 返回增强的响应
+            Ok(Response::new(EnhancedUserResponse {
+                user: Some(ProtoUser::from(processed_user)),
+                is_blocked,
+                friend_status: friend_status as i32,
+                is_online,
+                friend_relation: friend_relation_resp.friend.map(|f| common::proto::user::FriendRelation {
+                    remark: f.remark,
+                    is_starred: f.is_starred,
+                    is_top: f.is_top,
+                    friend_type: f.friend_type,
+                }),
+            }))
+        } else {
+            // 返回增强的响应，但没有好友关系信息
+            Ok(Response::new(EnhancedUserResponse {
+                user: Some(ProtoUser::from(processed_user)),
+                is_blocked,
+                friend_status: friend_status as i32,
+                is_online,
+                friend_relation: None,
+            }))
+        }
     }
 
     /// 通过用户名获取用户

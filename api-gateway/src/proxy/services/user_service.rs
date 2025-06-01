@@ -54,13 +54,28 @@ impl UserServiceHandler {
 
                 let response = self.client.get_enhanced_user(current_user_id, &user_id).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
-
-                let result = json!({
+                
+                // 构建基本结果
+                let mut result = json!({
                     "user": self.convert_user_to_json(&user),
                     "isBlocked": response.is_blocked,
                     "friendStatus": response.friend_status,
-                    "isOnline": response.is_online
+                    "isOnline": response.is_online,
+                    "isStarred": false,
+                    "isTop": false,
+                    "remark": "",
+                    "friendType": 0
                 });
+                
+                // 如果有好友关系信息，则更新相关字段
+                if let Some(relation) = response.friend_relation {
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert("isStarred".to_string(), json!(relation.is_starred));
+                        obj.insert("isTop".to_string(), json!(relation.is_top));
+                        obj.insert("remark".to_string(), json!(relation.remark));
+                        obj.insert("friendType".to_string(), json!(relation.friend_type));
+                    }
+                }
 
                 Ok(success_response(result, StatusCode::OK))
             }

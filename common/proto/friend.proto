@@ -65,6 +65,9 @@ service FriendService {
   
   // 获取黑名单列表
   rpc GetUserBlacklist (GetUserBlacklistRequest) returns (GetUserBlacklistResponse);
+
+  // 获取好友关系记录
+  rpc GetFriendRelation(GetFriendRelationRequest) returns (GetFriendRelationResponse);
 }
 
 // 发送好友请求
@@ -394,4 +397,15 @@ message UpdateFriendRemarkRequest {
 message UpdateFriendRemarkResponse {
   bool success = 1;          // 操作是否成功
   DetailedFriend friend = 2; // 更新后的好友信息
+}
+
+// 获取好友关系记录请求
+message GetFriendRelationRequest {
+  string user_id = 1;      // 用户ID
+  string friend_id = 2;    // 好友ID
+}
+
+// 获取好友关系记录响应
+message GetFriendRelationResponse{
+  DetailedFriend friend = 1;
 }

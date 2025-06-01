@@ -261,6 +261,7 @@ message EnhancedUserResponse {
   bool is_blocked = 2;              // 是否已拉黑
   FriendshipStatus friend_status = 3; // 好友状态
   bool is_online = 4;               // 在线状态
+  optional FriendRelation friend_relation =5;     // 好友关系
 }
 
 // 好友关系状态枚举
@@ -271,4 +272,11 @@ enum FriendshipStatus {
   REJECTED = 3;         // 已拒绝
   BLOCKED = 4;          // 已拉黑
   EXPIRED = 5;          // 已过期
+}
+
+message FriendRelation{
+  optional string remark = 1;    // 好友备注名称
+  bool is_starred = 2;           // 是否星标
+  bool is_top = 3;               // 是否置顶
+  int32 friend_type = 4;         // 好友类型：0-普通好友 1-官方账号 2-系统账号
 }
