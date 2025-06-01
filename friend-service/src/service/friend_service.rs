@@ -173,28 +173,15 @@ impl FriendService for FriendServiceImpl {
             }
         }
 
-        /**
-         * 好友请求处理逻辑流程：
-         * 1. 检查是否存在历史好友请求记录
-         * 2. 如果存在记录，根据请求方向和状态进行处理：
-         *    - 对方发来的请求(friend_id == user_id)：
-         *      * 已接受(1)：返回错误(已是好友)
-         *      * 待处理(0)：返回错误(需先处理对方请求)
-         *      *
-         *      * 已拒绝(2)/已过期(4)：清理历史记录，允许创建新请求
-         *    - 自己发出的请求(user_id == user_id)：
-         *      * 已接受(1)：返回错误(已是好友)
-         *      * 其他状态(0/2/4)：清理历史记录，允许创建新请求
-         * 3. 如果没有记录或历史记录已处理，继续创建新的好友请求
-         */
         match self.repository.check_friendship_request(&user_id, &friend_id).await {
             Ok(Some(request)) => {
                 // 处理对方发送的请求
                 if request.friend_id == user_id {
                     match request.status {
-                        1 => return Err(Status::already_exists("已经存在好友关系")),
+                        // 是否是好友关系在上面已经判断。这里如果再判断会出现已经是好友删除后添加会不让添加的情况
+                        //  => return Err(Status::already_exists("已经存在好友关系")),
                         0 => return Err(Status::already_exists("对方已经发送好友请求给你，请先处理对方的请求")),
-                        2 | 4 => {
+                        1 | 2 | 4 => {
                             // 已拒绝或已过期，删除旧请求
                             if let Err(e) = self.repository.delete_friend(&user_id, &friend_id).await {
                                 error!("删除历史好友请求失败: {}", e);
@@ -204,12 +191,13 @@ impl FriendService for FriendServiceImpl {
                         _ => {} // 其他状态码，继续处理
                     }
                 }
-                
+
                 // 处理自己发送的请求
                 if request.user_id == user_id {
                     match request.status {
-                        1 => return Err(Status::already_exists("已经存在好友关系")),
-                        0 | 2 | 4 => {
+                        // 是否是好友关系在上面已经判断。这里如果再判断会出现已经是好友删除后添加会不让添加的情况
+                        // 1 => return Err(Status::already_exists("已经存在好友关系")),
+                        0 | 1 | 2 | 4 => {
                             // 发送中、已拒绝或已过期，删除旧请求
                             if let Err(e) = self.repository.delete_friend(&user_id, &friend_id).await {
                                 error!("删除历史好友请求失败: {}", e);
@@ -219,7 +207,7 @@ impl FriendService for FriendServiceImpl {
                         _ => {} // 其他状态码，继续处理
                     }
                 }
-                
+
                 // 历史请求已处理，继续创建新请求
             },
             Ok(None) => {
@@ -230,6 +218,21 @@ impl FriendService for FriendServiceImpl {
                 return Err(Status::internal("内部服务错误"));
             }
         }
+
+        /**
+         * 好友请求处理逻辑流程：
+         * 1. 检查是否存在历史好友请求记录
+         * 2. 如果存在记录，根据请求方向和状态进行处理：
+         *    - 对方发来的请求(friend_id == user_id)：
+         *      * 已接受(1)：返回错误(已是好友) 改为 清理历史记录，允许创建新请求 (是否是好友关系在上面已经判断。这里如果再判断会出现已经是好友删除后添加会不让添加的情况)
+         *      * 待处理(0)：返回错误(需先处理对方请求)
+         *      * 已拒绝(2)/已过期(4)：清理历史记录，允许创建新请求
+         *      *
+         *    - 自己发出的请求(user_id == user_id)：
+         *      * 已接受(1)：返回错误(已是好友)  改为 清理历史记录，允许创建新请求 (是否是好友关系在上面已经判断。这里如果再判断会出现已经是好友删除后添加会不让添加的情况)
+         *      * 其他状态(0/2/4)：清理历史记录，允许创建新请求
+         * 3. 如果没有记录或历史记录已处理，继续创建新的好友请求
+         */
 
         // 创建好友请求
         match self
