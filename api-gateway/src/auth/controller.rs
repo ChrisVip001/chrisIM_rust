@@ -331,7 +331,6 @@ pub async fn refresh_token(
     let user_info =  match jwt::verify_token(&refresh_req.refresh_token, jwt_config) {
         Ok(user) => {user}
         Err(e) => {
-            error!("报错: {}", e);
             return Ok(success_response(Null, StatusCode::UNAUTHORIZED));
         }
     };
