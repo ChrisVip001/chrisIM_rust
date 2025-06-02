@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 pub struct AuthConfig {
     /// JWT配置
     pub jwt: JwtConfig,
-    /// IP白名单
+    /// IP黑名单
     #[serde(default)]
-    pub ip_whitelist: Vec<String>,
+    pub ip_blacklist: Vec<String>,
     /// 路径白名单（不需要认证的路径）
     #[serde(default)]
     pub path_whitelist: Vec<String>,

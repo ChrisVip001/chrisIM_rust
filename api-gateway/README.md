@@ -164,8 +164,8 @@ auth:
     header_name: "Authorization"
     header_prefix: "Bearer "
   
-  # IP白名单
-  ip_whitelist:
+  # IP黑名单
+  ip_blacklist:
     - "127.0.0.1"
     - "::1"
   

@@ -17,7 +17,7 @@ use crate::middleware::get_client_ip;
 /// 认证中间件
 pub async fn auth_middleware(
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
-    mut req: Request,
+    req: Request,
     next: Next,
 ) -> Response {
     let config = match ConfigLoader::get_global() {
@@ -47,12 +47,8 @@ pub async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // 检查IP是否在白名单中
+    // 检查IP是否在黑名单中
     let client_ip = get_client_ip(&req);
-    if config.gateway.auth.ip_whitelist.contains(&client_ip) {
-        // IP白名单，直接放行
-        return next.run(req).await;
-    }
 
     // 获取JWT配置
     let jwt_config = &config.gateway.auth.jwt;

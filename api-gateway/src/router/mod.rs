@@ -92,11 +92,7 @@ pub async fn build_routes(
         // 认证路由（无需认证）
         .route("/api/user/login", post(controller::login))
         .route("/api/user/loginByPhone", post(controller::login_by_phone))
-        .route("/api/user/refresh", post(controller::refresh_token))
-        // 文件上传路由（无需认证）
-        .route("/api/files/validate-upload", post(validate_file_upload))
-        .route("/api/files/register-avatar", post(get_register_avatar_url))
-        .route("/api/files/validate-register-avatar", post(validate_register_avatar));
+        .route("/api/user/refresh", post(controller::refresh_token));
 
     // 需要认证的路由
     let authenticated_routes = Router::new()
@@ -109,7 +105,11 @@ pub async fn build_routes(
         .route("/api/friends/online-check", post(controller::batch_check_friends_online))
         // 文件上传签名路由（需要认证以获取租户ID）
         .route("/api/files/upload-signature", post(get_upload_signature))
-        .layer(axum::Extension(cache_instance.clone()))
+        // 文件上传路由（无需认证）
+        .route("/api/files/validate-upload", post(validate_file_upload))
+        .route("/api/files/register-avatar", post(get_register_avatar_url))
+        .route("/api/files/validate-register-avatar", post(validate_register_avatar))
+        .layer(Extension(cache_instance.clone()))
         .layer(middleware::from_fn(auth_middleware));
 
     // 合并路由
