@@ -13,9 +13,11 @@ bytes = "1.10.1"
 md-5 = "0.10.1"
 
 tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+chrono = "0.4.31"
 
 # 腾讯云COS REST API依赖
 reqwest = { workspace = true, features = ["json", "multipart"] }

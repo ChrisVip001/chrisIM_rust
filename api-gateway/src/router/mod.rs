@@ -17,7 +17,7 @@ use common::{
     proto::user::user_service_client::UserServiceClient,
     service_discovery::LbWithServiceDiscovery,
 };
-use oss::oss;
+use oss::{oss, UploadSignature, BucketType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
@@ -37,6 +37,15 @@ pub struct PresignedUrlRequest {
 pub struct PresignedUrlResponse {
     pub upload_url: String,
     pub key: String,
+}
+
+// POST表单上传签名请求参数
+#[derive(Debug, Deserialize)]
+pub struct UploadSignatureRequest {
+    pub filename: String,
+    pub content_type: String,
+    pub file_size: usize,
+    pub bucket_type: String, // "file" 或 "avatar"
 }
 
 // 文件上传完成验证请求
@@ -104,6 +113,7 @@ pub async fn build_routes(
         // 文件上传路由（无需认证）
         .route("/api/files/presigned-url", post(get_presigned_upload_url))
         .route("/api/files/validate-upload", post(validate_file_upload))
+        .route("/api/files/upload-signature", post(get_upload_signature))
         .route("/api/files/register-avatar", post(get_register_avatar_url))
         .route("/api/files/validate-register-avatar", post(validate_register_avatar));
 
@@ -286,6 +296,117 @@ async fn validate_file_upload(
                 Json(json!({
                     "error": "validation_error",
                     "message": "无法验证文件上传"
+                })),
+            )
+        }
+    }
+}
+
+/// 获取POST表单上传签名
+async fn get_upload_signature(
+    Json(req): Json<UploadSignatureRequest>,
+) -> impl IntoResponse {
+    // 验证文件类型和大小
+    if req.file_size > 100 * 1024 * 1024 {
+        // 100MB 限制
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "file_too_large",
+                "message": "文件大小不能超过100MB"
+            })),
+        );
+    }
+
+    // 解析bucket类型
+    let bucket_type = match req.bucket_type.as_str() {
+        "file" => BucketType::File,
+        "avatar" => BucketType::Avatar,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_bucket_type",
+                    "message": "bucket_type必须是'file'或'avatar'"
+                })),
+            );
+        }
+    };
+
+    // 对于头像类型，需要额外的验证
+    if bucket_type == BucketType::Avatar {
+        if !is_valid_avatar_type(&req.content_type) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "invalid_content_type",
+                    "message": "不支持的头像文件类型，仅支持 JPEG, PNG, WebP"
+                })),
+            );
+        }
+
+        if req.file_size > 5 * 1024 * 1024 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "file_too_large",
+                    "message": "头像文件大小不能超过5MB"
+                })),
+            );
+        }
+    }
+
+    // 生成唯一的文件键
+    let file_extension = req
+        .filename
+        .split('.')
+        .last()
+        .unwrap_or("bin")
+        .to_lowercase();
+    
+    let key = match bucket_type {
+        BucketType::File => format!("uploads/{}/{}.{}", 
+            chrono::Utc::now().format("%Y/%m/%d"),
+            Uuid::new_v4(),
+            file_extension
+        ),
+        BucketType::Avatar => {
+            let file_extension = match req.content_type.as_str() {
+                "image/jpeg" => "jpg",
+                "image/png" => "png",
+                "image/webp" => "webp",
+                _ => "jpg", // 默认
+            };
+            format!("avatars/{}.{}", Uuid::new_v4(), file_extension)
+        }
+    };
+
+    // 获取配置并创建OSS客户端
+    let config = ConfigLoader::get_global().expect("无法加载全局配置");
+    let oss_client = oss(&config).await;
+
+    // 设置过期时间
+    let expiration = match bucket_type {
+        BucketType::File => Duration::from_secs(3600), // 1小时
+        BucketType::Avatar => Duration::from_secs(1800), // 30分钟
+    };
+
+    // 生成上传签名
+    match oss_client.generate_upload_signature(&key, &req.content_type, expiration, bucket_type).await {
+        Ok(signature) => (
+            StatusCode::OK,
+            Json(json!({
+                "key": key,
+                "signature": signature
+            })),
+        ),
+        Err(e) => {
+            error!("生成上传签名失败: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "signature_generation_failed",
+                    "message": "无法生成上传签名"
                 })),
             )
         }
