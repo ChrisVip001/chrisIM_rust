@@ -22,7 +22,7 @@ pub enum StorageProvider {
 }
 
 // 统一的上传签名结构体
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct UploadSignature {
     pub host: String,
     pub access_key_id: String,

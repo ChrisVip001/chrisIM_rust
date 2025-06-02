@@ -3,52 +3,39 @@ use crate::auth::middleware::auth_middleware;
 use crate::proxy::ServiceProxy;
 use axum::{
     body::Body,
-    extract::{Json, Path, Query},
+    extract::{Json, Extension},
     http::{Request, StatusCode},
     middleware,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{any, get, post},
     Router,
 };
 use common::{
-    config::ConfigLoader,
+    config::{AppConfig, ConfigLoader},
     configs::{GatewayConfig, routes_config::RouteRule},
-    grpc_client::{base::get_rpc_client, UserServiceGrpcClient as CommonUserServiceClient},
+    grpc_client::{base::get_rpc_client},
     proto::user::user_service_client::UserServiceClient,
     service_discovery::LbWithServiceDiscovery,
 };
-use oss::{oss, UploadSignature, BucketType};
+use common::error::Error;
+use oss::{oss, BucketType, Oss, UploadSignature};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
-use tracing::{error, info};
+use std::collections::HashMap;
+use tracing::{error, info, warn};
 use uuid::Uuid;
+use tower_http::cors::CorsLayer;
+use crate::auth::jwt::UserInfo;
 
-// 预签名URL请求参数
+// 获取上传签名请求参数
 #[derive(Debug, Deserialize)]
-pub struct PresignedUrlRequest {
-    pub filename: String,
-    pub content_type: String,
-    pub file_size: usize,
+pub struct GetUploadSignatureRequest {
+    pub count: Option<usize>, // 需要生成多少个签名，默认1个
+    pub bucket_type: Option<String>, // "file" 或 "avatar"，默认"file"
 }
 
-// 预签名URL响应
-#[derive(Debug, Serialize)]
-pub struct PresignedUrlResponse {
-    pub upload_url: String,
-    pub key: String,
-}
-
-// POST表单上传签名请求参数
-#[derive(Debug, Deserialize)]
-pub struct UploadSignatureRequest {
-    pub filename: String,
-    pub content_type: String,
-    pub file_size: usize,
-    pub bucket_type: String, // "file" 或 "avatar"
-}
-
-// 文件上传完成验证请求
+// 文件上传完成验证请求（保留用于验证）
 #[derive(Debug, Deserialize)]
 pub struct ValidateUploadRequest {
     pub key: String,
@@ -111,9 +98,7 @@ pub async fn build_routes(
         .route("/api/user/loginByPhone", post(controller::login_by_phone))
         .route("/api/user/refresh", post(controller::refresh_token))
         // 文件上传路由（无需认证）
-        .route("/api/files/presigned-url", post(get_presigned_upload_url))
         .route("/api/files/validate-upload", post(validate_file_upload))
-        .route("/api/files/upload-signature", post(get_upload_signature))
         .route("/api/files/register-avatar", post(get_register_avatar_url))
         .route("/api/files/validate-register-avatar", post(validate_register_avatar));
 
@@ -126,6 +111,8 @@ pub async fn build_routes(
         // 好友在线状态查询路由
         .route("/api/friends/online-status", post(controller::batch_get_friends_online_status))
         .route("/api/friends/online-check", post(controller::batch_check_friends_online))
+        // 文件上传签名路由（需要认证以获取租户ID）
+        .route("/api/files/upload-signature", post(get_upload_signature))
         .layer(axum::Extension(cache_instance.clone()))
         .layer(middleware::from_fn(auth_middleware));
 
@@ -208,61 +195,6 @@ async fn health_check() -> impl IntoResponse {
     )
 }
 
-/// 获取预签名上传URL
-async fn get_presigned_upload_url(
-    Json(req): Json<PresignedUrlRequest>,
-) -> impl IntoResponse {
-    // 验证文件类型和大小
-    if req.file_size > 100 * 1024 * 1024 {
-        // 100MB 限制
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "file_too_large",
-                "message": "文件大小不能超过100MB"
-            })),
-        );
-    }
-
-    // 生成唯一的文件键
-    let file_extension = req
-        .filename
-        .split('.')
-        .last()
-        .unwrap_or("bin")
-        .to_lowercase();
-    let key = format!("uploads/{}/{}.{}", 
-        chrono::Utc::now().format("%Y/%m/%d"),
-        Uuid::new_v4(),
-        file_extension
-    );
-
-    // 获取配置并创建OSS客户端
-    let config = ConfigLoader::get_global().expect("无法加载全局配置");
-
-    let oss_client = oss(&config).await;
-
-    // 生成预签名URL
-    match oss_client.generate_presigned_upload_url(&key, &req.content_type, Duration::from_secs(3600))
-        .await
-    {
-        Ok(upload_url) => (
-            StatusCode::OK,
-            Json(json!({ "key": key, "upload_url": upload_url })),
-        ),
-        Err(e) => {
-            error!("生成预签名URL失败: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "presigned_url_generation_failed",
-                    "message": "无法生成上传URL"
-                })),
-            )
-        }
-    }
-}
-
 /// 验证文件上传
 async fn validate_file_upload(
     Json(req): Json<ValidateUploadRequest>,
@@ -302,24 +234,32 @@ async fn validate_file_upload(
     }
 }
 
-/// 获取POST表单上传签名
+/// 获取上传签名
 async fn get_upload_signature(
-    Json(req): Json<UploadSignatureRequest>,
+    Extension(user_info): Extension<UserInfo>,
+    Json(req): Json<GetUploadSignatureRequest>,
 ) -> impl IntoResponse {
-    // 验证文件类型和大小
-    if req.file_size > 100 * 1024 * 1024 {
-        // 100MB 限制
+    // 获取配置并创建OSS客户端
+    let config = ConfigLoader::get_global().expect("无法加载全局配置");
+    let oss_client = oss(&config).await;
+
+    // 解析参数
+    let count = req.count.unwrap_or(1); // 默认生成1个签名
+    let bucket_type_str = req.bucket_type.as_deref().unwrap_or("file"); // 默认文件类型
+
+    // 验证签名数量
+    if count == 0 || count > 50 {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "file_too_large",
-                "message": "文件大小不能超过100MB"
+                "error": "invalid_count",
+                "message": "签名数量必须在1-50之间"
             })),
         );
     }
 
     // 解析bucket类型
-    let bucket_type = match req.bucket_type.as_str() {
+    let bucket_type = match bucket_type_str {
         "file" => BucketType::File,
         "avatar" => BucketType::Avatar,
         _ => {
@@ -333,84 +273,59 @@ async fn get_upload_signature(
         }
     };
 
-    // 对于头像类型，需要额外的验证
-    if bucket_type == BucketType::Avatar {
-        if !is_valid_avatar_type(&req.content_type) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "invalid_content_type",
-                    "message": "不支持的头像文件类型，仅支持 JPEG, PNG, WebP"
-                })),
-            );
-        }
+    // 生成签名
+    let mut signatures = HashMap::new();
+    for _ in 0..count {
+        // 生成唯一的文件键，包含租户ID
+        let key = match bucket_type {
+            BucketType::File => format!(
+                "uploads/{}/{}/{}",  // 租户ID/日期/文件ID
+                user_info.tenant_id,
+                chrono::Utc::now().format("%Y/%m/%d"),
+                Uuid::new_v4()
+            ),
+            BucketType::Avatar => format!(
+                "avatars/{}/{}",  // 租户ID/文件ID
+                user_info.tenant_id,
+                Uuid::new_v4()
+            ),
+        };
 
-        if req.file_size > 5 * 1024 * 1024 {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "file_too_large",
-                    "message": "头像文件大小不能超过5MB"
-                })),
-            );
+        // 设置过期时间
+        let expiration = match bucket_type {
+            BucketType::File => Duration::from_secs(3600), // 1小时
+            BucketType::Avatar => Duration::from_secs(1800), // 30分钟
+        };
+
+        // 生成上传签名
+        match oss_client
+            .generate_upload_signature(&key, "application/octet-stream", expiration, bucket_type.clone())
+            .await
+        {
+            Ok(signature) => {
+                signatures.insert(key.clone(), signature);
+            }
+            Err(e) => {
+                error!("生成上传签名失败: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": "signature_generation_failed",
+                        "message": "无法生成上传签名"
+                    })),
+                );
+            }
         }
     }
 
-    // 生成唯一的文件键
-    let file_extension = req
-        .filename
-        .split('.')
-        .last()
-        .unwrap_or("bin")
-        .to_lowercase();
+    info!("为租户 {} 生成了 {} 个上传签名", user_info.tenant_id, signatures.len());
     
-    let key = match bucket_type {
-        BucketType::File => format!("uploads/{}/{}.{}", 
-            chrono::Utc::now().format("%Y/%m/%d"),
-            Uuid::new_v4(),
-            file_extension
-        ),
-        BucketType::Avatar => {
-            let file_extension = match req.content_type.as_str() {
-                "image/jpeg" => "jpg",
-                "image/png" => "png",
-                "image/webp" => "webp",
-                _ => "jpg", // 默认
-            };
-            format!("avatars/{}.{}", Uuid::new_v4(), file_extension)
-        }
-    };
-
-    // 获取配置并创建OSS客户端
-    let config = ConfigLoader::get_global().expect("无法加载全局配置");
-    let oss_client = oss(&config).await;
-
-    // 设置过期时间
-    let expiration = match bucket_type {
-        BucketType::File => Duration::from_secs(3600), // 1小时
-        BucketType::Avatar => Duration::from_secs(1800), // 30分钟
-    };
-
-    // 生成上传签名
-    match oss_client.generate_upload_signature(&key, &req.content_type, expiration, bucket_type).await {
-        Ok(signature) => (
-            StatusCode::OK,
-            Json(json!({
-                "key": key,
-                "signature": signature
-            })),
-        ),
-        Err(e) => {
-            error!("生成上传签名失败: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "signature_generation_failed",
-                    "message": "无法生成上传签名"
-                })),
-            )
-        }
-    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "signatures": signatures
+        })),
+    )
 }
 
 /// 获取用于注册的头像上传URL（无需Token认证）

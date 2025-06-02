@@ -26,8 +26,8 @@ enum ContentType {
 /// 消息类型枚举
 /// 定义了系统中所有可能的消息类型，包括聊天消息、系统消息、通话消息等
 enum MsgType {
-  /// 单聊消息
-  MsgTypeSingleMsg = 0;
+  /// 未定义
+  MsgTypeUndefinedMsg = 0;
 
   /// 群聊消息
   MsgTypeGroupMsg = 1;
@@ -65,6 +65,8 @@ enum MsgType {
   MsgTypeNotification = 25;   // 系统通知
   MsgTypeService = 26;        // 服务消息
   MsgTypeFriendshipReceived = 27;  // 好友关系确认
+  /// 单聊消息
+  MsgTypeSingleMsg = 28;
 }
 
 /// 消息结构体

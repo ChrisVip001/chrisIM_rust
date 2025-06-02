@@ -371,6 +371,11 @@ impl ConsumerService {
                 msg_type = MsgType2::Single;
                 need_history = false;
             }
+            _ => {
+                // 其他消息类型，不需要增加序列号
+                msg_type = MsgType2::Single;
+                need_history = false;
+            }
         }
         
         return (msg_type, need_increase_seq, need_history);
