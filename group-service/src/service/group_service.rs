@@ -29,7 +29,7 @@ use common::proto::user::user_service_client::UserServiceClient;
 use common::service_discovery::LbWithServiceDiscovery;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
-use tracing::{error, info};
+use tracing::{error, info, debug};
 
 pub struct GroupServiceImpl {
     group_repository: GroupRepository,
@@ -61,6 +61,62 @@ impl GroupServiceImpl {
             friend_service_client,
         })
     }
+
+    // 批量获取用户信息的辅助方法
+    async fn fetch_users_info(&self, user_ids: Vec<String>) -> Result<std::collections::HashMap<String, common::proto::user::User>, Status> {
+        if user_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        // 使用GetUsersByIds批量获取用户信息
+        let request = tonic::Request::new(common::proto::user::GetUsersByIdsRequest {
+            user_ids: user_ids.clone(),
+        });
+
+        match self.user_service_client.clone().get_users_by_ids(request).await {
+            Ok(response) => {
+                let users = response.into_inner().users;
+                // 构建用户ID到用户信息的映射
+                let mut user_map = std::collections::HashMap::new();
+                for user in users {
+                    user_map.insert(user.id.clone(), user);
+                }
+                Ok(user_map)
+            }
+            Err(e) => {
+                error!("获取用户信息失败: {}", e);
+                // 返回空映射而不是错误，避免因获取用户信息失败而中断主流程
+                Ok(std::collections::HashMap::new())
+            }
+        }
+    }
+    
+    // 创建默认的成员设置
+    async fn create_default_member_settings(&self, group_id: &str, user_id: &str, user_info: Option<&common::proto::user::User>) -> Result<(), Status> {
+        // 获取用户昵称，如果没有则使用空字符串
+        let nickname_in_group = match user_info {
+            Some(user) => user.nickname.clone().unwrap_or_default(),
+            None => String::new(),
+        };
+        
+        // 创建默认设置（不开启通知静音）
+        match self.member_settings_repository.update_member_settings(
+            group_id.to_string(),
+            user_id.to_string(),
+            false, // 默认不静音通知
+            nickname_in_group,
+        ).await {
+            Ok(_) => {
+                debug!("已为用户 {} 在群组 {} 创建默认设置", user_id, group_id);
+                Ok(())
+            }
+            Err(e) => {
+                error!("创建成员默认设置失败: {}", e);
+                // 返回成功而不是错误，避免因设置失败而中断主流程
+                Ok(())
+            }
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -81,6 +137,12 @@ impl GroupService for GroupServiceImpl {
             Ok(group) => {
                 let mut members = Vec::new();
                 let mut member_count = 0;
+                // 收集所有需要添加的成员ID（包括群主）
+                let mut all_member_ids = vec![owner_id.clone()];
+                all_member_ids.extend(req.members.clone());
+                
+                // 批量获取用户信息
+                let user_info_map = self.fetch_users_info(all_member_ids).await?;
 
                 // 添加群主
                 match self
@@ -88,7 +150,7 @@ impl GroupService for GroupServiceImpl {
                     .add_member(
                         group.id.clone(),
                         owner_id.clone(),
-                        None, // 实际应用中应该从user-service获取
+                        None, 
                         None,
                         None,
                         MemberRole::Owner,
@@ -98,6 +160,13 @@ impl GroupService for GroupServiceImpl {
                     Ok(member) => {
                         members.push(member);
                         member_count += 1;
+                        
+                        // 为群主创建默认设置
+                        self.create_default_member_settings(
+                            &group.id, 
+                            &owner_id,
+                            user_info_map.get(&owner_id)
+                        ).await?;
                     }
                     Err(e) => {
                         error!("添加群主失败: {}", e);
@@ -116,7 +185,7 @@ impl GroupService for GroupServiceImpl {
                         .member_repository
                         .add_member(
                             group.id.clone(),
-                            user_id,
+                            user_id.clone(),
                             None,
                             None,
                             None,
@@ -127,6 +196,13 @@ impl GroupService for GroupServiceImpl {
                         Ok(member) => {
                             members.push(member);
                             member_count += 1;
+                            
+                            // 为成员创建默认设置
+                            self.create_default_member_settings(
+                                &group.id, 
+                                &user_id,
+                                user_info_map.get(&user_id)
+                            ).await?;
                         }
                         Err(e) => {
                             error!("添加初始成员失败: {}", e);
@@ -280,21 +356,42 @@ impl GroupService for GroupServiceImpl {
             }
         }
 
+        // 获取用户信息
+        let user_info = match self.user_service_client.clone().get_user_by_id(
+            Request::new(common::proto::user::GetUserByIdRequest {
+                user_id: user_id.clone(),
+            })
+        ).await {
+            Ok(response) => response.into_inner().user,
+            Err(e) => {
+                error!("获取用户信息失败: {}", e);
+                None
+            }
+        };
+
         // 添加成员
         match self
             .member_repository
             .add_member(
-                group_id,
-                user_id,
-                None, // 实际应用中应该从user-service获取
-                None,
-                None,
+                group_id.clone(),
+                user_id.clone(),
+                user_info.as_ref().map(|u| u.username.clone()),
+                user_info.as_ref().and_then(|u| u.nickname.clone()),
+                user_info.as_ref().and_then(|u| u.avatar_url.clone()),
                 req.role(),
             )
             .await
         {
             Ok(member) => {
                 info!("添加群组成员成功: {:?}", member);
+                
+                // 为新成员创建默认设置
+                self.create_default_member_settings(
+                    &group_id, 
+                    &user_id,
+                    user_info.as_ref()
+                ).await?;
+                
                 Ok(Response::new(MemberResponse {
                     member: Some(member.to_proto()),
                 }))
