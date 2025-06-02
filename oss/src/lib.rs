@@ -10,6 +10,7 @@ use md5::{Digest, Md5};
 
 mod s3_client;
 mod cos_client;
+mod ali_client;
 
 // 存储提供商枚举
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +41,7 @@ pub async fn oss(config: &AppConfig) -> Arc<dyn Oss> {
     // 根据配置选择存储提供商
     match config.oss.provider.as_str() {
         "cos" => Arc::new(cos_client::CosClient::new(config).await),
+        "ali" => Arc::new(ali_client::AliClient::new(config)),
         _ => Arc::new(s3_client::S3Client::new(config).await), // 默认使用S3
     }
 }

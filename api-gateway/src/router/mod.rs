@@ -233,12 +233,13 @@ async fn get_presigned_upload_url(
     let oss_client = oss(&config).await;
 
     // 生成预签名URL
-    match oss_client.generate_presigned_upload_url(&key, &req.content_type, Duration::from_secs(3600))
+    let expires_time = 900;
+    match oss_client.generate_presigned_upload_url(&key, &req.content_type, Duration::from_secs(expires_time))
         .await
     {
         Ok(upload_url) => (
             StatusCode::OK,
-            Json(json!({ "key": key, "upload_url": upload_url })),
+            Json(json!({ "key": key, "upload_url": upload_url, "expires_time" : expires_time })),
         ),
         Err(e) => {
             error!("生成预签名URL失败: {}", e);
