@@ -2,7 +2,7 @@ use std::io::Read;
 use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest, GetUsersByIdsRequest, GetUsersByIdsResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -1069,6 +1069,42 @@ impl UserService for UserServiceImpl {
             success: true,
             image_content: base64_image,
             code_key: code_str.to_string(),
+        }))
+    }
+
+    /// 根据用户ID列表获取用户列表
+    async fn get_users_by_ids(
+        &self,
+        request: Request<GetUsersByIdsRequest>,
+    ) -> std::result::Result<Response<GetUsersByIdsResponse>, Status> {
+        let req = request.into_inner();
+        debug!("根据ID列表获取用户请求，ID列表长度: {}", req.user_ids.len());
+
+        // 获取用户列表
+        let users = match self.repository.get_users_by_ids(&req.user_ids).await {
+            Ok(users) => users,
+            Err(err) => {
+                error!("根据ID列表获取用户失败: {}", err);
+                return Err(err.into());
+            }
+        };
+
+        // 处理每个用户的手机号显示
+        let mut processed_users = Vec::with_capacity(users.len());
+        for user in users {
+            let processed_user = match self.process_user_phone_display(user).await {
+                Ok(user) => user,
+                Err(_) => continue, // 处理失败时跳过该用户
+            };
+            processed_users.push(processed_user);
+        }
+
+        // 转换为响应格式
+        let proto_users: Vec<ProtoUser> = processed_users.into_iter().map(ProtoUser::from).collect();
+
+        // 返回响应
+        Ok(Response::new(GetUsersByIdsResponse { 
+            users: proto_users 
         }))
     }
 

@@ -58,6 +58,9 @@ service UserService {
   rpc UpdatePhone (UpdatePhoneRequest) returns (UpdatePhoneResponse);
 
   rpc generateCaptchaImage (CaptchaImageRequest) returns (CaptchaImageResponse);
+  
+  // 根据用户ID列表获取用户列表
+  rpc GetUsersByIds (GetUsersByIdsRequest) returns (GetUsersByIdsResponse);
 }
 
 // 创建用户请求
@@ -356,4 +359,14 @@ message UserComplete {
   int64 update_time = 14;       // 更新时间
   string salt = 15;             // 密码盐值
   string signature = 16;        // 个性签名
+}
+
+// 根据ID列表获取用户列表请求
+message GetUsersByIdsRequest {
+  repeated string user_ids = 1;
+}
+
+// 根据ID列表获取用户列表响应
+message GetUsersByIdsResponse {
+  repeated User users = 1;
 }
