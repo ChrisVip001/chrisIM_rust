@@ -34,7 +34,7 @@ pub struct UserServiceImpl {
     user_config_repository: UserConfigRepository,
     sms_service: Arc<dyn SmsService>,
     redis_client: RedisClient,
-    friend_service: FriendServiceClient<LbWithServiceDiscovery>
+    friend_service_client: FriendServiceClient<LbWithServiceDiscovery>
 }
 
 impl UserServiceImpl {
@@ -54,14 +54,14 @@ impl UserServiceImpl {
         ));
 
         let config = ConfigLoader::get_global().expect("获取全局配置失败");
-        let service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
+        let friend_service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
 
         Ok(Self {
             repository: UserRepository::new(pool.clone()),
             user_config_repository: UserConfigRepository::new(pool.clone()),
             sms_service,
             redis_client,
-            friend_service: service_client
+            friend_service_client,
         })
     }
     
@@ -270,13 +270,13 @@ impl UserServiceImpl {
             user_id: current_user_id.to_string(),
             friend_id: target_user_id.to_string(),
         };
-        let friend_status = self.friend_service.clone().check_friendship(check_friendship_request).await?.into_inner();
+        let friend_status = self.friend_service_client.clone().check_friendship(check_friendship_request).await?.into_inner();
 
         let check_block_request = IsBlockedRequest {
             user_id: current_user_id.to_string(),
             blocked_user_id: target_user_id.to_string(),
         };
-        let is_blocked = self.friend_service.clone().is_blocked(check_block_request).await?.into_inner().is_blocked;
+        let is_blocked = self.friend_service_client.clone().is_blocked(check_block_request).await?.into_inner().is_blocked;
         Ok((friend_status.status, is_blocked))
     }
 }
@@ -518,7 +518,7 @@ impl UserService for UserServiceImpl {
                 friend_id: req.user_id.clone(),
             });
             
-            let friend_relation_resp = self.friend_service.clone().get_friend_relation(friend_relation_request).await?.into_inner();
+            let friend_relation_resp = self.friend_service_client.clone().get_friend_relation(friend_relation_request).await?.into_inner();
             
             // 返回增强的响应
             Ok(Response::new(EnhancedUserResponse {

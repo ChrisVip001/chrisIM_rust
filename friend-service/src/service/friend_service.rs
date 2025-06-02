@@ -18,18 +18,18 @@ use crate::model::user_blacklist::UserBlacklist;
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
-    service_client: UserServiceClient<LbWithServiceDiscovery>,
+    user_service_client: UserServiceClient<LbWithServiceDiscovery>,
 }
 
 impl FriendServiceImpl {
     pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
 
-        let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
+        let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
 
         Ok(Self {
             repository: FriendshipRepository::new(pool),
-            service_client,
+            user_service_client,
         })
     }
 
@@ -725,7 +725,7 @@ impl FriendService for FriendServiceImpl {
         
         for (id, username, nickname, avatar_url, phone, friendship_status, sign) in users {
             // 获取用户配置
-            let mut service_client_clone = self.service_client.clone();
+            let mut service_client_clone = self.user_service_client.clone();
             let user_config_resp = match service_client_clone.get_user_config(
                 tonic::Request::new(common::proto::user::UserConfigRequest {
                     user_id: id.clone(),

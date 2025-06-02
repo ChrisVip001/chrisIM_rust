@@ -1,31 +1,35 @@
+use crate::repository::group_announcements_repository::GroupAnnouncementRepository;
+use crate::repository::group_blacklist_repository::GroupBlacklistRepository;
+use crate::repository::group_mutes_repository::GroupMutesRepository;
+use crate::repository::group_repository::GroupRepository;
+use crate::repository::group_settings_repository::GroupSettingsRepository;
+use crate::repository::member_repository::MemberRepository;
+use crate::repository::member_settings_repository::MemberSettingsRepository;
+use common::config::ConfigLoader;
+use common::grpc_client::base::get_rpc_client;
+use common::proto::friend::friend_service_client::FriendServiceClient;
 use common::proto::group::group_service_server::GroupService;
 use common::proto::group::{
-    AddMemberRequest, CheckMembershipRequest, CheckMembershipResponse, CreateGroupRequest,
-    DeleteGroupRequest, DeleteGroupResponse, GetGroupRequest, GetMembersRequest,
-    GetMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupResponse, MemberResponse,
-    MemberRole, RemoveMemberRequest, RemoveMemberResponse, UpdateGroupRequest,
-    UpdateMemberRoleRequest, SearchUserGroupsRequest, SearchUserGroupsResponse,
-    CreateAnnouncementRequest, AnnouncementResponse, GetAnnouncementRequest,
-    GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, DeleteAnnouncementRequest,
-    DeleteAnnouncementResponse, GetGroupSettingsRequest, GroupSettingsResponse,
-    UpdateGroupSettingsRequest, AddToBlacklistRequest, BlacklistResponse,
-    RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, GetBlacklistRequest,
-    GetBlacklistResponse, MuteMemberRequest, MuteResponse, UnmuteMemberRequest,
-    UnmuteResponse, GetMutedMembersRequest, GetMutedMembersResponse,
-    GetMemberSettingsRequest, MemberSettingsResponse, UpdateMemberSettingsRequest,
-    CreateGroupQrcodeRequest, GroupQrcodeResponse, GetGroupQrcodeRequest,
+    AddMemberRequest, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse,
+    CheckMembershipRequest, CheckMembershipResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest,
+    CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse,
+    GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest,
+    GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest,
+    GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest,
+    GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse,
+    GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse,
+    GroupResponse, GroupSettingsResponse, MemberResponse,
+    MemberRole, MemberSettingsResponse, MuteMemberRequest,
+    MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest,
+    RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse,
+    UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest,
+    UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest,
 };
+use common::proto::user::user_service_client::UserServiceClient;
+use common::service_discovery::LbWithServiceDiscovery;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
-
-use crate::repository::group_repository::GroupRepository;
-use crate::repository::member_repository::MemberRepository;
-use crate::repository::group_announcements_repository::GroupAnnouncementRepository;
-use crate::repository::group_settings_repository::GroupSettingsRepository;
-use crate::repository::group_blacklist_repository::GroupBlacklistRepository;
-use crate::repository::group_mutes_repository::GroupMutesRepository;
-use crate::repository::member_settings_repository::MemberSettingsRepository;
 
 pub struct GroupServiceImpl {
     group_repository: GroupRepository,
@@ -35,11 +39,17 @@ pub struct GroupServiceImpl {
     blacklist_repository: GroupBlacklistRepository,
     mutes_repository: GroupMutesRepository,
     member_settings_repository: MemberSettingsRepository,
+    user_service_client: UserServiceClient<LbWithServiceDiscovery>,
+    friend_service_client: FriendServiceClient<LbWithServiceDiscovery>,
 }
 
 impl GroupServiceImpl {
-    pub fn new(pool: PgPool) -> Self {
-        Self {
+    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
+        let config = ConfigLoader::get_global().expect("Failed to get global config");
+        let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
+        let friend_service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
+
+        Ok(Self {
             group_repository: GroupRepository::new(pool.clone()),
             member_repository: MemberRepository::new(pool.clone()),
             announcement_repository: GroupAnnouncementRepository::new(pool.clone()),
@@ -47,7 +57,9 @@ impl GroupServiceImpl {
             blacklist_repository: GroupBlacklistRepository::new(pool.clone()),
             mutes_repository: GroupMutesRepository::new(pool.clone()),
             member_settings_repository: MemberSettingsRepository::new(pool.clone()),
-        }
+            user_service_client,
+            friend_service_client,
+        })
     }
 }
 
