@@ -2,7 +2,7 @@ use anyhow::Result;
 use tonic::Request;
 
 use crate::proto::user::user_service_client::UserServiceClient;
-use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, EnhancedUserResponse, GetEnhancedUserByIdRequest};
+use crate::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, GetEnhancedUserByIdRequest};
 use crate::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务gRPC客户端
@@ -156,6 +156,12 @@ impl UserServiceGrpcClient {
         });
 
         let response = self.service_client.get_enhanced_user_by_id(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 图片验证码
+    pub async fn gen_captcha_image(&mut self, request: CaptchaImageRequest) -> Result<CaptchaImageResponse> {
+        let response = self.service_client.generate_captcha_image(Request::new(request)).await?;
         Ok(response.into_inner())
     }
 }

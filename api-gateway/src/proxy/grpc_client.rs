@@ -8,14 +8,15 @@ use tracing::{debug, error};
 use common::proto::user::user_service_client::UserServiceClient;
 use common::proto::friend::friend_service_client::FriendServiceClient;
 use common::proto::group::group_service_client::GroupServiceClient;
-use common::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
+use common::proto::message::chat_service_client::ChatServiceClient;
+use common::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient, ChatServiceGrpcClient};
 use common::config::{AppConfig, ConfigLoader};
 use common::service_discovery::LbWithServiceDiscovery;
 use common::grpc_client::base::{service_register_center, get_rpc_client};
 use std::sync::{Arc, RwLock};
 use crate::auth::jwt::UserInfo;
 use crate::proxy::services::{
-    UserServiceHandler, FriendServiceHandler, GroupServiceHandler, CommonServiceHandler,
+    UserServiceHandler, FriendServiceHandler, GroupServiceHandler, CommonServiceHandler, ChatServiceHandler,
     common::error_response
 };
 
@@ -90,6 +91,7 @@ pub struct GrpcClientFactoryImpl {
     friend_service: LazyServiceHandler<FriendServiceHandler>,
     group_service: LazyServiceHandler<GroupServiceHandler>,
     common_service: LazyServiceHandler<CommonServiceHandler>,
+    chat_service: LazyServiceHandler<ChatServiceHandler>,
 }
 
 impl GrpcClientFactoryImpl {
@@ -142,11 +144,25 @@ impl GrpcClientFactoryImpl {
             
             GroupServiceHandler::new(client)
         });
+
+        // 创建聊天服务的延迟初始化处理器
+        let config_clone4 = config.clone();
+        let chat_service = LazyServiceHandler::new(move || {
+            let config_clone = config_clone4.clone();
+            // 使用已存在的运行时，但避免block_on
+            let client = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&config_clone, "chat".to_string()).await
+                })
+            }).map(|client| ChatServiceGrpcClient::new(client)).expect("无法连接聊天服务");
+            
+            ChatServiceHandler::new(client)
+        });
         
         // 创建通用服务的延迟初始化处理器
-        let config_clone4 = config.clone();
+        let config_clone5 = config.clone();
         let common_service = LazyServiceHandler::new(move || {
-            let config_clone = config_clone4.clone();
+            let config_clone = config_clone5.clone();
             // 获取各服务客户端
             let user_client = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
@@ -175,6 +191,7 @@ impl GrpcClientFactoryImpl {
             user_service,
             friend_service,
             group_service,
+            chat_service,
             common_service,
         }
     }
@@ -193,6 +210,7 @@ impl GrpcClientFactoryImpl {
             "friends" => "friend".to_string(),
             "groups" => "group".to_string(),
             "common" => "common".to_string(),
+            "chat" => "chat".to_string(),
             _ => service_name.clone(),
         };
 
@@ -253,12 +271,12 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                 }
             };
 
-            // 解析服务类型
-            let (service_name, _, _) = self_clone.parse_path(&path);
-
-            // 根据服务类型调用对应的处理方法
-            match service_name.as_str() {
-                "users" => {
+            // 解析路径获取服务和方法信息
+            let (service_name, grpc_service, method_name) = self_clone.parse_path(&path);
+            
+            // 根据服务类型调用不同的处理器
+            let response = match grpc_service.as_str() {
+                "user" => {
                     // 延迟初始化获取用户服务处理器
                     let mut user_service = self_clone.user_service.get();
                     user_service.handle_request(&method, &path, body, user_info.clone()).await
@@ -267,7 +285,7 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                             error_response(&format!("处理用户服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
                         })
                 },
-                "friends" => {
+                "friend" => {
                     // 延迟初始化获取好友服务处理器
                     let mut friend_service = self_clone.friend_service.get();
                     friend_service.handle_request(&method, &path, body, user_info.clone()).await
@@ -276,13 +294,22 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                             error_response(&format!("处理好友服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
                         })
                 },
-                "groups" => {
+                "group" => {
                     // 延迟初始化获取群组服务处理器
                     let mut group_service = self_clone.group_service.get();
                     group_service.handle_request(&method, &path, body, user_info.clone()).await
                         .unwrap_or_else(|err| {
                             error!("处理群组服务请求失败: {}", err);
                             error_response(&format!("处理群组服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                        })
+                },
+                "chat" => {
+                    // 延迟初始化获取聊天服务处理器
+                    let mut chat_service = self_clone.chat_service.get();
+                    chat_service.handle_request(&method, &path, body, user_info.clone()).await
+                        .unwrap_or_else(|err| {
+                            error!("处理聊天服务请求失败: {}", err);
+                            error_response(&format!("处理聊天服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
                         })
                 },
                 "common" => {
@@ -294,15 +321,13 @@ impl GrpcClientFactory for GrpcClientFactoryImpl {
                             error_response(&format!("处理通用服务请求失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
                         })
                 },
-                // 将来可以添加其他服务的处理分支
                 _ => {
-                    error!("不支持的服务类型: {}", service_name);
-                    error_response(
-                        &format!("服务 {} 的gRPC转发尚未实现", service_name),
-                        StatusCode::NOT_IMPLEMENTED
-                    )
+                    error!("未知的服务类型: {}", grpc_service);
+                    error_response("未知的服务类型", StatusCode::NOT_FOUND)
                 }
-            }
+            };
+            
+            response
         })
     }
 
@@ -330,6 +355,7 @@ impl Clone for GrpcClientFactoryImpl {
             user_service: self.user_service.clone(),
             friend_service: self.friend_service.clone(),
             group_service: self.group_service.clone(),
+            chat_service: self.chat_service.clone(),
             common_service: self.common_service.clone(),
         }
     }

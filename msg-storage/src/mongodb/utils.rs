@@ -1,5 +1,5 @@
 use common::error::Error;
-use common::message::Msg;
+use common::proto::message::Msg;
 use bson::{doc, Document};
 
 pub(crate) fn to_doc(msg: &Msg) -> Result<Document, Error> {

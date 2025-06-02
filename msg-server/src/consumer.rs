@@ -7,7 +7,7 @@ use tracing::{debug, error, info, warn};
 use cache::Cache;
 use common::config::AppConfig;
 use common::error::Error;
-use common::message::{GroupMemSeq, Msg, MsgRead, MsgType};
+use common::proto::message::{GroupMemSeq, Msg, MsgRead, MsgType};
 use msg_storage::{msg_rec_box_repo, DbRepo};
 use msg_storage::message::MsgRecBoxRepo;
 use crate::pusher::{push_service, Pusher};

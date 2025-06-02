@@ -11,14 +11,26 @@ use md5::{Digest, Md5};
 use std::time::Duration;
 use tokio::fs;
 use tracing::{error, info};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use hmac::{Hmac, Mac};
+use sha1::Sha1;
+use std::time::{SystemTime, UNIX_EPOCH};
+use serde_json::json;
+use chrono;
 
-use crate::{calculate_md5, default_avatars, Oss};
+use crate::{calculate_md5, default_avatars, Oss, UploadSignature, BucketType};
+
+type HmacSha1 = Hmac<Sha1>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct S3Client {
     bucket: String,
     avatar_bucket: String,
     client: Client,
+    endpoint: Option<String>,
+    region: String,
+    access_key_id: String,
+    secret_key: String,
 }
 
 impl S3Client {
@@ -33,8 +45,12 @@ impl S3Client {
 
         let bucket = config.oss.bucket.clone();
         let avatar_bucket = config.oss.avatar_bucket.clone();
+        let endpoint = Some(config.oss.endpoint.clone());
+        let region = config.oss.region.clone();
+        let access_key_id = config.oss.access_key.clone();
+        let secret_key = config.oss.secret_key.clone();
 
-        let config = Builder::new()
+        let s3_config = Builder::new()
             .region(Region::new(config.oss.region.clone()))
             .credentials_provider(credentials)
             .endpoint_url(&config.oss.endpoint)
@@ -43,12 +59,16 @@ impl S3Client {
             .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
             .build();
 
-        let client = Client::from_conf(config);
+        let client = Client::from_conf(s3_config);
 
         let self_ = Self {
             client,
             bucket,
             avatar_bucket,
+            endpoint,
+            region,
+            access_key_id,
+            secret_key,
         };
 
         self_.create_bucket().await.unwrap();
@@ -252,6 +272,66 @@ impl Oss for S3Client {
         info!("Upload validation successful for {}", key);
         Ok(true)
     }
+
+    async fn generate_upload_signature(
+        &self,
+        key: &str,
+        content_type: &str,
+        expiration: Duration,
+        bucket_type: BucketType,
+    ) -> Result<UploadSignature, Error> {
+        let bucket = match bucket_type {
+            BucketType::File => &self.bucket,
+            BucketType::Avatar => &self.avatar_bucket,
+        };
+
+        // 计算过期时间戳
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| Error::Internal(format!("Failed to get timestamp: {}", e)))?
+            .as_secs();
+        let expire_timestamp = now + expiration.as_secs();
+
+        // 生成过期时间字符串 (ISO 8601格式)
+        let expiration_date = chrono::DateTime::from_timestamp(expire_timestamp as i64, 0)
+            .ok_or_else(|| Error::Internal("Invalid timestamp".to_string()))?
+            .format("%Y-%m-%dT%H:%M:%S.000Z")
+            .to_string();
+
+        // 构建策略文档
+        let policy = json!({
+            "expiration": expiration_date,
+            "conditions": [
+                {"bucket": bucket},
+                ["starts-with", "$key", key.split('/').next().unwrap_or("")],
+                ["starts-with", "$Content-Type", content_type.split('/').next().unwrap_or("")],
+                ["content-length-range", 0, 100 * 1024 * 1024] // 最大100MB
+            ]
+        });
+
+        // Base64编码策略
+        let policy_b64 = BASE64_STANDARD.encode(policy.to_string());
+
+        // 使用HMAC-SHA1生成签名 (兼容S3 POST策略签名)
+        let signature = self.calculate_signature(&policy_b64)?;
+
+        // 构建主机地址
+        let host = if let Some(endpoint) = &self.endpoint {
+            endpoint.clone()
+        } else {
+            format!("https://s3.{}.amazonaws.com", self.region)
+        };
+
+        Ok(UploadSignature {
+            host,
+            access_key_id: self.access_key_id.clone(),
+            policy: policy_b64,
+            signature,
+            dir: key.split('/').next().unwrap_or("").to_string(),
+            expire: expire_timestamp as i64,
+            extra: None,
+        })
+    }
 }
 
 impl S3Client {
@@ -304,5 +384,16 @@ impl S3Client {
             .await?;
 
         Ok(())
+    }
+
+    // 计算签名 (S3 POST策略签名使用HMAC-SHA1)
+    fn calculate_signature(&self, policy_b64: &str) -> Result<String, Error> {
+        // S3 POST表单签名使用HMAC-SHA1算法
+        let mut mac = HmacSha1::new_from_slice(self.secret_key.as_bytes())
+            .map_err(|e| Error::Internal(format!("Failed to create HMAC: {}", e)))?;
+        mac.update(policy_b64.as_bytes());
+        let signature = BASE64_STANDARD.encode(mac.finalize().into_bytes());
+        
+        Ok(signature)
     }
 }

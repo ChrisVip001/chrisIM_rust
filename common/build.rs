@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let descriptor_name = format!("{}_descriptor", name);
 
         // 配置tonic构建器
-        tonic_build::configure()
+        let mut config = tonic_build::configure()
             .build_client(true) // 生成客户端代码，用于调用其他服务
             .build_server(true) // 生成服务器代码，用于实现gRPC服务
             .file_descriptor_set_path(format!(
@@ -48,14 +48,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
             .compile_well_known_types(true) // 启用Google标准类型支持（如Timestamp、Duration等）
             .extern_path(".google.protobuf", "::prost_types") // 使用prost_types作为Google protobuf类型的外部路径
-            .protoc_arg("--experimental_allow_proto3_optional") // 支持proto3的optional字段特性
-            .compile(
-                // 指定要编译的proto文件路径
-                &[format!("proto/{}", proto_file)],
-                // 指定proto文件的搜索路径，用于解析import语句
-                // 当proto文件中有import其他proto文件时，编译器会在这些路径中查找
-                &["proto"],
-            )?;
+            .protoc_arg("--experimental_allow_proto3_optional"); // 支持proto3的optional字段特性
+
+        // 只为特定的消息类型添加 serde 支持，避免 Timestamp 问题
+        if *proto_file == "messages.proto" {
+            config = config
+                .type_attribute(".messages.Msg", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.GroupMemSeq", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.MsgRead", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.MsgType", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.ContentType", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.PlatformType", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.Candidate", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.MsgResponse", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .type_attribute(".messages.SendMsgResponse", "#[derive(serde::Serialize, serde::Deserialize)]")
+                .field_attribute(".messages.Msg", "#[serde(default)]")
+                .field_attribute(".messages.GroupMemSeq", "#[serde(default)]")
+                .field_attribute(".messages.MsgRead", "#[serde(default)]");
+        }
+
+        config.compile(
+            // 指定要编译的proto文件路径
+            &[format!("proto/{}", proto_file)],
+            // 指定proto文件的搜索路径，用于解析import语句
+            // 当proto文件中有import其他proto文件时，编译器会在这些路径中查找
+            &["proto"],
+        )?;
     }
 
     Ok(())

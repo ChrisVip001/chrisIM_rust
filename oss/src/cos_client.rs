@@ -17,7 +17,7 @@ use tokio::fs;
 use tracing::{error, info};
 use url::Url;
 
-use crate::{calculate_md5, default_avatars, Oss};
+use crate::{calculate_md5, default_avatars, Oss, UploadSignature, BucketType};
 
 type HmacSha1 = Hmac<Sha1>;
 
@@ -571,5 +571,93 @@ impl Oss for CosClient {
 
         info!("Upload validation successful for {}", key);
         Ok(true)
+    }
+
+    async fn generate_upload_signature(
+        &self,
+        key: &str,
+        content_type: &str,
+        expiration: Duration,
+        bucket_type: BucketType,
+    ) -> Result<UploadSignature, Error> {
+        let bucket = match bucket_type {
+            BucketType::File => &self.bucket,
+            BucketType::Avatar => &self.avatar_bucket,
+        };
+
+        // 计算过期时间戳
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| Error::Internal(format!("Failed to get timestamp: {}", e)))?
+            .as_secs();
+        let expire_timestamp = now + expiration.as_secs();
+
+        // 构建策略文档 (COS使用JSON格式)
+        let expiration_time = chrono::DateTime::from_timestamp(expire_timestamp as i64, 0)
+            .ok_or_else(|| Error::Internal("Invalid timestamp".to_string()))?
+            .format("%Y-%m-%dT%H:%M:%S.000Z")
+            .to_string();
+
+        let policy = json!({
+            "expiration": expiration_time,
+            "conditions": [
+                {"bucket": bucket},
+                ["starts-with", "$key", key.split('/').next().unwrap_or("")],
+                ["starts-with", "$Content-Type", content_type.split('/').next().unwrap_or("")],
+                ["content-length-range", 0, 100 * 1024 * 1024] // 最大100MB
+            ]
+        });
+
+        // Base64编码策略
+        let policy_b64 = BASE64_STANDARD.encode(policy.to_string());
+
+        // 生成签名 (COS使用HMAC-SHA1)
+        let key_time = format!("{};{}", now, expire_timestamp);
+        
+        // 计算SignKey
+        let mut mac = HmacSha1::new_from_slice(self.secret_key.as_bytes())
+            .map_err(|e| Error::Internal(format!("Failed to create HMAC: {}", e)))?;
+        mac.update(key_time.as_bytes());
+        let sign_key = format!("{:x}", mac.finalize().into_bytes());
+
+        // 计算Signature
+        let mut mac = HmacSha1::new_from_slice(sign_key.as_bytes())
+            .map_err(|e| Error::Internal(format!("Failed to create HMAC: {}", e)))?;
+        mac.update(policy_b64.as_bytes());
+        let signature = format!("{:x}", mac.finalize().into_bytes());
+
+        // 构建主机地址
+        let bucket_with_appid = if self.app_id.is_empty() {
+            bucket.to_string()
+        } else {
+            format!("{}-{}", bucket, self.app_id)
+        };
+
+        let host = if !self.domain.is_empty() {
+            self.domain.clone()
+        } else {
+            format!("https://{}.cos.{}.myqcloud.com", bucket_with_appid, self.region)
+        };
+
+        // COS需要额外的参数
+        let extra = json!({
+            "q-sign-algorithm": "sha1",
+            "q-ak": self.secret_id,
+            "q-sign-time": key_time,
+            "q-key-time": key_time,
+            "q-header-list": "",
+            "q-url-param-list": "",
+            "q-signature": signature
+        });
+
+        Ok(UploadSignature {
+            host,
+            access_key_id: self.secret_id.clone(),
+            policy: policy_b64,
+            signature,
+            dir: key.split('/').next().unwrap_or("").to_string(),
+            expire: expire_timestamp as i64,
+            extra: Some(extra),
+        })
     }
 }

@@ -1,5 +1,5 @@
 // 导入聊天服务和消息服务的客户端
-use crate::message::{chat_service_client::ChatServiceClient, msg_service_client::MsgServiceClient};
+use crate::proto::message::{chat_service_client::ChatServiceClient, msg_service_client::MsgServiceClient};
 use crate::proto::friend::friend_service_client::FriendServiceClient;
 use crate::proto::group::group_service_client::GroupServiceClient;
 use crate::proto::user::user_service_client::UserServiceClient;

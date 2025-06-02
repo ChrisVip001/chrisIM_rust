@@ -161,7 +161,9 @@ pub async fn auth_middleware(
         user_info.user_id, user_info.username, platform_str, path
     );
 
-    // 将用户信息添加到请求扩展中
-    req.extensions_mut().insert(user_info);
-    next.run(req).await
+    // 将用户信息和平台信息添加到请求扩展中
+    let mut request = req;
+    request.extensions_mut().insert(user_info);
+    request.extensions_mut().insert(platform);
+    next.run(request).await
 }

@@ -2,7 +2,6 @@ pub mod proto;
 pub mod configs;
 pub mod config;
 pub mod error;
-pub mod message;
 pub mod utils;
 pub mod service;
 pub mod logging;

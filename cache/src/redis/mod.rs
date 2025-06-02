@@ -14,7 +14,7 @@ use crate::Cache;
 use async_trait::async_trait;
 use common::config::AppConfig;
 use common::error::Error;
-use common::message::GroupMemSeq;
+use common::proto::message::GroupMemSeq;
 use redis::aio::MultiplexedConnection;
 use redis::{AsyncCommands, Client, RedisError};
 use std::fmt::{self, Debug, Formatter};

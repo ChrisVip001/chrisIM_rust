@@ -8,7 +8,7 @@ pub struct OssConfig {
     pub bucket: String,
     pub avatar_bucket: String,
     pub region: String,
-    // 存储提供商，可选值: "s3", "cos"，默认为s3
+    // 存储提供商，可选值: "s3", "cos", "oss"，默认为s3
     #[serde(default = "default_provider")]
     pub provider: String,
     // 腾讯云COS专用配置
@@ -16,6 +16,11 @@ pub struct OssConfig {
     pub cos_app_id: Option<String>,
     #[serde(default)]
     pub cos_domain: Option<String>,
+    // 阿里云OSS专用配置
+    #[serde(default)]
+    pub oss_domain: Option<String>,
+    #[serde(default)]
+    pub oss_sts_token: Option<String>,
 }
 
 // 默认存储提供商为s3

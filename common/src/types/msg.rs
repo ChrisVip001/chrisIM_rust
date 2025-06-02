@@ -1,7 +1,4 @@
-use crate::message::{
-    GetDbMessagesRequest, GetDbMsgRequest, GroupMemSeq, Msg, MsgResponse, MsgType,
-    SaveGroupMsgRequest, SaveMessageRequest, SendMsgRequest, UserAndGroupId,
-};
+use crate::proto::message::{GetDbMessagesRequest, GetDbMsgRequest, GroupMemSeq, Msg, MsgResponse, MsgType, SaveGroupMsgRequest, SaveMessageRequest, SendMsgRequest, UserAndGroupId};
 use crate::Error;
 use mongodb::bson::Document;
 use tonic::Status;
@@ -200,6 +197,19 @@ impl UserAndGroupId {
         Self { user_id, group_id }
     }
 }
+
+
+impl GroupMemSeq {
+    pub fn new(mem_id: String, cur_seq: i64, max_seq: i64, need_update: bool) -> Self {
+        Self {
+            mem_id,
+            cur_seq,
+            max_seq,
+            need_update,
+        }
+    }
+}
+
 
 impl GetDbMsgRequest {
     pub fn validate(&self) -> Result<(), Error> {

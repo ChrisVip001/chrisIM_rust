@@ -8,9 +8,9 @@ use tracing::{debug, error, info, warn};
 pub(crate) use crate::client::Client;
 use cache::Cache;
 use common::error::Error;
-use common::message::chat_service_client::ChatServiceClient;
-use common::message::{
-    ContentType, GroupMemSeq, Msg, MsgResponse, MsgType, PlatformType, SendMsgRequest,
+use common::proto::message::chat_service_client::ChatServiceClient;
+use common::proto::message::{
+    ContentType, GroupMemSeq, Msg, MsgResponse, MsgType, PlatformType, SendMsgRequest
 };
 use common::service_discovery::LbWithServiceDiscovery;
 

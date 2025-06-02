@@ -3,7 +3,7 @@ use std::{fmt::Debug, sync::Arc};
 use common::{
     config::AppConfig,
     error::Error,
-    message::{GroupMemSeq, Msg},
+    proto::message::{GroupMemSeq, Msg},
 };
 use tonic::async_trait;
 

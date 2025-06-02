@@ -4,8 +4,8 @@ use tracing::{debug, error, info};
 
 use super::Pusher;
 use common::config::AppConfig;
-use common::message::msg_service_client::MsgServiceClient;
-use common::message::{GroupMemSeq, Msg, SendGroupMsgRequest, SendMsgRequest};
+use common::proto::message::msg_service_client::MsgServiceClient;
+use common::proto::message::{GroupMemSeq, Msg, SendGroupMsgRequest, SendMsgRequest};
 use common::grpc_client::base::get_chan;
 use common::service_discovery::LbWithServiceDiscovery;
 

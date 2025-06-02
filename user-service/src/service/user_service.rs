@@ -1,16 +1,17 @@
+use std::io::Read;
 use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
-use common::utils::validate_phone;
+use common::utils::{generate_captcha_image, generate_captcha_text, save_image_code, validate_phone, verify_image_code};
 use crate::model::user_config::UserConfigData;
 use crate::repository::user_config_repository::UserConfigRepository;
 use std::sync::Arc;
-use redis::Client as RedisClient;
+use redis::{Client as RedisClient, Commands};
 use common::sms::SmsService;
 use common::sms::tencent::TencentSmsService;
 use common::config::ConfigLoader;
@@ -21,7 +22,12 @@ use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest};
 use common::proto::friend::friend_service_client::FriendServiceClient;
 use common::proto::user::user_service_client::UserServiceClient;
 use common::service_discovery::LbWithServiceDiscovery;
+use base64::Engine;
+use base64::engine::general_purpose;
+use uuid::Uuid;
 
+/// 图片验证码前缀
+const IMAGE_CODE_PREFIX: &str = "image:verification:code";
 /// 用户服务实现
 pub struct UserServiceImpl {
     repository: UserRepository,
@@ -248,13 +254,13 @@ impl UserServiceImpl {
             error!("获取Redis连接失败: {}", e);
             Status::internal("获取在线状态失败")
         })?;
-        
+
         let is_online: bool = redis::cmd("SISMEMBER")
             .arg("online_users")
             .arg(user_id)
             .query(&mut redis_conn)
             .unwrap_or(false);
-            
+
         Ok(is_online)
     }
 
@@ -265,7 +271,7 @@ impl UserServiceImpl {
             friend_id: target_user_id.to_string(),
         };
         let friend_status = self.friend_service.clone().check_friendship(check_friendship_request).await?.into_inner();
-        
+
         let check_block_request = IsBlockedRequest {
             user_id: current_user_id.to_string(),
             blocked_user_id: target_user_id.to_string(),
@@ -286,11 +292,17 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
         debug!("用户账号密码注册请求，用户名: {}", req.username);
         // 转换请求数据
-        let mut reg_data = RegisterUserData::from(req);
+        let mut reg_data = RegisterUserData::from(req.clone());
         
         // 生成用户自定义ID
         reg_data.custom_id = self.generate_unique_user_id().await;
-        
+
+        // 图片验证码校验
+        if !verify_image_code(&req.image_code_key, &req.image_code) {
+            error!("图片验证码错误: {}", req.image_code);
+            return Err(Status::invalid_argument("图片验证码错误"));
+        }
+
         // 创建用户
         let user = match self.repository.register_user(reg_data).await {
             Ok(user) => user,
@@ -325,6 +337,12 @@ impl UserService for UserServiceImpl {
         // 如果没有指定用户名，则使用自定义ID作为用户名
         if reg_data.username.is_empty() {
             reg_data.username = reg_data.custom_id.clone();
+        }
+
+        // 图片验证码校验
+        if !verify_image_code(&req.image_code_key, &req.image_code) {
+            error!("图片验证码错误: {}", req.image_code);
+            return Err(Status::invalid_argument("图片验证码错误"));
         }
 
         // 手机号格式校验
@@ -1022,4 +1040,36 @@ impl UserService for UserServiceImpl {
             }
         }
     }
+
+    /// 图片验证码生成
+    async fn generate_captcha_image(
+        &self, request: Request<CaptchaImageRequest>
+    ) -> std::result::Result<Response<CaptchaImageResponse>, Status> {
+        let req = request.into_inner();
+        debug!("图片验证码生成请求: 宽度:{},高度:{}", req.width, req.height);
+
+        let captcha_text = generate_captcha_text();
+        let captcha_image = generate_captcha_image(
+            &(req.width as u32),
+            &(req.height as u32),
+            &captcha_text,
+            &req.font_size
+        );
+
+        // 将图片转换为 Base64
+        let base64_image = general_purpose::STANDARD.encode(&captcha_image);
+
+        // 生成唯一 key 并存储到 Redis
+        let code_str = Uuid::new_v4().simple();
+        let code_key = format!("{}:{}", IMAGE_CODE_PREFIX, code_str);
+        info!("图片验证码redisKey:{}", code_key);
+        // 存储验证码到redis,有效时间5分钟
+        save_image_code(&code_key.to_string(), &captcha_text,&300);
+        Ok(Response::new(CaptchaImageResponse {
+            success: true,
+            image_content: base64_image,
+            code_key: code_str.to_string(),
+        }))
+    }
+
 }

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use common::error::Error;
-use common::message::{GroupMemSeq, Msg};
+use common::proto::message::{GroupMemSeq, Msg};
 
 /// face to postgres db
 #[async_trait]
