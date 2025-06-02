@@ -1378,6 +1378,51 @@ impl FriendshipRepository {
         
         Ok(friend)
     }
+
+    /// 获取好友关系信息
+    ///
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `friend_id` - 好友ID
+    ///
+    /// # 返回
+    /// * `Result<DetailedFriend>` - 好友详细信息
+    pub async fn get_friend_relation(&self, user_id: &str, friend_id: &str) -> Result<DetailedFriend> {
+        // 查询好友详细信息
+        let row = sqlx::query!(
+            r#"
+            SELECT u.id, u.username, u.nickname, u.avatar_url,
+                   fr.created_at as friendship_created_at,
+                   fr.remark, fr.status as relation_status,
+                   fr.is_starred, fr.is_top,
+                   fr.friend_type 
+            FROM users u
+            JOIN friend_relation fr ON fr.friend_id = u.id
+            WHERE fr.user_id = $1 AND fr.friend_id = $2 AND fr.status = 1
+            "#,
+            user_id,
+            friend_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        
+        let friend = DetailedFriend {
+            id: row.id,
+            username: row.username,
+            nickname: row.nickname,
+            avatar_url: row.avatar_url,
+            friendship_created_at: Utc.from_utc_datetime(&row.friendship_created_at),
+            remark: row.remark,
+            is_online: false, // 默认离线状态，实际应从在线状态服务获取
+            is_starred: row.is_starred == 1,
+            is_top: row.is_top == 1,
+            relation_status: row.relation_status as i32,
+            friend_type: row.friend_type as i32,
+        };
+        
+        Ok(friend)
+    }
+
     /// 检查两个用户之间是否存在好友关系记录
     ///
     /// # 参数

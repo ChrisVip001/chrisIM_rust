@@ -9,3 +9,9 @@ ALTER TABLE user_config ADD COLUMN show_phone int4 DEFAULT 2;
 
 -- 添加字段注释
 COMMENT ON COLUMN user_config.show_phone IS '是否展示手机号(1-是，2-否)';
+
+ALTER TABLE group_members
+DROP CONSTRAINT check_role;
+COMMENT ON COLUMN group_members.role IS '角色：0：MEMBER(普通成员)、1：ADMIN(管理员)、2：OWNER(群主)';
+
+alter table group_members alter column role drop default;

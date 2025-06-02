@@ -72,7 +72,16 @@ async fn main() -> Result<()> {
     };
 
     // 初始化群组服务
-    let group_service = GroupServiceImpl::new(db_pool.clone());
+    let group_service = match GroupServiceImpl::new(db_pool.clone()).await {
+        Ok(service) => {
+            info!("群组服务初始化成功");
+            service
+        },
+        Err(err) => {
+            error!("群组服务初始化失败: {}", err);
+            return Err(err.into());
+        }
+    };
 
     // 创建并注册到服务注册中心
     let service_id = register_service(&config, Component::GroupServer).await?;

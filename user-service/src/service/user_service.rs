@@ -2,7 +2,7 @@ use std::io::Read;
 use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest, GetUsersByIdsRequest, GetUsersByIdsResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -34,7 +34,7 @@ pub struct UserServiceImpl {
     user_config_repository: UserConfigRepository,
     sms_service: Arc<dyn SmsService>,
     redis_client: RedisClient,
-    friend_service: FriendServiceClient<LbWithServiceDiscovery>
+    friend_service_client: FriendServiceClient<LbWithServiceDiscovery>
 }
 
 impl UserServiceImpl {
@@ -54,14 +54,14 @@ impl UserServiceImpl {
         ));
 
         let config = ConfigLoader::get_global().expect("获取全局配置失败");
-        let service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
+        let friend_service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
 
         Ok(Self {
             repository: UserRepository::new(pool.clone()),
             user_config_repository: UserConfigRepository::new(pool.clone()),
             sms_service,
             redis_client,
-            friend_service: service_client
+            friend_service_client,
         })
     }
     
@@ -270,13 +270,13 @@ impl UserServiceImpl {
             user_id: current_user_id.to_string(),
             friend_id: target_user_id.to_string(),
         };
-        let friend_status = self.friend_service.clone().check_friendship(check_friendship_request).await?.into_inner();
+        let friend_status = self.friend_service_client.clone().check_friendship(check_friendship_request).await?.into_inner();
 
         let check_block_request = IsBlockedRequest {
             user_id: current_user_id.to_string(),
             blocked_user_id: target_user_id.to_string(),
         };
-        let is_blocked = self.friend_service.clone().is_blocked(check_block_request).await?.into_inner().is_blocked;
+        let is_blocked = self.friend_service_client.clone().is_blocked(check_block_request).await?.into_inner().is_blocked;
         Ok((friend_status.status, is_blocked))
     }
 }
@@ -511,13 +511,38 @@ impl UserService for UserServiceImpl {
         // 检查好友关系和拉黑状态
         let (friend_status, is_blocked) = self.check_friend_and_blacklist_status(&req.current_user_id, &req.user_id).await?;
 
-        // 返回增强的响应
-        Ok(Response::new(EnhancedUserResponse {
-            user: Some(ProtoUser::from(processed_user)),
-            is_blocked,
-            friend_status: friend_status as i32,
-            is_online,
-        }))
+        // 如果是好友关系，查找对应的好友关系列表
+        if friend_status == 1 {
+            let friend_relation_request = Request::new(common::proto::friend::GetFriendRelationRequest {
+                user_id: req.current_user_id.clone(),
+                friend_id: req.user_id.clone(),
+            });
+            
+            let friend_relation_resp = self.friend_service_client.clone().get_friend_relation(friend_relation_request).await?.into_inner();
+            
+            // 返回增强的响应
+            Ok(Response::new(EnhancedUserResponse {
+                user: Some(ProtoUser::from(processed_user)),
+                is_blocked,
+                friend_status: friend_status as i32,
+                is_online,
+                friend_relation: friend_relation_resp.friend.map(|f| common::proto::user::FriendRelation {
+                    remark: f.remark,
+                    is_starred: f.is_starred,
+                    is_top: f.is_top,
+                    friend_type: f.friend_type,
+                }),
+            }))
+        } else {
+            // 返回增强的响应，但没有好友关系信息
+            Ok(Response::new(EnhancedUserResponse {
+                user: Some(ProtoUser::from(processed_user)),
+                is_blocked,
+                friend_status: friend_status as i32,
+                is_online,
+                friend_relation: None,
+            }))
+        }
     }
 
     /// 通过用户名获取用户
@@ -1044,6 +1069,42 @@ impl UserService for UserServiceImpl {
             success: true,
             image_content: base64_image,
             code_key: code_str.to_string(),
+        }))
+    }
+
+    /// 根据用户ID列表获取用户列表
+    async fn get_users_by_ids(
+        &self,
+        request: Request<GetUsersByIdsRequest>,
+    ) -> std::result::Result<Response<GetUsersByIdsResponse>, Status> {
+        let req = request.into_inner();
+        debug!("根据ID列表获取用户请求，ID列表长度: {}", req.user_ids.len());
+
+        // 获取用户列表
+        let users = match self.repository.get_users_by_ids(&req.user_ids).await {
+            Ok(users) => users,
+            Err(err) => {
+                error!("根据ID列表获取用户失败: {}", err);
+                return Err(err.into());
+            }
+        };
+
+        // 处理每个用户的手机号显示
+        let mut processed_users = Vec::with_capacity(users.len());
+        for user in users {
+            let processed_user = match self.process_user_phone_display(user).await {
+                Ok(user) => user,
+                Err(_) => continue, // 处理失败时跳过该用户
+            };
+            processed_users.push(processed_user);
+        }
+
+        // 转换为响应格式
+        let proto_users: Vec<ProtoUser> = processed_users.into_iter().map(ProtoUser::from).collect();
+
+        // 返回响应
+        Ok(Response::new(GetUsersByIdsResponse { 
+            users: proto_users 
         }))
     }
 

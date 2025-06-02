@@ -743,4 +743,30 @@ impl UserRepository {
         // 获取更新后的用户信息
         self.get_user_by_id(user_id).await
     }
+
+    /// 根据用户ID列表批量获取用户
+    pub async fn get_users_by_ids(&self, user_ids: &[String]) -> Result<Vec<User>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 构建SQL查询
+        let query = sqlx::query_as::<_, User>(
+            r#"
+            SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
+            FROM users
+            WHERE id = ANY($1)
+            "#
+        )
+        .bind(user_ids);
+
+        // 执行查询
+        let users = query.fetch_all(&self.pool).await.map_err(|e| {
+            error!("批量获取用户失败: {}", e);
+            Error::Database(e)
+        })?;
+
+        Ok(users)
+    }
 }

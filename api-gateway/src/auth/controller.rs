@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use common::auth::jwt::UserInfo;
 use std::fmt;
+use serde_json::Value::Null;
 use common::utils::verify_image_code;
 
 /// 平台类型枚举
@@ -346,8 +347,12 @@ pub async fn refresh_token(
     let jwt_config = &config.gateway.auth.jwt;
 
     // 验证刷新令牌
-    let user_info = jwt::verify_token(&refresh_req.refresh_token, jwt_config)?;
-
+    let user_info =  match jwt::verify_token(&refresh_req.refresh_token, jwt_config) {
+        Ok(user) => {user}
+        Err(e) => {
+            return Ok(success_response(Null, StatusCode::UNAUTHORIZED));
+        }
+    };
     // 构建额外信息
     let extra = user_info.extra.clone();
 

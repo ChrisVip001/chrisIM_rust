@@ -1,6 +1,6 @@
 use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
-use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType};
+use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse};
 use anyhow;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -18,18 +18,18 @@ use crate::model::user_blacklist::UserBlacklist;
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
-    service_client: UserServiceClient<LbWithServiceDiscovery>,
+    user_service_client: UserServiceClient<LbWithServiceDiscovery>,
 }
 
 impl FriendServiceImpl {
     pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
 
-        let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
+        let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
 
         Ok(Self {
             repository: FriendshipRepository::new(pool),
-            service_client,
+            user_service_client,
         })
     }
 
@@ -725,7 +725,7 @@ impl FriendService for FriendServiceImpl {
         
         for (id, username, nickname, avatar_url, phone, friendship_status, sign) in users {
             // 获取用户配置
-            let mut service_client_clone = self.service_client.clone();
+            let mut service_client_clone = self.user_service_client.clone();
             let user_config_resp = match service_client_clone.get_user_config(
                 tonic::Request::new(common::proto::user::UserConfigRequest {
                     user_id: id.clone(),
@@ -974,5 +974,36 @@ impl FriendService for FriendServiceImpl {
             }
         }
         
+    }
+
+    // 获取好友关系
+    async fn get_friend_relation(
+        &self,
+        request: Request<GetFriendRelationRequest>,
+    ) -> Result<Response<GetFriendRelationResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = req.user_id;
+        let friend_id = req.friend_id;
+
+        // 获取好友关系信息
+        match self.repository.get_friend_relation(&user_id, &friend_id).await {
+            Ok(friend) => {
+                let response = GetFriendRelationResponse {
+                    friend: Some(friend.to_proto()),
+                };
+                Ok(Response::new(response))
+            },
+            Err(e) => {
+                error!("获取好友关系信息失败: {}", e);
+                if e.to_string().contains("no rows") {
+                    // 找不到记录，返回 None
+                    Ok(Response::new(GetFriendRelationResponse {
+                        friend: None,
+                    }))
+                } else {
+                    Err(Status::internal("内部服务错误"))
+                }
+            }
+        }
     }
 }
