@@ -61,12 +61,21 @@ pub trait Oss: Debug + Send + Sync {
     async fn validate_upload(&self, key: &str, expected_size: usize, expected_md5: &str) -> Result<bool, Error>;
 }
 
-pub async fn oss(config: &AppConfig) -> Arc<dyn Oss> {
+pub async fn oss(config: &AppConfig) -> Result<Arc<dyn Oss>, Error> {
     // 根据配置选择存储提供商
     match config.oss.provider.as_str() {
-        "cos" => Arc::new(cos_client::CosClient::new(config).await),
-        "oss" => Arc::new(oss_client::OssClient::new(config).await),
-        _ => Arc::new(s3_client::S3Client::new(config).await), // 默认使用S3
+        "cos" => {
+            let client = cos_client::CosClient::new(config).await?;
+            Ok(Arc::new(client))
+        },
+        "oss" => {
+            let client = oss_client::OssClient::new(config).await?;
+            Ok(Arc::new(client))
+        },
+        _ => {
+            let client = s3_client::S3Client::new(config).await?;
+            Ok(Arc::new(client))
+        }
     }
 }
 

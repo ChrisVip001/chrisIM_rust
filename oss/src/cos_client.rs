@@ -35,7 +35,7 @@ pub struct CosClient {
 }
 
 impl CosClient {
-    pub async fn new(config: &AppConfig) -> Self {
+    pub async fn new(config: &AppConfig) -> Result<Self, Error> {
         let region = config.oss.region.clone();
         let app_id = config.oss.cos_app_id.clone().unwrap_or_default();
         let secret_id = config.oss.access_key.clone(); // 复用access_key字段
@@ -47,7 +47,7 @@ impl CosClient {
         let http_client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| Error::Internal(format!("Failed to build HTTP client: {}", e)))?;
 
         let self_ = Self {
             region,
@@ -60,11 +60,8 @@ impl CosClient {
             http_client,
         };
 
-        self_.check_default_avatars().await.unwrap_or_else(|e| {
-            error!("Failed to check default avatars: {}", e);
-        });
-
-        self_
+        self_.check_default_avatars().await?;
+        Ok(self_)
     }
 
     // 检查默认头像是否存在，不存在则上传

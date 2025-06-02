@@ -34,7 +34,11 @@ pub(crate) struct S3Client {
 }
 
 impl S3Client {
-    pub async fn new(config: &AppConfig) -> Self {
+    pub async fn new(config: &AppConfig) -> Result<Self, Error> {
+        info!("Initializing S3 client with endpoint: {}", config.oss.endpoint);
+        info!("S3 client configuration - bucket: {}, avatar_bucket: {}, region: {}", 
+              config.oss.bucket, config.oss.avatar_bucket, config.oss.region);
+        
         let credentials = Credentials::new(
             &config.oss.access_key,
             &config.oss.secret_key,
@@ -54,6 +58,7 @@ impl S3Client {
             .region(Region::new(config.oss.region.clone()))
             .credentials_provider(credentials)
             .endpoint_url(&config.oss.endpoint)
+            .force_path_style(true)
             // use latest behavior version, have to set it manually,
             // although we turn on the feature
             .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
@@ -71,31 +76,43 @@ impl S3Client {
             secret_key,
         };
 
-        self_.create_bucket().await.unwrap();
-        self_.check_default_avatars().await.unwrap();
-        self_
+        info!("S3 client created, checking buckets...");
+        self_.create_bucket().await?;
+        info!("Buckets verified, checking default avatars...");
+        self_.check_default_avatars().await?;
+        info!("S3 client initialization completed successfully");
+        Ok(self_)
     }
 
     async fn check_bucket_exists(&self) -> Result<bool, Error> {
+        info!("Checking if bucket '{}' exists...", self.bucket);
         match self.client.head_bucket().bucket(&self.bucket).send().await {
-            Ok(_response) => Ok(true),
+            Ok(_response) => {
+                info!("Bucket '{}' exists", self.bucket);
+                Ok(true)
+            },
             Err(SdkError::ServiceError(e)) => {
-                if e.raw().status().as_u16() == 404 {
+                let status_code = e.raw().status().as_u16();
+                if status_code == 404 {
+                    info!("Bucket '{}' does not exist (404)", self.bucket);
                     Ok(false)
                 } else {
+                    error!("Service error checking bucket '{}': status={}, error={:?}", 
+                           self.bucket, status_code, e);
                     Err(Error::Internal(
-                        "check avatar_bucket exists error".to_string(),
+                        format!("check bucket exists error: HTTP {}", status_code),
                     ))
                 }
             }
             Err(e) => {
-                error!("check_bucket_exists error: {:?}", e);
-                Err(Error::Internal(e.to_string()))
+                error!("Connection/network error checking bucket '{}': {:?}", self.bucket, e);
+                Err(Error::Internal(format!("check bucket exists connection error: {}", e)))
             }
         }
     }
 
     async fn check_avatar_bucket_exits(&self) -> Result<bool, Error> {
+        info!("Checking if avatar bucket '{}' exists...", self.avatar_bucket);
         match self
             .client
             .head_bucket()
@@ -103,19 +120,27 @@ impl S3Client {
             .send()
             .await
         {
-            Ok(_response) => Ok(true),
+            Ok(_response) => {
+                info!("Avatar bucket '{}' exists", self.avatar_bucket);
+                Ok(true)
+            },
             Err(SdkError::ServiceError(e)) => {
-                if e.raw().status().as_u16() == 404 {
+                let status_code = e.raw().status().as_u16();
+                if status_code == 404 {
+                    info!("Avatar bucket '{}' does not exist (404)", self.avatar_bucket);
                     Ok(false)
                 } else {
+                    error!("Service error checking avatar bucket '{}': status={}, error={:?}", 
+                           self.avatar_bucket, status_code, e);
                     Err(Error::Internal(
-                        "check avatar_bucket exists error".to_string(),
+                        format!("check avatar_bucket exists error: HTTP {}", status_code),
                     ))
                 }
             }
             Err(e) => {
-                error!("check avatar_bucket exists error: {:?}", e);
-                Err(Error::Internal(e.to_string()))
+                error!("Connection/network error checking avatar bucket '{}': {:?}", 
+                       self.avatar_bucket, e);
+                Err(Error::Internal(format!("check avatar_bucket exists connection error: {}", e)))
             }
         }
     }

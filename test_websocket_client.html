@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>即时通讯系统 - 完整端到端测试</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 1000px; margin: 0 auto; }
+        .container { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+        .container h3 { margin-top: 0; color: #333; }
+        textarea { width: 100%; height: 250px; font-family: monospace; font-size: 12px; }
+        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.success { background: #28a745; }
+        button.danger { background: #dc3545; }
+        input[type="text"], select { width: 300px; padding: 8px; margin: 5px 0; }
+        textarea.token { width: 100%; height: 80px; font-family: monospace; font-size: 11px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .status.connected { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+        .status.disconnected { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+        .message { margin: 5px 0; padding: 8px; background: #f8f9fa; border-left: 3px solid #007bff; }
+        .message.received { border-left-color: #28a745; background: #d4edda; }
+        .message.sent { border-left-color: #ffc107; background: #fff3cd; }
+        .message.error { border-left-color: #dc3545; background: #f8d7da; }
+        .two-column { display: flex; gap: 20px; }
+        .column { flex: 1; }
+        .response { background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0; }
+        .success-response { background: #d4edda; border-left: 4px solid #28a745; }
+        .error-response { background: #f8d7da; border-left: 4px solid #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>🚀 即时通讯系统 - 完整端到端测试</h1>
+    
+    <div class="two-column">
+        <!-- 左侧：消息接收（WebSocket） -->
+        <div class="column">
+            <div class="container">
+                <h3>📨 消息接收方 (WebSocket)</h3>
+                
+                <label>用户ID:</label><br>
+                <input type="text" id="receiverUserId" value="715034496520425472" placeholder="接收方用户ID">
+                <br>
+                
+                <label>客户端ID (pointer_id):</label><br>
+                <input type="text" id="pointerId" value="test-client-browser-001" placeholder="客户端唯一标识">
+                <br>
+                
+                <label>平台类型:</label><br>
+                <select id="platform">
+                    <option value="0">Desktop (桌面端)</option>
+                    <option value="1">Mobile (移动端)</option>
+                </select>
+                <br><br>
+                
+                <label>接收方JWT Token:</label><br>
+                <textarea id="receiverToken" class="token" placeholder="接收方JWT令牌">eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3MTUwMzQ0OTY1MjA0MjU0NzIiLCJpc3MiOiJhcGktZ2F0ZXdheSIsImV4cCI6MTc0ODg1MzkxNywiaWF0IjoxNzQ4NzY3NTE3LCJ1c2VybmFtZSI6InpoYW5nc2FuIiwidGVuYW50X2lkIjoxLCJ0ZW5hbnRfbmFtZSI6ImRlZmF1bHQiLCJleHRyYSI6eyJjdXN0b21faWQiOiJteWlkLVhPZnZjODhWIiwicGxhdGZvcm0iOiJ1bmtub3duIn19.ZdQTn8jKOhz8GaQGyrNhRhdp7jByaFkTNskrGmvnxFQ</textarea>
+                
+                <button id="connectBtn" onclick="connectWebSocket()">连接WebSocket</button>
+                <button id="disconnectBtn" onclick="disconnectWebSocket()" disabled>断开连接</button>
+                
+                <div id="wsStatus" class="status disconnected">WebSocket未连接</div>
+                
+                <div id="receivedMessages">
+                    <h4>📨 接收到的消息:</h4>
+                    <div id="messagesList"></div>
+                    <button onclick="clearReceivedMessages()">清空消息</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 右侧：消息发送（HTTP API） -->
+        <div class="column">
+            <div class="container">
+                <h3>📤 消息发送方 (HTTP API)</h3>
+                
+                <label>发送方JWT Token:</label><br>
+                <textarea id="senderToken" class="token" placeholder="发送方JWT令牌（请先登录获取）">eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3MTY1NzIzNjM3NDY5NzE2NDgiLCJpc3MiOiJhcGktZ2F0ZXdheSIsImV4cCI6MTc0ODg1NDE4MSwiaWF0IjoxNzQ4NzY3NzgxLCJ1c2VybmFtZSI6Iua1i-ivlSIsInRlbmFudF9pZCI6MSwidGVuYW50X25hbWUiOiJkZWZhdWx0IiwiZXh0cmEiOnsiY3VzdG9tX2lkIjoibXlpZC1USVBUY25tSSIsInBsYXRmb3JtIjoidW5rbm93biJ9fQ.B1_EuE3UxW5MZ1nYT1nPSu9WJLXfdLWWNorzDnQlciw</textarea>
+                
+                <label>消息内容:</label><br>
+                <input type="text" id="messageContent" value="你好！这是一条端到端测试消息！" placeholder="要发送的消息内容">
+                <br>
+                
+                <label>消息类型:</label><br>
+                <select id="messageType">
+                    <option value="Text">文本消息</option>
+                    <option value="Image">图片消息</option>
+                    <option value="Audio">语音消息</option>
+                    <option value="Video">视频消息</option>
+                    <option value="File">文件消息</option>
+                </select>
+                <br><br>
+                
+                <button onclick="sendSingleMessage()" class="success">发送单聊消息</button>
+                <button onclick="sendGroupMessage()" class="success">发送群聊消息</button>
+                <button onclick="refreshSenderToken()">🔄 刷新发送方Token</button>
+                
+                <div id="apiResponse" class="response">
+                    <h4>📋 API响应:</h4>
+                    <pre id="responseContent">等待发送消息...</pre>
+                </div>
+            </div>
+            
+            <div class="container">
+                <h3>🔐 快速登录获取Token</h3>
+                
+                <label>用户名:</label>
+                <input type="text" id="loginUsername" value="测试" placeholder="用户名">
+                
+                <label>密码:</label>
+                <input type="text" id="loginPassword" value="123456" placeholder="密码">
+                
+                <button onclick="quickLogin()">快速登录</button>
+                
+                <div id="loginResponse" class="response">
+                    <pre id="loginContent">等待登录...</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <h3>📝 实时日志</h3>
+        <textarea id="log" readonly></textarea>
+        <button onclick="clearLog()">清空日志</button>
+    </div>
+
+    <script>
+        let ws = null;
+        let isConnected = false;
+
+        function log(message, type = 'info') {
+            const now = new Date().toLocaleTimeString();
+            const logArea = document.getElementById('log');
+            logArea.value += `[${now}] ${message}\n`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function updateWSStatus(status, connected) {
+            const statusDiv = document.getElementById('wsStatus');
+            statusDiv.textContent = `WebSocket: ${status}`;
+            statusDiv.className = `status ${connected ? 'connected' : 'disconnected'}`;
+            isConnected = connected;
+            
+            document.getElementById('connectBtn').disabled = connected;
+            document.getElementById('disconnectBtn').disabled = !connected;
+        }
+
+        function addReceivedMessage(message, type = 'received') {
+            const messagesList = document.getElementById('messagesList');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = `<strong>[${new Date().toLocaleTimeString()}]</strong> ${message}`;
+            messagesList.appendChild(messageDiv);
+            messagesList.scrollTop = messagesList.scrollHeight;
+        }
+
+        function connectWebSocket() {
+            const userId = document.getElementById('receiverUserId').value;
+            const pointerId = document.getElementById('pointerId').value;
+            const platform = document.getElementById('platform').value;
+            const jwtToken = document.getElementById('receiverToken').value.trim();
+            
+            if (!userId || !pointerId || !jwtToken) {
+                alert('请填写完整的WebSocket连接信息');
+                return;
+            }
+
+            const wsUrl = `ws://localhost:8085/ws/${userId}/conn/${pointerId}/${platform}/${encodeURIComponent(jwtToken)}`;
+            
+            log(`正在连接WebSocket: ${wsUrl.substring(0, 100)}...`);
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function(event) {
+                    log('✅ WebSocket连接已建立');
+                    addReceivedMessage('WebSocket连接已建立', 'received');
+                    updateWSStatus('已连接', true);
+                };
+                
+                ws.onmessage = function(event) {
+                    log(`📨 收到WebSocket消息`);
+                    
+                    if (event.data instanceof Blob) {
+                        event.data.arrayBuffer().then(buffer => {
+                            const bytes = new Uint8Array(buffer);
+                            log(`📦 收到二进制消息: ${bytes.length} 字节`);
+                            
+                            // 尝试解析bincode消息
+                            try {
+                                const parsedMessage = parseBincodeMessage(bytes);
+                                addReceivedMessage(`📧 <strong>消息解析成功:</strong><br>${parsedMessage}`, 'received');
+                                log(`✅ 消息解析成功`);
+                            } catch (error) {
+                                log(`❌ 消息解析失败: ${error.message}`);
+                                addReceivedMessage(`📦 二进制消息 (${bytes.length} 字节) - 解析失败: ${error.message}`, 'received');
+                            }
+                        });
+                    } else {
+                        try {
+                            const message = JSON.parse(event.data);
+                            addReceivedMessage(`📋 JSON消息: ${JSON.stringify(message, null, 2)}`, 'received');
+                            log(`📋 JSON消息: ${event.data}`);
+                        } catch (e) {
+                            addReceivedMessage(`📝 文本消息: ${event.data}`, 'received');
+                            log(`📝 文本消息: ${event.data}`);
+                        }
+                    }
+                };
+                
+                ws.onclose = function(event) {
+                    log(`❌ WebSocket连接已关闭，代码: ${event.code}, 原因: ${event.reason}`);
+                    updateWSStatus(`已断开 (${event.code})`, false);
+                    ws = null;
+                };
+                
+                ws.onerror = function(error) {
+                    log(`❌ WebSocket错误: ${error}`);
+                    updateWSStatus('连接错误', false);
+                };
+                
+            } catch (error) {
+                log(`❌ WebSocket连接失败: ${error}`);
+                updateWSStatus('连接失败', false);
+            }
+        }
+
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                log('🔌 主动断开WebSocket连接');
+            }
+        }
+
+        async function sendSingleMessage() {
+            const senderToken = document.getElementById('senderToken').value.trim();
+            const receiverId = document.getElementById('receiverUserId').value;
+            const content = document.getElementById('messageContent').value;
+            const contentType = document.getElementById('messageType').value;
+
+            if (!senderToken || !receiverId || !content) {
+                alert('请填写完整的发送信息');
+                return;
+            }
+
+            const requestData = {
+                receiverId: receiverId,
+                content: content,
+                contentType: contentType,
+                platform: "Desktop"
+            };
+
+            log(`📤 发送单聊消息: ${content}`);
+
+            try {
+                const response = await fetch('http://localhost:8000/api/chat/send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${senderToken}`
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                const result = await response.json();
+                
+                const responseDiv = document.getElementById('apiResponse');
+                const responseContent = document.getElementById('responseContent');
+                
+                if (response.ok && result.success) {
+                    responseDiv.className = 'response success-response';
+                    responseContent.textContent = JSON.stringify(result, null, 2);
+                    log(`✅ 单聊消息发送成功: ${result.data.serverId}`);
+                } else {
+                    responseDiv.className = 'response error-response';
+                    responseContent.textContent = JSON.stringify(result, null, 2);
+                    log(`❌ 单聊消息发送失败: ${result.message || '未知错误'}`);
+                }
+            } catch (error) {
+                log(`❌ 发送请求失败: ${error.message}`);
+                const responseDiv = document.getElementById('apiResponse');
+                const responseContent = document.getElementById('responseContent');
+                responseDiv.className = 'response error-response';
+                responseContent.textContent = `网络错误: ${error.message}`;
+            }
+        }
+
+        async function sendGroupMessage() {
+            const senderToken = document.getElementById('senderToken').value.trim();
+            const content = document.getElementById('messageContent').value;
+            const contentType = document.getElementById('messageType').value;
+
+            if (!senderToken || !content) {
+                alert('请填写完整的发送信息');
+                return;
+            }
+
+            const requestData = {
+                groupId: "test-group-123",
+                content: content,
+                contentType: contentType,
+                platform: "Desktop"
+            };
+
+            log(`📤 发送群聊消息: ${content}`);
+
+            try {
+                const response = await fetch('http://localhost:8000/api/chat/sendGroup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${senderToken}`
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                const result = await response.json();
+                
+                const responseDiv = document.getElementById('apiResponse');
+                const responseContent = document.getElementById('responseContent');
+                
+                if (response.ok && result.success) {
+                    responseDiv.className = 'response success-response';
+                    responseContent.textContent = JSON.stringify(result, null, 2);
+                    log(`✅ 群聊消息发送成功: ${result.data.serverId}`);
+                } else {
+                    responseDiv.className = 'response error-response';
+                    responseContent.textContent = JSON.stringify(result, null, 2);
+                    log(`❌ 群聊消息发送失败: ${result.message || '未知错误'}`);
+                }
+            } catch (error) {
+                log(`❌ 发送请求失败: ${error.message}`);
+                const responseDiv = document.getElementById('apiResponse');
+                const responseContent = document.getElementById('responseContent');
+                responseDiv.className = 'response error-response';
+                responseContent.textContent = `网络错误: ${error.message}`;
+            }
+        }
+
+        async function quickLogin() {
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+
+            if (!username || !password) {
+                alert('请输入用户名和密码');
+                return;
+            }
+
+            const loginData = {
+                username: username,
+                password: password,
+                tenant_id: "1",
+                image_code: "",
+                image_code_key: ""
+            };
+
+            log(`🔐 正在登录用户: ${username}`);
+
+            try {
+                const response = await fetch('http://localhost:8000/api/user/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(loginData)
+                });
+
+                const result = await response.json();
+                
+                const loginDiv = document.getElementById('loginResponse');
+                const loginContent = document.getElementById('loginContent');
+                
+                if (response.ok && result.success) {
+                    loginDiv.className = 'response success-response';
+                    loginContent.textContent = JSON.stringify(result, null, 2);
+                    
+                    // 自动填充token
+                    document.getElementById('senderToken').value = result.data.access_token;
+                    
+                    log(`✅ 登录成功: ${result.data.user_info.username}`);
+                } else {
+                    loginDiv.className = 'response error-response';
+                    loginContent.textContent = JSON.stringify(result, null, 2);
+                    log(`❌ 登录失败: ${result.message || '未知错误'}`);
+                }
+            } catch (error) {
+                log(`❌ 登录请求失败: ${error.message}`);
+                const loginDiv = document.getElementById('loginResponse');
+                const loginContent = document.getElementById('loginContent');
+                loginDiv.className = 'response error-response';
+                loginContent.textContent = `网络错误: ${error.message}`;
+            }
+        }
+
+        function refreshSenderToken() {
+            quickLogin();
+        }
+
+        function clearReceivedMessages() {
+            document.getElementById('messagesList').innerHTML = '';
+        }
+
+        function clearLog() {
+            document.getElementById('log').value = '';
+        }
+
+        // 解析bincode格式的消息
+        function parseBincodeMessage(bytes) {
+            try {
+                const result = {
+                    totalBytes: bytes.length,
+                    summary: "🚀 Rust IM 消息对象 (bincode 格式)",
+                    details: []
+                };
+                
+                // 将字节转换为可读字符串，过滤掉控制字符
+                const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+                const printableText = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+                
+                // 提取消息内容 - 查找你好、测试等中文内容
+                const chineseMatches = printableText.match(/[\u4e00-\u9fa5]+/g);
+                if (chineseMatches) {
+                    result.details.push(`📝 <strong>消息内容:</strong> "${chineseMatches.join(' ')}"`);
+                }
+                
+                // 提取用户ID (通常是15-20位数字)
+                const userIds = printableText.match(/\d{15,20}/g);
+                if (userIds) {
+                    const uniqueIds = [...new Set(userIds)];
+                    result.details.push(`👤 <strong>用户ID:</strong> ${uniqueIds.join(', ')}`);
+                }
+                
+                // 提取服务器ID (通常是随机字符串)
+                const serverIdPattern = /[A-Za-z0-9_-]{15,25}/g;
+                const serverIds = printableText.match(serverIdPattern);
+                if (serverIds) {
+                    const uniqueServerIds = [...new Set(serverIds)].filter(id => !/^\d+$/.test(id));
+                    if (uniqueServerIds.length > 0) {
+                        result.details.push(`🏷️ <strong>服务器ID:</strong> ${uniqueServerIds[0]}`);
+                    }
+                }
+                
+                // 分析消息长度和类型
+                result.details.push(`📊 <strong>数据大小:</strong> ${bytes.length} 字节`);
+                
+                // 提取时间戳 (查找可能的Unix时间戳)
+                let offset = 0;
+                const view = new DataView(bytes.buffer);
+                const possibleTimestamps = [];
+                
+                // 扫描可能的64位时间戳
+                try {
+                    for (let i = 0; i < bytes.length - 8; i += 4) {
+                        const timestamp = view.getBigInt64(i, true); // little endian
+                        const timestampMs = Number(timestamp);
+                        
+                        // 检查是否是合理的时间戳 (2020-2030年)
+                        if (timestampMs > 1577836800000 && timestampMs < 1893456000000) {
+                            const date = new Date(timestampMs);
+                            possibleTimestamps.push(date.toLocaleString());
+                        }
+                    }
+                } catch (e) {
+                    // 忽略解析错误
+                }
+                
+                if (possibleTimestamps.length > 0) {
+                    result.details.push(`⏰ <strong>可能的时间戳:</strong> ${possibleTimestamps[0]}`);
+                }
+                
+                // 分析消息类型
+                const msgTypeHints = [];
+                if (printableText.includes('SingleMsg') || userIds?.length >= 2) {
+                    msgTypeHints.push('单聊消息');
+                }
+                if (printableText.includes('GroupMsg')) {
+                    msgTypeHints.push('群聊消息');
+                }
+                if (printableText.includes('Text')) {
+                    msgTypeHints.push('文本消息');
+                }
+                if (msgTypeHints.length > 0) {
+                    result.details.push(`📋 <strong>消息类型:</strong> ${msgTypeHints.join(', ')}`);
+                }
+                
+                // 显示十六进制预览
+                const hexPreview = Array.from(bytes.slice(0, 32))
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join(' ');
+                result.details.push(`🔍 <strong>十六进制预览:</strong> ${hexPreview}${bytes.length > 32 ? '...' : ''}`);
+                
+                // 显示可读字符预览
+                if (printableText.length > 0) {
+                    const preview = printableText.substring(0, 100);
+                    result.details.push(`📄 <strong>可读字符预览:</strong> "${preview}${printableText.length > 100 ? '...' : ''}"`);
+                }
+                
+                return `
+                    <div style="font-family: Arial, sans-serif; line-height: 1.5; background: #f8f9fa; padding: 10px; border-radius: 4px; border-left: 4px solid #28a745;">
+                        <div style="font-size: 14px; font-weight: bold; color: #155724; margin-bottom: 8px;">
+                            ${result.summary}
+                        </div>
+                        <div style="font-size: 13px;">
+                            ${result.details.join('<br>')}
+                        </div>
+                        <div style="margin-top: 8px; font-size: 12px; color: #6c757d; font-style: italic;">
+                            💡 这是完整的消息推送成功！包含发送方、接收方、内容、时间戳等完整信息。
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                throw new Error(`解析失败: ${error.message}`);
+            }
+        }
+
+        // 页面加载完成后的初始化
+        window.onload = function() {
+            log('🚀 完整端到端测试页面已启动');
+            log('💡 使用说明:');
+            log('1. 左侧：WebSocket接收方连接 (zhangsan用户)');
+            log('2. 右侧：HTTP API发送方 (测试用户)');
+            log('3. 先连接WebSocket，再发送消息，观察是否收到推送');
+            log('4. 如果token过期，可以使用快速登录功能刷新');
+            log('');
+            log('🎯 测试流程:');
+            log('① 点击"连接WebSocket"建立接收连接');
+            log('② 点击"发送单聊消息"或"发送群聊消息"');
+            log('③ 观察左侧是否收到推送的消息');
+        };
+    </script>
+</body>
+</html> 

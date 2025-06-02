@@ -381,14 +381,15 @@ kafka:
 
 # OSS配置
 oss:
-  # 存储提供商: s3(默认) 或 cos(腾讯云)
-  provider: cos
+  # 存储提供商: s3(默认，支持MinIO) 或 cos(腾讯云) 或 oss(阿里云)
+  provider: s3
   # S3兼容存储(MinIO)配置
-  endpoint: http://127.0.0.1:9000
+#  endpoint: http://127.0.0.1:9000
+  endpoint: http://192.168.10.151:9000
   access_key: minioadmin
-  secret_key: minioadmin
-  bucket: rustIM
-  avatar_bucket: rustIM-avatar
+  secret_key: minioadmin123
+  bucket: rust-im
+  avatar_bucket: rust-im-avatar
   region: us-east-1
   # 腾讯云COS特有配置，仅当provider=cos时有效
   cos_app_id: 1250000000 # 替换为腾讯云APPID

@@ -10,19 +10,14 @@ use axum::{
     routing::{any, get, post},
     Router,
 };
-use common::{
-    config::ConfigLoader,
-    configs::{GatewayConfig, routes_config::RouteRule},
-    grpc_client::{base::get_rpc_client},
-    proto::user::user_service_client::UserServiceClient,
-    service_discovery::LbWithServiceDiscovery,
-};
+use common::{config::ConfigLoader, configs::{GatewayConfig, routes_config::RouteRule}, grpc_client::{base::get_rpc_client}, proto::user::user_service_client::UserServiceClient, service_discovery::LbWithServiceDiscovery, Error};
 use oss::{oss, BucketType};
 use serde::{Deserialize};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use tracing::{error, info};
 use uuid::Uuid;
+use crate::proxy::services::common::{error_response, success_response};
 use crate::auth::jwt::UserInfo;
 
 // 获取上传签名请求参数
@@ -198,7 +193,19 @@ async fn validate_file_upload(
     // 获取配置并创建OSS客户端
     let config = ConfigLoader::get_global().expect("无法加载全局配置");
 
-    let oss_client = oss(&config).await;
+    let oss_client = match oss(&config).await {
+        Ok(client) => client,
+        Err(e) => {
+            error!("创建OSS客户端失败: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "oss_initialization_error",
+                    "message": format!("OSS服务初始化失败: {}", e)
+                })),
+            );
+        }
+    };
 
     // 验证上传
     match oss_client.validate_upload(&req.key, req.size, &req.md5).await {
@@ -234,10 +241,19 @@ async fn validate_file_upload(
 async fn get_upload_signature(
     Extension(user_info): Extension<UserInfo>,
     Json(req): Json<GetUploadSignatureRequest>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, Error> {
     // 获取配置并创建OSS客户端
     let config = ConfigLoader::get_global().expect("无法加载全局配置");
-    let oss_client = oss(&config).await;
+    let oss_client = match oss(&config).await {
+        Ok(client) => client,
+        Err(e) => {
+            error!("创建OSS客户端失败: {}", e);
+            return Ok(error_response(
+                &format!("OSS服务初始化失败: {}", e),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ));
+        }
+    };
 
     let bucket_type_str = req.bucket_type.as_deref().unwrap_or("file");
 
@@ -245,29 +261,21 @@ async fn get_upload_signature(
     let bucket_type = match bucket_type_str {
         "file" => BucketType::File,
         "avatar" => BucketType::Avatar,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "invalid_bucket_type",
-                    "message": "bucket_type必须是'file'或'avatar'"
-                })),
-            );
-        }
+        _ => BucketType::File
     };
 
     // 生成路径前缀（前端可以在此前缀下自由上传）
     let path_prefix = match bucket_type {
         BucketType::File => format!(
-        "uploads/{}/{}/{}",  // 租户ID/日期/文件ID
-        user_info.tenant_id,
-        chrono::Utc::now().format("%Y/%m/%d"),
-        Uuid::new_v4()
+            "uploads/{}/{}/{}",  // 租户ID/日期/文件ID
+            user_info.tenant_id,
+            chrono::Utc::now().format("%Y/%m/%d"),
+            Uuid::new_v4()
         ),
         BucketType::Avatar => format!(
-        "avatars/{}/{}",  // 租户ID/文件ID
-        user_info.tenant_id,
-        Uuid::new_v4()
+            "avatars/{}/{}",  // 租户ID/文件ID
+            user_info.tenant_id,
+            Uuid::new_v4()
         ),
     };
 
@@ -278,31 +286,20 @@ async fn get_upload_signature(
     };
 
     // 生成通用上传签名（允许上传到路径前缀下）
-    match oss_client
+    let signature = match oss_client
         .generate_upload_signature(&path_prefix, "application/octet-stream", expiration, bucket_type)
         .await
     {
-        Ok(signature) => {
-            info!("为租户 {} 生成上传签名，路径前缀: {}", user_info.tenant_id, path_prefix);
-            
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "signature": signature
-                })),
-            )
-        }
+        Ok(signature) => signature,
         Err(e) => {
             error!("生成上传签名失败: {}", e);
-            (
+            return Ok(error_response(
+                &format!("生成上传签名失败: {}", e),
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "signature_generation_failed",
-                    "message": "无法生成上传签名"
-                })),
-            )
+            ));
         }
-    }
+    };
+    Ok(success_response(signature, StatusCode::OK))
 }
 
 /// 获取用于注册的头像上传URL（无需Token认证）
@@ -348,7 +345,19 @@ async fn get_register_avatar_url(
     // 获取配置并创建OSS客户端
     let config = ConfigLoader::get_global().expect("无法加载全局配置");
 
-    let oss_client = oss(&config).await;
+    let oss_client = match oss(&config).await {
+        Ok(client) => client,
+        Err(e) => {
+            error!("创建OSS客户端失败: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "oss_initialization_error",
+                    "message": format!("OSS服务初始化失败: {}", e)
+                })),
+            );
+        }
+    };
 
     // 生成预签名URL
     match oss_client.generate_presigned_upload_url(&key, &req.content_type, Duration::from_secs(1800))
@@ -378,7 +387,19 @@ async fn validate_register_avatar(
     // 获取配置并创建OSS客户端
     let config = ConfigLoader::get_global().expect("无法加载全局配置");
 
-    let oss_client = oss(&config).await;
+    let oss_client = match oss(&config).await {
+        Ok(client) => client,
+        Err(e) => {
+            error!("创建OSS客户端失败: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "oss_initialization_error",
+                    "message": format!("OSS服务初始化失败: {}", e)
+                })),
+            );
+        }
+    };
 
     // 验证上传
     match oss_client.validate_upload(&req.key, req.size, &req.md5).await {

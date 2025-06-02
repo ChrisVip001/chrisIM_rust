@@ -34,7 +34,7 @@ pub struct OssClient {
 }
 
 impl OssClient {
-    pub async fn new(config: &AppConfig) -> Self {
+    pub async fn new(config: &AppConfig) -> Result<Self, Error> {
         let region = config.oss.region.clone();
         let access_key_id = config.oss.access_key.clone();
         let access_key_secret = config.oss.secret_key.clone();
@@ -46,7 +46,7 @@ impl OssClient {
         let http_client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| Error::Internal(format!("Failed to build HTTP client: {}", e)))?;
 
         let self_ = Self {
             region,
@@ -59,11 +59,8 @@ impl OssClient {
             http_client,
         };
 
-        self_.check_default_avatars().await.unwrap_or_else(|e| {
-            error!("Failed to check default avatars: {}", e);
-        });
-
-        self_
+        self_.check_default_avatars().await?;
+        Ok(self_)
     }
 
     // 检查默认头像是否存在，不存在则上传

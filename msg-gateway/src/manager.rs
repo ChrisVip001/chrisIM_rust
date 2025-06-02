@@ -4,6 +4,7 @@ use common::config::AppConfig;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use base64::{Engine as _, engine::general_purpose};
 
 pub(crate) use crate::client::Client;
 use cache::Cache;
@@ -143,8 +144,11 @@ impl Manager {
             };
             
             if let Some(sender) = client.get(&platform) {
+                // 创建适合JSON序列化的消息副本
+                let json_msg = self.prepare_message_for_json(msg);
+                
                 // 序列化消息为JSON
-                let content = match serde_json::to_string(msg) {
+                let content = match serde_json::to_string(&json_msg) {
                     Ok(res) => res,
                     Err(e) => {
                         error!("消息JSON序列化失败: {}", e);
@@ -199,8 +203,11 @@ impl Manager {
             _ => {}
         }
 
-        // 提取JSON序列化逻辑，避免重复代码
-        let content = match serde_json::to_string(msg) {
+        // 创建适合JSON序列化的消息副本
+        let json_msg = self.prepare_message_for_json(msg);
+        
+        // 序列化为JSON
+        let content = match serde_json::to_string(&json_msg) {
             Ok(res) => res,
             Err(e) => {
                 error!("消息JSON序列化失败: {}", e);
@@ -237,6 +244,45 @@ impl Manager {
             }
             _ => warn!("客户端数量异常: {}", clients.len()),
         }
+    }
+
+    /// 为JSON序列化准备消息
+    /// 
+    /// 根据消息类型将content字段转换为适合的格式：
+    /// - SingleMsg/GroupMsg: 将Vec<u8>转换为字符串
+    /// - 其他类型: 使用base64编码
+    /// 
+    /// # 参数
+    /// * `msg` - 原始消息
+    /// 
+    /// # 返回值
+    /// 返回适合JSON序列化的消息对象
+    fn prepare_message_for_json(&self, msg: &Msg) -> serde_json::Value {
+        let mut json_msg = serde_json::to_value(msg).unwrap_or_default();
+        
+        // 处理content字段
+        if let Some(content_value) = json_msg.get_mut("content") {
+            let content_str = match msg.msg_type {
+                // 文本消息类型，将字节数组转换为字符串
+                msg_type if msg_type == MsgType::SingleMsg as i32 
+                         || msg_type == MsgType::GroupMsg as i32 => {
+                    // 尝试将字节数组转换为UTF-8字符串
+                    match String::from_utf8(msg.content.clone()) {
+                        Ok(text) => text,
+                        Err(_) => {
+                            warn!("消息内容不是有效的UTF-8字符串，使用base64编码");
+                            general_purpose::STANDARD.encode(&msg.content)
+                        }
+                    }
+                }
+                // 其他消息类型，使用base64编码
+                _ => general_purpose::STANDARD.encode(&msg.content)
+            };
+            
+            *content_value = serde_json::Value::String(content_str);
+        }
+        
+        json_msg
     }
 
     /// 注册客户端连接
