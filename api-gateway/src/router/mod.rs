@@ -6,32 +6,28 @@ use axum::{
     extract::{Json, Extension},
     http::{Request, StatusCode},
     middleware,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::{any, get, post},
     Router,
 };
 use common::{
-    config::{AppConfig, ConfigLoader},
+    config::ConfigLoader,
     configs::{GatewayConfig, routes_config::RouteRule},
     grpc_client::{base::get_rpc_client},
     proto::user::user_service_client::UserServiceClient,
     service_discovery::LbWithServiceDiscovery,
 };
-use common::error::Error;
-use oss::{oss, BucketType, Oss, UploadSignature};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use oss::{oss, BucketType};
+use serde::{Deserialize};
+use serde_json::json;
 use std::{sync::Arc, time::Duration};
-use std::collections::HashMap;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use uuid::Uuid;
-use tower_http::cors::CorsLayer;
 use crate::auth::jwt::UserInfo;
 
 // 获取上传签名请求参数
 #[derive(Debug, Deserialize)]
 pub struct GetUploadSignatureRequest {
-    pub count: Option<usize>, // 需要生成多少个签名，默认1个
     pub bucket_type: Option<String>, // "file" 或 "avatar"，默认"file"
 }
 
@@ -243,20 +239,7 @@ async fn get_upload_signature(
     let config = ConfigLoader::get_global().expect("无法加载全局配置");
     let oss_client = oss(&config).await;
 
-    // 解析参数
-    let count = req.count.unwrap_or(1); // 默认生成1个签名
-    let bucket_type_str = req.bucket_type.as_deref().unwrap_or("file"); // 默认文件类型
-
-    // 验证签名数量
-    if count == 0 || count > 50 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "invalid_count",
-                "message": "签名数量必须在1-50之间"
-            })),
-        );
-    }
+    let bucket_type_str = req.bucket_type.as_deref().unwrap_or("file");
 
     // 解析bucket类型
     let bucket_type = match bucket_type_str {
@@ -273,59 +256,53 @@ async fn get_upload_signature(
         }
     };
 
-    // 生成签名
-    let mut signatures = HashMap::new();
-    for _ in 0..count {
-        // 生成唯一的文件键，包含租户ID
-        let key = match bucket_type {
-            BucketType::File => format!(
-                "uploads/{}/{}/{}",  // 租户ID/日期/文件ID
-                user_info.tenant_id,
-                chrono::Utc::now().format("%Y/%m/%d"),
-                Uuid::new_v4()
-            ),
-            BucketType::Avatar => format!(
-                "avatars/{}/{}",  // 租户ID/文件ID
-                user_info.tenant_id,
-                Uuid::new_v4()
-            ),
-        };
+    // 生成路径前缀（前端可以在此前缀下自由上传）
+    let path_prefix = match bucket_type {
+        BucketType::File => format!(
+        "uploads/{}/{}/{}",  // 租户ID/日期/文件ID
+        user_info.tenant_id,
+        chrono::Utc::now().format("%Y/%m/%d"),
+        Uuid::new_v4()
+        ),
+        BucketType::Avatar => format!(
+        "avatars/{}/{}",  // 租户ID/文件ID
+        user_info.tenant_id,
+        Uuid::new_v4()
+        ),
+    };
 
-        // 设置过期时间
-        let expiration = match bucket_type {
-            BucketType::File => Duration::from_secs(3600), // 1小时
-            BucketType::Avatar => Duration::from_secs(1800), // 30分钟
-        };
+    // 设置过期时间
+    let expiration = match bucket_type {
+        BucketType::File => Duration::from_secs(3600), // 1小时
+        BucketType::Avatar => Duration::from_secs(1800), // 30分钟
+    };
 
-        // 生成上传签名
-        match oss_client
-            .generate_upload_signature(&key, "application/octet-stream", expiration, bucket_type.clone())
-            .await
-        {
-            Ok(signature) => {
-                signatures.insert(key.clone(), signature);
-            }
-            Err(e) => {
-                error!("生成上传签名失败: {}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "error": "signature_generation_failed",
-                        "message": "无法生成上传签名"
-                    })),
-                );
-            }
+    // 生成通用上传签名（允许上传到路径前缀下）
+    match oss_client
+        .generate_upload_signature(&path_prefix, "application/octet-stream", expiration, bucket_type)
+        .await
+    {
+        Ok(signature) => {
+            info!("为租户 {} 生成上传签名，路径前缀: {}", user_info.tenant_id, path_prefix);
+            
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "signature": signature
+                })),
+            )
+        }
+        Err(e) => {
+            error!("生成上传签名失败: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "signature_generation_failed",
+                    "message": "无法生成上传签名"
+                })),
+            )
         }
     }
-
-    info!("为租户 {} 生成了 {} 个上传签名", user_info.tenant_id, signatures.len());
-    
-    (
-        StatusCode::OK,
-        Json(json!({
-            "signatures": signatures
-        })),
-    )
 }
 
 /// 获取用于注册的头像上传URL（无需Token认证）

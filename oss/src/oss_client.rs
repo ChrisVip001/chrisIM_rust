@@ -429,13 +429,12 @@ impl Oss for OssClient {
         if let Some(ref sts_token) = self.sts_token {
             extra["security-token"] = json!(sts_token);
         }
-
         Ok(UploadSignature {
             host,
             access_key_id: self.access_key_id.clone(),
             policy: policy_b64,
             signature,
-            dir: key.split('/').next().unwrap_or("").to_string(),
+            dir: key.to_string(),
             expire: expire_timestamp as i64,
             extra: if extra.as_object().unwrap().is_empty() { None } else { Some(extra) },
         })

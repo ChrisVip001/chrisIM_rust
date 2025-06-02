@@ -327,7 +327,7 @@ impl Oss for S3Client {
             access_key_id: self.access_key_id.clone(),
             policy: policy_b64,
             signature,
-            dir: key.split('/').next().unwrap_or("").to_string(),
+            dir: key.to_string(),
             expire: expire_timestamp as i64,
             extra: None,
         })

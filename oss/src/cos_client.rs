@@ -655,7 +655,7 @@ impl Oss for CosClient {
             access_key_id: self.secret_id.clone(),
             policy: policy_b64,
             signature,
-            dir: key.split('/').next().unwrap_or("").to_string(),
+            dir: key.to_string(),
             expire: expire_timestamp as i64,
             extra: Some(extra),
         })
