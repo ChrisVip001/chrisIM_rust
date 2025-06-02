@@ -124,7 +124,7 @@ impl Manager {
         }
     }
 
-    /// 向发送者的其他平台发送消息副本
+    /// 向发送者的其他平台发送消息
     /// 
     /// 当用户在多个平台同时在线时，需要向发送者的其他平台
     /// 发送消息副本，以保持消息同步。
@@ -143,17 +143,17 @@ impl Manager {
             };
             
             if let Some(sender) = client.get(&platform) {
-                // 序列化消息
-                let content = match bincode::serialize(msg) {
+                // 序列化消息为JSON
+                let content = match serde_json::to_string(msg) {
                     Ok(res) => res,
-                    Err(_) => {
-                        error!("消息序列化失败");
+                    Err(e) => {
+                        error!("消息JSON序列化失败: {}", e);
                         return;
                     }
                 };
                 
-                // 发送到另一个平台
-                if let Err(e) = sender.send_binary(content).await {
+                // 发送JSON文本到另一个平台
+                if let Err(e) = sender.send_text(content).await {
                     error!("向发送者其他平台发送消息失败: {}", e)
                 }
             }
@@ -192,43 +192,45 @@ impl Manager {
     /// * `msg` - 要发送的消息
     async fn send_msg_to_clients(&self, clients: &DashMap<PlatformType, Client>, msg: &Msg) {
         match clients.len() {
-            0 => error!("未找到客户端连接"),
+            0 => {
+                error!("未找到客户端连接");
+                return;
+            }
+            _ => {}
+        }
+
+        // 提取JSON序列化逻辑，避免重复代码
+        let content = match serde_json::to_string(msg) {
+            Ok(res) => res,
+            Err(e) => {
+                error!("消息JSON序列化失败: {}", e);
+                return;
+            }
+        };
+
+        match clients.len() {
             1 => {
                 // 单个客户端在线
-                let content = match bincode::serialize(msg) {
-                    Ok(res) => res,
-                    Err(e) => {
-                        error!("消息序列化失败: {}", e);
-                        return;
-                    }
-                };
                 if let Some(client) = clients.iter().next() {
-                    if let Err(e) = client.value().send_binary(content).await {
+                    if let Err(e) = client.value().send_text(content).await {
                         error!("发送消息失败: {}", e);
                     }
                 }
             }
             2 => {
                 // 两个客户端在线（桌面端+移动端）
-                let content = match bincode::serialize(msg) {
-                    Ok(res) => res,
-                    Err(e) => {
-                        error!("消息序列化失败: {}", e);
-                        return;
-                    }
-                };
                 let mut iter = clients.iter();
                 
                 // 向第一个客户端发送
                 if let Some(first_client) = iter.next() {
-                    if let Err(e) = first_client.value().send_binary(content.clone()).await {
+                    if let Err(e) = first_client.value().send_text(content.clone()).await {
                         error!("发送消息失败: {}", e);
                     }
                 }
                 
                 // 向第二个客户端发送
                 if let Some(second_client) = iter.next() {
-                    if let Err(e) = second_client.value().send_binary(content).await {
+                    if let Err(e) = second_client.value().send_text(content).await {
                         error!("发送消息失败: {}", e);
                     }
                 }
