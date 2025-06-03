@@ -190,7 +190,7 @@ impl WsServer {
             .with_state(app_state);
 
         // 构建监听地址
-        let addr = format!("{}:{}", "0.0.0.0", config.websocket.port);
+        let addr = format!("{}:{}", config.websocket.host, config.websocket.port);
 
         // 启动TCP监听器
         let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();

@@ -23,6 +23,7 @@ use crate::auth::jwt::UserInfo;
 // 获取上传签名请求参数
 #[derive(Debug, Deserialize)]
 pub struct GetUploadSignatureRequest {
+    pub content_type: String,
     pub bucket_type: Option<String>, // "file" 或 "avatar"，默认"file"
 }
 
@@ -287,7 +288,7 @@ async fn get_upload_signature(
 
     // 生成通用上传签名（允许上传到路径前缀下）
     let signature = match oss_client
-        .generate_upload_signature(&path_prefix, "application/octet-stream", expiration, bucket_type)
+        .generate_upload_signature(&path_prefix, req.content_type.as_str(), expiration, bucket_type)
         .await
     {
         Ok(signature) => signature,
