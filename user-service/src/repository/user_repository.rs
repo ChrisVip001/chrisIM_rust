@@ -529,6 +529,12 @@ impl UserRepository {
             first = false;
         }
 
+        if let Some(avatar_url) = data.avatar_url {
+            if !first { builder.push(","); }
+            builder.push(" avatar_url = COALESCE( ").push_bind(avatar_url).push(", avatar_url) ");
+            first = false;
+        }
+
         if !first { builder.push(","); }
         builder.push(" updated_at = ").push_bind(Utc::now());
         builder.push(" WHERE id = ").push_bind(id);
