@@ -387,7 +387,7 @@ oss:
   endpoint: http://127.0.0.1:9000
 #  endpoint: http://192.168.10.151:9000
   access_key: minioadmin
-  secret_key: minioadmin123
+  secret_key: minioadmin
   bucket: rust-im
   avatar_bucket: rust-im-avatar
   region: us-east-1
