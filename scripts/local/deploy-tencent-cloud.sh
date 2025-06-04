@@ -53,20 +53,28 @@ CARGO_TARGET_DIR="target"
 show_help() {
     echo "RustIM 腾讯云服务器部署脚本"
     echo ""
-    echo "用法: $0 [选项] [操作]"
+    echo "用法: $0 [选项] [操作] [服务名]"
     echo ""
     echo "操作:"
     echo "  deploy          完整部署 (默认)"
     echo "  build           仅构建项目"
     echo "  install         仅安装服务"
-    echo "  start           启动所有服务"
-    echo "  stop            停止所有服务"
-    echo "  restart         重启所有服务"
-    echo "  status          查看服务状态"
-    echo "  logs            查看服务日志"
+    echo "  start           启动服务 (所有服务或指定服务)"
+    echo "  stop            停止服务 (所有服务或指定服务)"
+    echo "  restart         重启服务 (所有服务或指定服务)"
+    echo "  status          查看服务状态 (所有服务或指定服务)"
+    echo "  logs            查看服务日志 (需要指定服务名)"
     echo "  backup          创建备份"
     echo "  rollback        回滚到上一版本"
     echo "  cleanup         清理旧版本"
+    echo ""
+    echo "服务名称:"
+    echo "  api-gateway     API网关服务"
+    echo "  msg-gateway     消息网关服务"
+    echo "  user-service    用户服务"
+    echo "  friend-service  好友服务"
+    echo "  group-service   群组服务"
+    echo "  msg-server      消息服务器"
     echo ""
     echo "选项:"
     echo "  -e, --environment ENV    部署环境 (staging|production) [默认: production]"
@@ -91,11 +99,16 @@ show_help() {
     echo "  $0 -e staging deploy             # 部署到staging环境"
     echo "  $0 build                         # 仅构建项目"
     echo "  $0 restart                       # 重启所有服务"
+    echo "  $0 restart msg-gateway           # 重启消息网关服务"
+    echo "  $0 start api-gateway             # 启动API网关服务"
+    echo "  $0 stop user-service             # 停止用户服务"
+    echo "  $0 status msg-gateway            # 查看消息网关服务状态"
     echo "  $0 logs api-gateway              # 查看API网关日志"
 }
 
 # 解析命令行参数
 ACTION="deploy"
+SERVICE_NAME=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -146,9 +159,15 @@ while [[ $# -gt 0 ]]; do
         deploy|build|install|start|stop|restart|status|logs|backup|rollback|cleanup)
             ACTION="$1"
             shift
+            # 检查是否有服务名参数
+            if [[ $# -gt 0 && "$1" != -* ]]; then
+                SERVICE_NAME="$1"
+                shift
+            fi
             ;;
         *)
-            if [[ "$ACTION" == "logs" && -n "$1" ]]; then
+            # 如果前面已经有了操作，这个参数应该是服务名
+            if [[ -n "$ACTION" && -z "$SERVICE_NAME" && "$1" != -* ]]; then
                 SERVICE_NAME="$1"
                 shift
             else
@@ -818,9 +837,46 @@ EOF
     log_success "systemd 服务文件创建完成"
 }
 
+# 验证服务名称
+validate_service_name() {
+    local service_name="$1"
+    
+    if [[ -z "$service_name" ]]; then
+        return 0  # 空名称表示操作所有服务
+    fi
+    
+    if [[ -z "${SERVICES[$service_name]}" ]]; then
+        log_error "未知服务: $service_name"
+        log_info "可用服务: ${!SERVICES[*]}"
+        exit 1
+    fi
+    
+    return 0
+}
+
+# 获取要操作的服务列表
+get_services_to_operate() {
+    local service_name="$1"
+    
+    if [[ -n "$service_name" ]]; then
+        echo "$service_name"
+    else
+        echo "${!SERVICES[@]}"
+    fi
+}
+
 # 启用并启动服务
 enable_and_start_services() {
-    log_info "启用并启动服务..."
+    local target_service="$1"
+    validate_service_name "$target_service"
+    
+    local services_to_start=($(get_services_to_operate "$target_service"))
+    
+    if [[ -n "$target_service" ]]; then
+        log_info "启用并启动服务: $target_service"
+    else
+        log_info "启用并启动所有服务..."
+    fi
     
     # 确认配置文件存在
     if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
@@ -834,7 +890,7 @@ enable_and_start_services() {
     local failed_services=()
     local success_services=()
     
-    for service in "${!SERVICES[@]}"; do
+    for service in "${services_to_start[@]}"; do
         local service_name="rustim-$service"
         
         log_info "启用服务: $service_name"
@@ -879,35 +935,85 @@ enable_and_start_services() {
         log_warning "有 ${#failed_services[@]} 个服务启动失败，请检查服务日志获取详细信息"
         log_info "可以使用 'sudo journalctl -u SERVICE_NAME' 查看特定服务的日志"
     else
-        log_success "所有服务启动成功"
+        if [[ -n "$target_service" ]]; then
+            log_success "服务 $target_service 启动成功"
+        else
+            log_success "所有服务启动成功"
+        fi
     fi
 }
 
 # 停止服务
 stop_services() {
-    log_info "停止服务..."
+    local target_service="$1"
+    validate_service_name "$target_service"
     
-    for service in "${!SERVICES[@]}"; do
+    local services_to_stop=($(get_services_to_operate "$target_service"))
+    
+    if [[ -n "$target_service" ]]; then
+        log_info "停止服务: $target_service"
+    else
+        log_info "停止所有服务..."
+    fi
+    
+    local stopped_services=()
+    local already_stopped_services=()
+    
+    for service in "${services_to_stop[@]}"; do
         local service_name="rustim-$service"
         
         if sudo systemctl is-active --quiet "$service_name"; then
             log_info "停止服务: $service_name"
             sudo systemctl stop "$service_name"
+            stopped_services+=("$service_name")
+            log_success "服务 $service_name 已停止"
+        else
+            log_info "服务 $service_name 已经是停止状态"
+            already_stopped_services+=("$service_name")
         fi
     done
     
-    log_success "所有服务已停止"
+    # 汇总报告
+    echo ""
+    if [[ ${#stopped_services[@]} -gt 0 ]]; then
+        log_info "已停止的服务 (${#stopped_services[@]}):"
+        for service in "${stopped_services[@]}"; do
+            echo -e "  - ${GREEN}$service${NC}"
+        done
+    fi
+    
+    if [[ ${#already_stopped_services[@]} -gt 0 ]]; then
+        log_info "原本就是停止状态的服务 (${#already_stopped_services[@]}):"
+        for service in "${already_stopped_services[@]}"; do
+            echo -e "  - ${YELLOW}$service${NC}"
+        done
+    fi
+    
+    if [[ -n "$target_service" ]]; then
+        log_success "服务 $target_service 操作完成"
+    else
+        log_success "所有服务停止操作完成"
+    fi
 }
 
 # 重启服务
 restart_services() {
-    log_info "重启服务..."
+    local target_service="$1"
+    validate_service_name "$target_service"
+    
+    local services_to_restart=($(get_services_to_operate "$target_service"))
+    
+    if [[ -n "$target_service" ]]; then
+        log_info "重启服务: $target_service"
+    else
+        log_info "重启所有服务..."
+    fi
     
     # 记录失败的服务和成功的服务
     local failed_services=()
     local success_services=()
     
-    for service in "${!SERVICES[@]}"; do
+    for service in "${services_to_restart[@]}"; do
         local service_name="rustim-$service"
         
         log_info "重启服务: $service_name"
@@ -946,16 +1052,29 @@ restart_services() {
         done
         log_warning "有 ${#failed_services[@]} 个服务重启失败，请检查服务日志获取详细信息"
     else
-        log_success "所有服务重启成功"
+        if [[ -n "$target_service" ]]; then
+            log_success "服务 $target_service 重启成功"
+        else
+            log_success "所有服务重启成功"
+        fi
     fi
 }
 
 # 查看服务状态
 show_status() {
-    log_info "服务状态:"
+    local target_service="$1"
+    validate_service_name "$target_service"
+    
+    local services_to_check=($(get_services_to_operate "$target_service"))
+    
+    if [[ -n "$target_service" ]]; then
+        log_info "服务状态: $target_service"
+    else
+        log_info "所有服务状态:"
+    fi
     echo ""
     
-    for service in "${!SERVICES[@]}"; do
+    for service in "${services_to_check[@]}"; do
         local service_name="rustim-$service"
         local port="${SERVICES[$service]}"
         
@@ -968,13 +1087,21 @@ show_status() {
     done
     
     echo ""
-    log_info "详细状态:"
-    for service in "${!SERVICES[@]}"; do
-        local service_name="rustim-$service"
+    if [[ -n "$target_service" ]]; then
+        log_info "详细状态: $target_service"
+        local service_name="rustim-$target_service"
         echo ""
         echo "=== $service_name ==="
         sudo systemctl status "$service_name" --no-pager -l
-    done
+    else
+        log_info "详细状态:"
+        for service in "${services_to_check[@]}"; do
+            local service_name="rustim-$service"
+            echo ""
+            echo "=== $service_name ==="
+            sudo systemctl status "$service_name" --no-pager -l
+        done
+    fi
 }
 
 # 查看服务日志
@@ -1313,16 +1440,16 @@ main() {
             create_systemd_services
             ;;
         start)
-            enable_and_start_services
+            enable_and_start_services "$SERVICE_NAME"
             ;;
         stop)
-            stop_services
+            stop_services "$SERVICE_NAME"
             ;;
         restart)
-            restart_services
+            restart_services "$SERVICE_NAME"
             ;;
         status)
-            show_status
+            show_status "$SERVICE_NAME"
             ;;
         logs)
             show_logs "$SERVICE_NAME"
