@@ -279,7 +279,7 @@ pub async fn login(
 
     // 图片验证码校验
     if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
-        return Err(Error::Authentication("图片验证码错误".to_string()));
+        return Err(Error::Internal("图片验证码错误".to_string()));
     }
 
     // 调用用户服务验证密码
