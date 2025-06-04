@@ -277,10 +277,10 @@ pub async fn login(
         password: login_req.password,
     };
 
-    // // 图片验证码校验
-    // if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
-    //     return Err(Error::Authentication("图片验证码错误".to_string()));
-    // }
+    // 图片验证码校验
+    if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
+        return Err(Error::Authentication("图片验证码错误".to_string()));
+    }
 
     // 调用用户服务验证密码
     let response = match user_service.verify_password(verify_request).await {
