@@ -200,6 +200,9 @@ impl UserServiceHandler {
             // 用户账号密码注册(不校验验证码)
             (&Method::POST, "registerByUsername") => {
                 let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
+                if tenant_id != "1122" {
+                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
+                }
                 let username = extract_string_param(&body,"username",None)?;
                 let password = extract_string_param(&body,"password",None)?;
                 let phone = extract_string_param(&body,"phone",None)?;
@@ -239,6 +242,9 @@ impl UserServiceHandler {
             (&Method::POST, "registerByPhone") => {
 
                 let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
+                if tenant_id != "1122" {
+                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
+                }
                 let phone = extract_string_param(&body,"phone",None)?;
                 let password = extract_string_param(&body,"password",None)?;
                 let msg_code = extract_string_param(&body,"msgCode",Some("msg_code"))?;

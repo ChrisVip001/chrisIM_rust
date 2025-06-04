@@ -230,7 +230,9 @@ pub async fn login_by_phone(
 
     // 获取用户信息
     let user = response.user.unwrap();
-
+    if login_req.tenant_id!=user.tenant_id {
+        return Err(Error::Internal("企业号错误".to_string()));
+    }
     info!("用户 {} 手机号登录成功，平台: {}", user.username, platform.as_str());
 
     // 提取用户额外信息
@@ -302,6 +304,9 @@ pub async fn login(
     // 获取用户信息
     let user = response.user.unwrap();
 
+    if login_req.tenant_id!=user.tenant_id {
+        return Err(Error::Internal("企业号错误".to_string()));
+    }
     info!("用户 {} 登录成功，平台: {}", login_req.username, platform.as_str());
 
     // 提取用户额外信息
