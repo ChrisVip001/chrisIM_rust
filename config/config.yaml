@@ -247,7 +247,7 @@ service_center:
 # WebSocket配置
 websocket:
   protocol: ws
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 8085
   name: websocket
   tags:
