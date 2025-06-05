@@ -65,7 +65,8 @@ impl UserServiceHandler {
                     "isStarred": false,
                     "isTop": false,
                     "remark": "",
-                    "friendType": 0
+                    "friendType": 0,
+                    "groups": []  // 添加空的分组列表
                 });
                 
                 // 如果有好友关系信息，则更新相关字段
@@ -75,6 +76,17 @@ impl UserServiceHandler {
                         obj.insert("isTop".to_string(), json!(relation.is_top));
                         obj.insert("remark".to_string(), json!(relation.remark));
                         obj.insert("friendType".to_string(), json!(relation.friend_type));
+                        
+                        // 添加好友所在分组信息
+                        if !relation.groups.is_empty() {
+                            let groups = relation.groups.iter().map(|g| {
+                                json!({
+                                    "id": g.id,
+                                    "groupName": g.group_name
+                                })
+                            }).collect::<Vec<_>>();
+                            obj.insert("groups".to_string(), json!(groups));
+                        }
                     }
                 }
 

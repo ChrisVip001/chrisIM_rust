@@ -520,6 +520,29 @@ impl UserService for UserServiceImpl {
             
             let friend_relation_resp = self.friend_service_client.clone().get_friend_relation(friend_relation_request).await?.into_inner();
             
+            // 获取好友所在分组列表
+            let friend_groups_request = Request::new(common::proto::friend::GetFriendInGroupsRequest {
+                user_id: req.current_user_id.clone(),
+                friend_id: req.user_id.clone(),
+            });
+            
+            let friend_groups_resp = match self.friend_service_client.clone().get_friend_in_groups(friend_groups_request).await {
+                Ok(resp) => resp.into_inner(),
+                Err(e) => {
+                    // 日志记录错误，但不影响整体返回
+                    tracing::error!("获取好友分组列表失败: {}", e);
+                    common::proto::friend::GetFriendInGroupsResponse { groups: vec![] }
+                }
+            };
+            
+            // 转换分组信息
+            let group_infos = friend_groups_resp.groups.into_iter()
+                .map(|g| common::proto::user::FriendGroupInfo {
+                    id: g.id,
+                    group_name: g.group_name,
+                })
+                .collect();
+            
             // 返回增强的响应
             Ok(Response::new(EnhancedUserResponse {
                 user: Some(ProtoUser::from(processed_user)),
@@ -531,6 +554,7 @@ impl UserService for UserServiceImpl {
                     is_starred: f.is_starred,
                     is_top: f.is_top,
                     friend_type: f.friend_type,
+                    groups: group_infos,
                 }),
             }))
         } else {
