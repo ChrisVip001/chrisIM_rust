@@ -164,6 +164,7 @@ message Friendship {
   optional string friend_username = 9;    // 好友用户名
   optional string friend_nickname = 10;   // 好友昵称
   optional string friend_avatar_url = 11; // 好友头像
+  optional string friend_remark = 12;     // 好友备注
 }
 
 // 好友

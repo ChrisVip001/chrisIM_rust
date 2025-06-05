@@ -368,6 +368,7 @@ impl FriendServiceHandler {
             "friendUsername": friendship.friend_username,
             "friendNickname": friendship.friend_nickname,
             "friendAvatarUrl": friendship.friend_avatar_url,
+            "friendRemark": friendship.friend_remark,
             "isSelf": friendship.user_id == current_user_id,
         })
     }

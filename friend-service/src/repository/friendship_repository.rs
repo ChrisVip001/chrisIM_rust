@@ -58,6 +58,7 @@ impl FriendshipRepository {
             friend_username: None,
             friend_nickname: None,
             friend_avatar_url: None,
+            friend_remark: None,
         })
     }
 
@@ -153,6 +154,7 @@ impl FriendshipRepository {
             friend_username: None,
             friend_nickname: None,
             friend_avatar_url: None,
+            friend_remark: None,
         })
     }
 
@@ -209,6 +211,7 @@ impl FriendshipRepository {
             friend_username: None,
             friend_nickname: None,
             friend_avatar_url: None,
+            friend_remark: None,
         })
     }
 
@@ -378,7 +381,23 @@ impl FriendshipRepository {
                 f.reject_reason,
                 u.username as friend_username,
                 u.nickname as friend_nickname,
-                u.avatar_url as friend_avatar_url
+                u.avatar_url as friend_avatar_url,
+                -- 如果是好友关系，查询好友备注
+                (CASE 
+                    WHEN EXISTS(
+                        SELECT 1 FROM friend_relation 
+                        WHERE (user_id = $1 AND friend_id = CASE 
+                                WHEN f.user_id = $1 THEN f.friend_id
+                                ELSE f.user_id
+                            END)
+                    ) THEN 
+                        (SELECT remark FROM friend_relation 
+                         WHERE user_id = $1 AND friend_id = CASE 
+                                WHEN f.user_id = $1 THEN f.friend_id
+                                ELSE f.user_id
+                            END)
+                    ELSE NULL
+                END) as friend_remark
             FROM friendships f
             LEFT JOIN users u ON (
                 CASE 
@@ -394,8 +413,8 @@ impl FriendshipRepository {
             page_size,
             offset
         )
-        .fetch_all(&self.pool)
-        .await?;
+            .fetch_all(&self.pool)
+            .await?;
 
         // 计算过期时间点（当前时间减去3天）
         let now = Utc::now();
@@ -428,6 +447,7 @@ impl FriendshipRepository {
                     friend_username: r.friend_username,
                     friend_nickname: r.friend_nickname,
                     friend_avatar_url: r.friend_avatar_url,
+                    friend_remark: r.friend_remark,
                 }
             })
             .collect();
@@ -1499,6 +1519,7 @@ impl FriendshipRepository {
                 friend_username: None,
                 friend_nickname: None,
                 friend_avatar_url: None,
+                friend_remark: None,
             }));
         }
         
