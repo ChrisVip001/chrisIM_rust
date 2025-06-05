@@ -1604,25 +1604,22 @@ impl FriendshipRepository {
         user_id: &str,
         friend_id: &str,
     ) -> Result<bool> {
-        // 检查分组是否存在且属于该用户
+        // 检查分组是否属于该用户
         let group_exists = sqlx::query!(
             r#"
-            SELECT EXISTS(
-                SELECT 1 FROM friend_group
-                WHERE id = $1 AND user_id = $2
-            ) AS "exists!"
+            SELECT id FROM friend_groups
+            WHERE id = $1 AND user_id = $2
             "#,
             group_id,
             user_id
         )
-        .fetch_one(&self.pool)
-        .await?
-        .exists;
-        
-        if !group_exists {
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if group_exists.is_none() {
             return Err(anyhow::anyhow!("分组不存在或不属于该用户"));
         }
-        
+
         // 从分组中移除好友
         let result = sqlx::query!(
             r#"
@@ -1635,8 +1632,42 @@ impl FriendshipRepository {
         )
         .execute(&self.pool)
         .await?;
-        
+
         Ok(result.rows_affected() > 0)
     }
     
+    // 获取好友所在分组列表
+    pub async fn get_friend_in_groups(&self, user_id: &str, friend_id: &str) -> Result<Vec<FriendGroup>> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT g.id, g.user_id, g.group_name, g.sort_order, g.created_at, g.updated_at
+            FROM friend_groups g
+            WHERE g.user_id = $1
+            AND g.id IN (
+                SELECT group_id FROM friend_group_relation 
+                WHERE user_id = $1 AND friend_id = $2
+            )
+            ORDER BY g.sort_order ASC, g.created_at ASC
+            "#,
+            user_id,
+            friend_id
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let groups = rows
+            .into_iter()
+            .map(|row| FriendGroup {
+                id: row.id,
+                user_id: row.user_id,
+                group_name: row.group_name,
+                sort_order: row.sort_order as i32,
+                created_at: Utc.from_utc_datetime(&row.created_at),
+                updated_at: Utc.from_utc_datetime(&row.updated_at),
+                friend_count: 0, // 使用默认值0
+            })
+            .collect();
+
+        Ok(groups)
+    }
 }
