@@ -10,7 +10,8 @@ use crate::proto::friend::{
     CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest,
     DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse,
     GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse,
-    GetAllFriendDetailListRequest, GetAllFriendDetailListResponse,
+    GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, AddFriendToGroupRequest, 
+    AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse,
 };
 
 use crate::service_discovery::LbWithServiceDiscovery;
@@ -165,14 +166,12 @@ impl FriendServiceGrpcClient {
         user_id: &str,
         group_name: &str,
         sort_order: i32,
-        friend_ids: Vec<String>,
     ) -> Result<FriendGroupResponse> {
         let request = Request::new(CreateOrUpdateFriendGroupRequest {
-            id: id.map(String::from),
+            id: id.clone(),
             user_id: user_id.to_string(),
             group_name: group_name.to_string(),
             sort_order,
-            friend_ids,
         });
 
         let response = self.service_client.create_or_update_friend_group(request).await?;
@@ -301,6 +300,40 @@ impl FriendServiceGrpcClient {
         });
 
         let response = self.service_client.get_user_blacklist(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 添加好友到分组
+    pub async fn add_friend_to_group(
+        &mut self,
+        user_id: &str,
+        group_id: &str,
+        friend_id: &str,
+    ) -> Result<AddFriendToGroupResponse> {
+        let request = Request::new(AddFriendToGroupRequest {
+            user_id: user_id.to_string(),
+            group_id: group_id.to_string(),
+            friend_id: friend_id.to_string(),
+        });
+
+        let response = self.service_client.add_friend_to_group(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 从分组中移除好友
+    pub async fn remove_friend_from_group(
+        &mut self,
+        user_id: &str,
+        group_id: &str,
+        friend_id: &str,
+    ) -> Result<RemoveFriendFromGroupResponse> {
+        let request = Request::new(RemoveFriendFromGroupRequest {
+            user_id: user_id.to_string(),
+            group_id: group_id.to_string(),
+            friend_id: friend_id.to_string(),
+        });
+
+        let response = self.service_client.remove_friend_from_group(request).await?;
         Ok(response.into_inner())
     }
 }

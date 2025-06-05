@@ -119,6 +119,7 @@ gateway:
       - "/api/users/registerByUsername"
       - "/api/users/sendVerificationCode"
       - "/api/users/genCaptchaImage"
+      - "/api/users/forgetPassword"
       # 注册头像上传相关的API路径
       - "/api/files/register-avatar"
       - "/api/files/validate-register-avatar"

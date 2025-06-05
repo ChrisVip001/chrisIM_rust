@@ -67,6 +67,7 @@ impl FromRow<'_, PgRow> for Friendship {
             friend_username: row.try_get("friend_username").ok(),
             friend_nickname: row.try_get("friend_nickname").ok(),
             friend_avatar_url: row.try_get("friend_avatar_url").ok(),
+            friend_remark: row.try_get("friend_remark").ok(),
         })
     }
 }

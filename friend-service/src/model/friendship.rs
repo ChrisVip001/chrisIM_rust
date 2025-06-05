@@ -18,6 +18,7 @@ pub struct Friendship {
     pub friend_username: Option<String>,
     pub friend_nickname: Option<String>,
     pub friend_avatar_url: Option<String>,
+    pub friend_remark: Option<String>,
 }
 
 impl Friendship {
@@ -35,6 +36,7 @@ impl Friendship {
             friend_username: None,
             friend_nickname: None,
             friend_avatar_url: None,
+            friend_remark: None,
         }
     }
 
@@ -51,6 +53,7 @@ impl Friendship {
             friend_username: self.friend_username.clone(),
             friend_nickname: self.friend_nickname.clone(),
             friend_avatar_url: self.friend_avatar_url.clone(),
+            friend_remark: self.friend_remark.clone(),
         }
     }
 }
@@ -150,6 +153,7 @@ impl PotentialFriend {
         phone: Option<String>,
         friendship_status: i32,
         sign: Option<String>,
+        custom_id: String,
     ) -> Self {
         Self {
             id,

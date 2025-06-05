@@ -68,6 +68,12 @@ service FriendService {
 
   // 获取好友关系记录
   rpc GetFriendRelation(GetFriendRelationRequest) returns (GetFriendRelationResponse);
+
+  // 添加好友到分组
+  rpc AddFriendToGroup(AddFriendToGroupRequest) returns (AddFriendToGroupResponse);
+  
+  // 从分组中移除好友
+  rpc RemoveFriendFromGroup(RemoveFriendFromGroupRequest) returns (RemoveFriendFromGroupResponse);
 }
 
 // 发送好友请求
@@ -158,6 +164,7 @@ message Friendship {
   optional string friend_username = 9;    // 好友用户名
   optional string friend_nickname = 10;   // 好友昵称
   optional string friend_avatar_url = 11; // 好友头像
+  optional string friend_remark = 12;     // 好友备注
 }
 
 // 好友
@@ -266,7 +273,6 @@ message CreateOrUpdateFriendGroupRequest {
   string user_id = 2;           // 用户ID
   string group_name = 3;        // 分组名称
   int32 sort_order = 4;         // 排序顺序
-  repeated string friend_ids = 5; // 分组中的好友ID列表
 }
 
 // 好友分组响应
@@ -520,4 +526,28 @@ message FriendGroupRelation {
   string group_id = 4;                          // 分组ID (VARCHAR(36) NOT NULL)
   google.protobuf.Timestamp created_at = 5;     // 创建时间 (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
   google.protobuf.Timestamp updated_at = 6;     // 更新时间 (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+}
+
+// 添加好友到分组请求
+message AddFriendToGroupRequest {
+  string user_id = 1;      // 用户ID
+  string group_id = 2;     // 分组ID
+  string friend_id = 3;    // 好友ID
+}
+
+// 添加好友到分组响应
+message AddFriendToGroupResponse {
+  bool success = 1;        // 操作是否成功
+}
+
+// 从分组中移除好友请求
+message RemoveFriendFromGroupRequest {
+  string user_id = 1;      // 用户ID
+  string group_id = 2;     // 分组ID
+  string friend_id = 3;    // 好友ID
+}
+
+// 从分组中移除好友响应
+message RemoveFriendFromGroupResponse {
+  bool success = 1;        // 操作是否成功
 }

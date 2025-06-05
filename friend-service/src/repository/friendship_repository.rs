@@ -58,6 +58,7 @@ impl FriendshipRepository {
             friend_username: None,
             friend_nickname: None,
             friend_avatar_url: None,
+            friend_remark: None,
         })
     }
 
@@ -153,6 +154,7 @@ impl FriendshipRepository {
             friend_username: None,
             friend_nickname: None,
             friend_avatar_url: None,
+            friend_remark: None,
         })
     }
 
@@ -209,6 +211,7 @@ impl FriendshipRepository {
             friend_username: None,
             friend_nickname: None,
             friend_avatar_url: None,
+            friend_remark: None,
         })
     }
 
@@ -378,7 +381,23 @@ impl FriendshipRepository {
                 f.reject_reason,
                 u.username as friend_username,
                 u.nickname as friend_nickname,
-                u.avatar_url as friend_avatar_url
+                u.avatar_url as friend_avatar_url,
+                -- 如果是好友关系，查询好友备注
+                (CASE 
+                    WHEN EXISTS(
+                        SELECT 1 FROM friend_relation 
+                        WHERE (user_id = $1 AND friend_id = CASE 
+                                WHEN f.user_id = $1 THEN f.friend_id
+                                ELSE f.user_id
+                            END)
+                    ) THEN 
+                        (SELECT remark FROM friend_relation 
+                         WHERE user_id = $1 AND friend_id = CASE 
+                                WHEN f.user_id = $1 THEN f.friend_id
+                                ELSE f.user_id
+                            END)
+                    ELSE NULL
+                END) as friend_remark
             FROM friendships f
             LEFT JOIN users u ON (
                 CASE 
@@ -394,8 +413,8 @@ impl FriendshipRepository {
             page_size,
             offset
         )
-        .fetch_all(&self.pool)
-        .await?;
+            .fetch_all(&self.pool)
+            .await?;
 
         // 计算过期时间点（当前时间减去3天）
         let now = Utc::now();
@@ -428,6 +447,7 @@ impl FriendshipRepository {
                     friend_username: r.friend_username,
                     friend_nickname: r.friend_nickname,
                     friend_avatar_url: r.friend_avatar_url,
+                    friend_remark: r.friend_remark,
                 }
             })
             .collect();
@@ -580,7 +600,7 @@ impl FriendshipRepository {
         &self,
         user_id: &str,
         search_term: &str,
-    ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, i32,Option<String>)>> {
+    ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, i32, Option<String>, String)>> {
         // 构建SQL查询，自动匹配custom_id或手机号
         let query = r#"
             SELECT 
@@ -590,7 +610,8 @@ impl FriendshipRepository {
                 u.avatar_url, 
                 u.phone,
                 COALESCE(fr.status, -1) as friendship_status,
-                u.sign
+                u.sign,
+                u.custom_id
             FROM 
                 users u
             LEFT JOIN 
@@ -620,6 +641,7 @@ impl FriendshipRepository {
                     row.get::<Option<String>, _>("phone"),
                     row.get::<i32, _>("friendship_status"),
                     row.get::<Option<String>, _>("sign"),
+                    row.get::<String, _>("custom_id"),
                 )
             })
             .collect();
@@ -1497,11 +1519,124 @@ impl FriendshipRepository {
                 friend_username: None,
                 friend_nickname: None,
                 friend_avatar_url: None,
+                friend_remark: None,
             }));
         }
         
         Ok(None)
     }
     
+    /// 添加好友到分组
+    /// 
+    /// # 参数
+    /// * `group_id` - 分组ID
+    /// * `user_id` - 用户ID
+    /// * `friend_id` - 好友ID
+    ///
+    /// # 返回
+    /// * `Result<bool>` - 操作是否成功
+    pub async fn add_friend_to_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        friend_id: &str,
+    ) -> Result<bool> {
+        let now = Utc::now();
+        let now_naive = now.naive_utc();
+        
+        // 先检查好友关系是否存在
+        if !self.check_friend_relation_exists(user_id, friend_id).await? {
+            return Err(anyhow::anyhow!("好友关系不存在"));
+        }
+        
+        // 检查分组是否存在且属于该用户
+        let group_exists = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM friend_group
+                WHERE id = $1 AND user_id = $2
+            ) AS "exists!"
+            "#,
+            group_id,
+            user_id
+        )
+        .fetch_one(&self.pool)
+        .await?
+        .exists;
+        
+        if !group_exists {
+            return Err(anyhow::anyhow!("分组不存在或不属于该用户"));
+        }
+        
+        // 添加好友到分组
+        let result = sqlx::query!(
+            r#"
+            INSERT INTO friend_group_relation (id, user_id, friend_id, group_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, friend_id, group_id) DO UPDATE
+            SET updated_at = $6
+            "#,
+            Uuid::new_v4().to_string(),
+            user_id,
+            friend_id,
+            group_id,
+            now_naive,
+            now_naive
+        )
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(result.rows_affected() > 0)
+    }
+    
+    /// 从分组中移除好友
+    /// 
+    /// # 参数
+    /// * `group_id` - 分组ID
+    /// * `user_id` - 用户ID
+    /// * `friend_id` - 好友ID
+    ///
+    /// # 返回
+    /// * `Result<bool>` - 操作是否成功
+    pub async fn remove_friend_from_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        friend_id: &str,
+    ) -> Result<bool> {
+        // 检查分组是否存在且属于该用户
+        let group_exists = sqlx::query!(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM friend_group
+                WHERE id = $1 AND user_id = $2
+            ) AS "exists!"
+            "#,
+            group_id,
+            user_id
+        )
+        .fetch_one(&self.pool)
+        .await?
+        .exists;
+        
+        if !group_exists {
+            return Err(anyhow::anyhow!("分组不存在或不属于该用户"));
+        }
+        
+        // 从分组中移除好友
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM friend_group_relation
+            WHERE group_id = $1 AND user_id = $2 AND friend_id = $3
+            "#,
+            group_id,
+            user_id,
+            friend_id
+        )
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(result.rows_affected() > 0)
+    }
     
 }

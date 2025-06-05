@@ -208,25 +208,17 @@ impl FriendServiceHandler {
                 let id = get_optional_string(&body, "id",None);
                 let group_name = extract_string_param(&body, "groupName", Some("group_name"))?;
                 let sort_order = body.get("sortOrder").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                let friend_ids = body.get("friendIds")
-                    .and_then(|v| v.as_array())
-                    .ok_or_else(|| anyhow::anyhow!("friendIds 必须是数组"))?
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect::<Vec<String>>();
 
                 let response = self.client.create_or_update_friend_group(
                     id,
                     &current_user_id,
                     &group_name,
-                    sort_order,
-                    friend_ids
+                    sort_order
                 ).await?;
 
                 let group = response.group.ok_or_else(|| anyhow::anyhow!("分组数据为空"))?;
                 let result = json!({
-                    "group": self.convert_friend_group_to_json(&group),
-                    "friendIds": response.friend_ids
+                    "group": self.convert_friend_group_to_json(&group)
                 });
 
                 Ok(success_response(result, StatusCode::OK))
@@ -260,6 +252,26 @@ impl FriendServiceHandler {
                     "friends": friends,
                     "total": response.total
                 }), StatusCode::OK))
+            }
+            
+            // 添加好友到分组
+            (&Method::POST, "addFriendToGroup") => {
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
+
+                let response = self.client.add_friend_to_group(&current_user_id, &group_id, &friend_id).await?;
+
+                Ok(success_response(response.success, StatusCode::OK))
+            }
+            
+            // 从分组中移除好友
+            (&Method::POST, "removeFriendFromGroup") => {
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
+
+                let response = self.client.remove_friend_from_group(&current_user_id, &group_id, &friend_id).await?;
+
+                Ok(success_response(response.success, StatusCode::OK))
             }
             
             // 搜索潜在好友（通过custom_id或手机号精确搜索）
@@ -356,6 +368,7 @@ impl FriendServiceHandler {
             "friendUsername": friendship.friend_username,
             "friendNickname": friendship.friend_nickname,
             "friendAvatarUrl": friendship.friend_avatar_url,
+            "friendRemark": friendship.friend_remark,
             "isSelf": friendship.user_id == current_user_id,
         })
     }
