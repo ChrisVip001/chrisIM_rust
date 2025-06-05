@@ -1,6 +1,6 @@
 use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
-use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse};
+use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse};
 use anyhow;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -579,14 +579,6 @@ impl FriendService for FriendServiceImpl {
             return Err(Status::already_exists("分组名称已存在"));
         }
         
-        // 解析并验证好友ID列表
-        let friend_ids: Vec<String> = req.friend_ids.clone();
-
-        // 检查所有好友是否存在
-        for friend_id in &friend_ids {
-            self.check_user_exists(friend_id).await?;
-        }
-
         // 创建或更新分组
         let group = match req.id {
             Some(id) => {
@@ -609,22 +601,12 @@ impl FriendService for FriendServiceImpl {
             }
         };
         
-        // 更新分组中的好友列表
-        let updated_friend_ids = self.repository
-            .update_group_friends(&group.id, &user_id, &friend_ids)
-            .await
-            .map_err(|e| {
-                error!("更新好友分组中的好友失败: {}", e);
-                Status::internal("更新好友分组中的好友失败")
-            })?;
-            
         // 转换为proto对象
-        let mut friend_group = group.to_proto();
-        friend_group.friend_count = updated_friend_ids.len() as i32;
+        let friend_group = group.to_proto();
         
         Ok(Response::new(FriendGroupResponse {
             group: Some(friend_group),
-            friend_ids: updated_friend_ids,
+            friend_ids: vec![],
         }))
     }
 
@@ -1002,6 +984,72 @@ impl FriendService for FriendServiceImpl {
                     }))
                 } else {
                     Err(Status::internal("内部服务错误"))
+                }
+            }
+        }
+    }
+
+    // 添加好友到分组
+    async fn add_friend_to_group(
+        &self,
+        request: Request<AddFriendToGroupRequest>,
+    ) -> Result<Response<AddFriendToGroupResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = req.user_id;
+        let group_id = req.group_id;
+        let friend_id = req.friend_id;
+
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        self.check_user_exists(&friend_id).await?;
+
+        // 添加好友到分组
+        match self.repository.add_friend_to_group(&group_id, &user_id, &friend_id).await {
+            Ok(success) => {
+                Ok(Response::new(AddFriendToGroupResponse {
+                    success,
+                }))
+            }
+            Err(e) => {
+                error!("添加好友到分组失败: {}", e);
+                if e.to_string().contains("好友关系不存在") {
+                    Err(Status::failed_precondition("好友关系不存在"))
+                } else if e.to_string().contains("分组不存在") {
+                    Err(Status::not_found("分组不存在或不属于该用户"))
+                } else {
+                    Err(Status::internal("添加好友到分组失败"))
+                }
+            }
+        }
+    }
+
+    // 从分组中移除好友
+    async fn remove_friend_from_group(
+        &self,
+        request: Request<RemoveFriendFromGroupRequest>,
+    ) -> Result<Response<RemoveFriendFromGroupResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = req.user_id;
+        let group_id = req.group_id;
+        let friend_id = req.friend_id;
+
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        self.check_user_exists(&friend_id).await?;
+
+        // 从分组中移除好友
+        match self.repository.remove_friend_from_group(&group_id, &user_id, &friend_id).await {
+            Ok(success) => {
+                Ok(Response::new(RemoveFriendFromGroupResponse {
+                    success,
+                }))
+            }
+            Err(e) => {
+                error!("从分组中移除好友失败: {}", e);
+                if e.to_string().contains("分组不存在") {
+                    Err(Status::not_found("分组不存在或不属于该用户"))
+                } else {
+                    Err(Status::internal("从分组中移除好友失败"))
                 }
             }
         }
