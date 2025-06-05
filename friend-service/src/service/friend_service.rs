@@ -705,7 +705,7 @@ impl FriendService for FriendServiceImpl {
         // 转换为PotentialFriend对象
         let mut potential_friends: Vec<_> = Vec::with_capacity(users.len());
         
-        for (id, username, nickname, avatar_url, phone, friendship_status, sign) in users {
+        for (id, username, nickname, avatar_url, phone, friendship_status, sign, custom_id) in users {
             // 获取用户配置
             let mut service_client_clone = self.user_service_client.clone();
             let user_config_resp = match service_client_clone.get_user_config(
@@ -729,16 +729,33 @@ impl FriendService for FriendServiceImpl {
                         user_config: Some(UserConfig {
                             user_id: id.clone(),
                             show_phone: Some(2), // 默认不显示手机号
+                            allow_phone_search: Some(1), // 默认允许手机号搜索(1表示允许,2表示不允许)
+                            allow_id_search: Some(1), // 默认允许ID搜索(1表示允许,2表示不允许)
                             ..Default::default()
                         })
                     }
                 }
             };
             
-            // 从配置中获取show_phone设置（默认为2表示不显示完整手机号）
-            let show_phone = user_config_resp.user_config
-                .map(|config| config.show_phone.unwrap_or(2))
-                .unwrap_or(2);
+            // 从配置中获取隐私相关设置
+            let user_config = user_config_resp.user_config.unwrap_or(UserConfig::default());
+            let show_phone = user_config.show_phone.unwrap_or(2);
+            let allow_phone_search = user_config.allow_phone_search.unwrap_or(1); // 默认允许(1)
+            let allow_id_search = user_config.allow_id_search.unwrap_or(1); // 默认允许(1)
+            
+            // custom_id从数据库查询中直接获取，无需额外调用用户服务
+            
+            // 检查搜索方式与隐私设置
+            let is_phone_search = search_term.chars().all(|c| c.is_ascii_digit());
+            
+            // 检查是否是自定义ID搜索
+            let is_id_search = search_term == custom_id;
+            
+            // 如果是手机号搜索且用户不允许，或者是ID搜索且用户不允许，则跳过此用户
+            // 1代表允许，2代表不允许
+            if (is_phone_search && allow_phone_search != 1) || (is_id_search && allow_id_search != 1) {
+                continue;
+            }
             
             // 根据隐私配置处理手机号
             let new_phone = if let Some(phone_str) = phone {
@@ -760,7 +777,7 @@ impl FriendService for FriendServiceImpl {
             };
             
             let friend = PotentialFriend::from_tuple(
-                id, username, nickname, avatar_url, new_phone, friendship_status, sign
+                id, username, nickname, avatar_url, new_phone, friendship_status, sign, custom_id
             );
             potential_friends.push(friend.to_proto());
         }

@@ -150,6 +150,7 @@ impl PotentialFriend {
         phone: Option<String>,
         friendship_status: i32,
         sign: Option<String>,
+        custom_id: String,
     ) -> Self {
         Self {
             id,
