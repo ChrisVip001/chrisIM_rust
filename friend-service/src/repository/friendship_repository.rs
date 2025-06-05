@@ -1607,7 +1607,7 @@ impl FriendshipRepository {
         // 检查分组是否属于该用户
         let group_exists = sqlx::query!(
             r#"
-            SELECT id FROM friend_groups
+            SELECT id FROM friend_group
             WHERE id = $1 AND user_id = $2
             "#,
             group_id,
@@ -1641,7 +1641,7 @@ impl FriendshipRepository {
         let rows = sqlx::query!(
             r#"
             SELECT g.id, g.user_id, g.group_name, g.sort_order, g.created_at, g.updated_at
-            FROM friend_groups g
+            FROM friend_group g
             WHERE g.user_id = $1
             AND g.id IN (
                 SELECT group_id FROM friend_group_relation 
@@ -1661,9 +1661,9 @@ impl FriendshipRepository {
                 id: row.id,
                 user_id: row.user_id,
                 group_name: row.group_name,
-                sort_order: row.sort_order as i32,
-                created_at: Utc.from_utc_datetime(&row.created_at),
-                updated_at: Utc.from_utc_datetime(&row.updated_at),
+                sort_order: row.sort_order.unwrap(),
+                created_at: Utc.from_utc_datetime(&row.created_at.unwrap_or_default()),
+                updated_at: Utc.from_utc_datetime(&row.updated_at.unwrap_or_default()),
                 friend_count: 0, // 使用默认值0
             })
             .collect();
