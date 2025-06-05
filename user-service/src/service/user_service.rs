@@ -78,7 +78,7 @@ impl UserServiceImpl {
         
         // 根据show_phone配置决定是否显示手机号
         if let Some(show_phone) = user_config.show_phone {
-            if show_phone == 2 { // 2表示不显示手机号
+            if show_phone == 1 { // 1表示不显示手机号
                 // 将手机号处理为脱敏状态
                 if !user.phone.is_empty() {
                     // 保留前三位和后四位，中间用星号代替
@@ -769,15 +769,7 @@ impl UserService for UserServiceImpl {
         let req = request.into_inner();
         debug!("保存用户设置请求，id: {}", req.user_id);
 
-        // 记录手机号显示设置更改
-        if let Some(show_phone) = req.show_phone {
-            let display_text = match show_phone {
-                1 => "显示",
-                2 => "不显示",
-                _ => "未知设置",
-            };
-            info!("用户 {} 设置手机号显示为: {} (值: {})", req.user_id, display_text, show_phone);
-        }
+
 
         // 转换请求数据
         let save_data = UserConfigData::from(req.clone());
@@ -797,22 +789,7 @@ impl UserService for UserServiceImpl {
             }
         };
 
-        // 如果手机号显示设置发生变化，记录日志
-        if let (Some(old), Some(new)) = (old_config.and_then(|c| c.show_phone), user_config.show_phone) {
-            if old != new {
-                let old_text = match old {
-                    1 => "显示",
-                    2 => "不显示",
-                    _ => "未知设置",
-                };
-                let new_text = match new {
-                    1 => "显示",
-                    2 => "不显示",
-                    _ => "未知设置",
-                };
-                info!("用户 {} 的手机号显示设置从 {} 更改为 {}", req.user_id, old_text, new_text);
-            }
-        }
+
 
         info!("保存用户设置成功 {}", req.user_id);
         let proto_user_config = UserConfig {
