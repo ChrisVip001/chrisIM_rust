@@ -6,34 +6,38 @@ use tokio::sync::mpsc;
 use common::error::Error;
 use common::proto::message::{GroupMemSeq, Msg};
 
-/// face to postgres db
+/// 消息存储仓库trait
+/// 面向PostgreSQL数据库，用于持久化存储消息
 #[async_trait]
 pub trait MsgStoreRepo: Sync + Send + Debug {
-    /// save message to db
+    /// 保存消息到数据库
     async fn save_message(&self, message: Msg) -> Result<(), Error>;
 }
 
-/// message receive box
-/// face to mongodb
-/// when user received message, will delete message from receive box
+/// 消息接收箱仓库trait
+/// 面向MongoDB数据库
+/// 当用户接收消息时，会从接收箱中删除消息
 #[async_trait]
 pub trait MsgRecBoxRepo: Sync + Send + Debug {
-    /// save message, need message structure
+    /// 保存消息，需要消息结构体
     async fn save_message(&self, message: &Msg) -> Result<(), Error>;
 
-    /// save message to message receive box
-    /// need the group members id
+    /// 保存消息到消息接收箱
+    /// 需要群组成员ID列表
     async fn save_group_msg(&self, message: Msg, members: Vec<GroupMemSeq>) -> Result<(), Error>;
 
+    /// 根据消息ID删除单条消息
     async fn delete_message(&self, message_id: &str) -> Result<(), Error>;
 
+    /// 根据用户ID和消息序列号批量删除消息
     async fn delete_messages(&self, user_id: &str, msg_seq: Vec<i64>) -> Result<(), Error>;
 
     #[allow(dead_code)]
+    /// 根据消息ID获取单条消息
     async fn get_message(&self, message_id: &str) -> Result<Option<Msg>, Error>;
 
-    /// need to think about how to get message from receive box,
-    /// use stream? or use pagination? prefer stream
+    /// 从接收箱获取消息流
+    /// 使用流式处理，支持大量消息的高效传输
     async fn get_messages_stream(
         &self,
         user_id: &str,
@@ -42,8 +46,11 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
     ) -> Result<mpsc::Receiver<Result<Msg, Error>>, Error>;
 
     #[deprecated]
+    /// 获取消息列表（已废弃，建议使用流式接口）
     async fn get_messages(&self, user_id: &str, start: i64, end: i64) -> Result<Vec<Msg>, Error>;
 
+    /// 获取用户的发送和接收消息
+    /// 支持分别指定发送消息和接收消息的序列号范围
     async fn get_msgs(
         &self,
         user_id: &str,
@@ -53,17 +60,19 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
         rec_end: i64,
     ) -> Result<Vec<Msg>, Error>;
 
-    /// update message read status by user id and message sequence
+    /// 根据用户ID和消息序列号更新消息已读状态
     async fn msg_read(&self, user_id: &str, msg_seq: &[i64]) -> Result<(), Error>;
 }
 
+/// 消息接收箱清理器trait
+/// 用于定期清理过期消息
 pub trait MsgRecBoxCleaner: Sync + Send {
-    /// run a task which use tokio to clean message receive box
-    /// clean all messages except the messages that type is group operations related
+    /// 运行消息接收箱清理任务
+    /// 清理所有消息，除了群组操作相关的消息类型
     ///
-    /// # Params
-    /// * period: the period of time to clean, unit is day
-    /// * types: the types of messages to not clean, such as group operations related; use MsgType
+    /// # 参数
+    /// * period: 清理周期，单位为天
+    /// * types: 不清理的消息类型列表，如群组操作相关消息；使用MsgType枚举值
     ///
     fn clean_receive_box(&self, period: i64, types: Vec<i32>);
 }

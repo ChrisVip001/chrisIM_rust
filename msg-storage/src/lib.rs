@@ -14,8 +14,8 @@ use std::sync::Arc;
 use ::sqlx::PgPool;
 use message::{MsgRecBoxCleaner, MsgRecBoxRepo, MsgStoreRepo};
 
-/// shall we create a structure to hold everything we need?
-/// like db pool and mongodb's database
+/// 数据库仓库结构体，用于管理消息存储和序列号相关的数据库操作
+/// 包含消息存储仓库和序列号仓库的实例
 #[derive(Debug)]
 pub struct DbRepo {
     pub msg: Box<dyn MsgStoreRepo>,
@@ -23,6 +23,8 @@ pub struct DbRepo {
 }
 
 impl DbRepo {
+    /// 创建新的数据库仓库实例
+    /// 根据配置初始化PostgreSQL连接池，并创建消息存储和序列号仓库
     pub async fn new(config: &AppConfig) -> Self {
         let pool = PgPool::connect(&config.database.pg_url()).await.unwrap();
         let seq_step = config.redis.seq_step;
@@ -36,16 +38,22 @@ impl DbRepo {
     }
 }
 
+/// 创建消息接收箱仓库实例
+/// 用于管理用户的消息接收箱，基于MongoDB实现
 pub async fn msg_rec_box_repo(config: &AppConfig) -> Result<Arc<dyn MsgRecBoxRepo>, Error> {
     let msg_box = mongodb::MsgBox::from_config(config).await?;
     Ok(Arc::new(msg_box))
 }
 
+/// 创建消息接收箱清理器实例
+/// 用于定期清理过期的消息
 pub async fn msg_rec_box_cleaner(config: &AppConfig) -> Result<Arc<dyn MsgRecBoxCleaner>, Error> {
     let msg_box = mongodb::MsgBox::from_config(config).await?;
     Ok(Arc::new(msg_box))
 }
 
+/// 清理消息接收箱
+/// 启动定期清理任务，删除过期的消息（除了指定类型的消息）
 pub async fn clean_receive_box(config: &AppConfig) -> Result<(), Error> {
     let types: Vec<i32> = config
         .database
@@ -60,7 +68,7 @@ pub async fn clean_receive_box(config: &AppConfig) -> Result<(), Error> {
 
     let msg_box = msg_rec_box_cleaner(config).await?;
     info!(
-        "clean receive box task started, and the period is {period}s; the except types is {:?}",
+        "消息接收箱清理任务已启动，清理周期为 {period} 秒；不清理的消息类型为：{:?}",
         types
     );
     msg_box.clean_receive_box(period, types);

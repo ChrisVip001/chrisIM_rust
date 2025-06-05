@@ -2,6 +2,8 @@ use common::error::Error;
 use common::proto::message::Msg;
 use bson::{doc, Document};
 
+/// 将消息结构体转换为MongoDB文档
+/// 用于将Rust的Msg结构体转换为可以存储到MongoDB的BSON文档格式
 pub(crate) fn to_doc(msg: &Msg) -> Result<Document, Error> {
     let document = doc! {
         "local_id": &msg.local_id,

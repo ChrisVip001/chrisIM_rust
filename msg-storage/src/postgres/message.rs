@@ -6,12 +6,15 @@ use common::proto::message::Msg;
 
 use crate::message::MsgStoreRepo;
 
+/// PostgreSQL消息存储实现
+/// 负责将消息持久化存储到PostgreSQL数据库中
 #[derive(Debug)]
 pub struct PostgresMessage {
     pool: PgPool,
 }
 
 impl PostgresMessage {
+    /// 创建新的PostgreSQL消息存储实例
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -19,6 +22,8 @@ impl PostgresMessage {
 
 #[async_trait]
 impl MsgStoreRepo for PostgresMessage {
+    /// 保存消息到PostgreSQL数据库
+    /// 使用ON CONFLICT DO NOTHING避免重复插入相同消息
     async fn save_message(&self, message: Msg) -> Result<(), Error> {
         sqlx::query(
             "INSERT INTO messages

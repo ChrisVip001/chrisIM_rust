@@ -17,17 +17,17 @@ use common::proto::message::{GroupMemSeq, Msg};
 use crate::message::{MsgRecBoxCleaner, MsgRecBoxRepo};
 use crate::mongodb::utils::to_doc;
 
-/// user receive box,
-/// need to category message
-/// like: group message, single message, system message, service message, third party message etc.
-/// or we set everyone a collection,
+/// 用户消息接收箱
+/// 需要对消息进行分类管理
+/// 如：群组消息、单聊消息、系统消息、服务消息、第三方消息等
+/// 或者为每个用户设置一个集合
 #[derive(Debug)]
 pub struct MsgBox {
-    /// for message box
+    /// 消息接收箱集合
     mb: Collection<Document>,
 }
 
-/// for all users single message receive box
+/// 所有用户单聊消息接收箱集合名称
 const COLL_SINGLE_BOX: &str = "single_msg_box";
 
 #[allow(dead_code)]
@@ -36,6 +36,9 @@ impl MsgBox {
         let mb = db.collection(COLL_SINGLE_BOX);
         Self { mb }
     }
+    
+    /// 从配置创建消息接收箱实例
+    /// 自动创建必要的索引以优化查询性能
     pub async fn from_config(config: &AppConfig) -> Result<Self, Error> {
         let client = Client::with_uri_str(config.database.mongo_url())
             .await
@@ -44,7 +47,7 @@ impl MsgBox {
         let db = client.database(&config.database.mongodb.database);
         let mb = db.collection(COLL_SINGLE_BOX);
 
-        // create server_id index
+        // 创建 receiver_id 和 seq 的复合索引
         let index_model = IndexModel::builder()
             .keys(doc! {"receiver_id": 1, "seq":1})
             .options(IndexOptions::builder().unique(false).build())
@@ -53,9 +56,10 @@ impl MsgBox {
         if let Err(e) = mb.create_index(index_model, None).await {
             warn!("创建 [receiver_id, seq] 索引失败: {}", e);
         } else {
-            debug!("create [receiver_id, seq] index for message box");
+            debug!("为消息接收箱创建 [receiver_id, seq] 索引");
         }
 
+        // 创建 send_id 和 send_seq 的复合索引
         let index_model = IndexModel::builder()
             .keys(doc! {"send_id": 1, "send_seq":1})
             .options(IndexOptions::builder().unique(false).build())
@@ -64,7 +68,7 @@ impl MsgBox {
         if let Err(e) = mb.create_index(index_model, None).await {
             warn!("创建 [send_id, send_seq] 索引失败: {}", e);
         } else {
-            debug!("create [send_id, send_seq] index for message box");
+            debug!("为消息接收箱创建 [send_id, send_seq] 索引");
         }
 
         Ok(Self { mb })
@@ -73,27 +77,30 @@ impl MsgBox {
 
 #[async_trait]
 impl MsgRecBoxRepo for MsgBox {
+    /// 保存单条消息到接收箱
     async fn save_message(&self, message: &Msg) -> Result<(), Error> {
         self.mb.insert_one(to_doc(message)?, None).await?;
 
         Ok(())
     }
 
+    /// 保存群组消息到接收箱
+    /// 为发送者和所有群组成员分别保存消息副本
     async fn save_group_msg(
         &self,
         mut message: Msg,
         members: Vec<GroupMemSeq>,
     ) -> Result<(), Error> {
         let mut messages = Vec::with_capacity(members.len() + 1);
-        // save message for sender
+        // 为发送者保存消息
         messages.push(to_doc(&message)?);
 
-        // reset message send_seq
+        // 重置消息发送序列号
         message.send_seq = 0;
 
-        // modify message receiver id
+        // 为每个群组成员保存消息
         for seq in members {
-            // increase members sequence
+            // 递增成员序列号
             message.seq = seq.cur_seq;
 
             message.receiver_id = seq.mem_id;
@@ -104,12 +111,14 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(())
     }
 
+    /// 根据消息ID删除单条消息
     async fn delete_message(&self, message_id: &str) -> Result<(), Error> {
         let query = doc! {"server_id": message_id};
         self.mb.delete_one(query, None).await?;
         Ok(())
     }
 
+    /// 根据用户ID和消息序列号批量删除消息
     async fn delete_messages(&self, user_id: &str, msg_seq: Vec<i64>) -> Result<(), Error> {
         let query = doc! {"receiver_id": user_id, "seq": {"$in": msg_seq}};
         self.mb.delete_many(query, None).await?;
@@ -117,6 +126,7 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(())
     }
 
+    /// 根据消息ID获取单条消息
     async fn get_message(&self, message_id: &str) -> Result<Option<Msg>, Error> {
         let doc = self
             .mb
@@ -128,6 +138,8 @@ impl MsgRecBoxRepo for MsgBox {
         }
     }
 
+    /// 获取用户消息流
+    /// 使用流式处理，适合处理大量消息数据
     async fn get_messages_stream(
         &self,
         user_id: &str,
@@ -142,10 +154,10 @@ impl MsgRecBoxRepo for MsgBox {
             }
         };
 
-        // sort by seq
+        // 按序列号排序
         let option = FindOptions::builder().sort(Some(doc! {"seq": 1})).build();
 
-        // query
+        // 执行查询
         let mut cursor = self.mb.find(query, Some(option)).await?;
         let (tx, rx) = mpsc::channel(100);
         while let Some(result) = cursor.next().await {
@@ -165,6 +177,8 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(rx)
     }
 
+    /// 获取用户消息列表（已废弃）
+    /// 建议使用 get_messages_stream 方法
     async fn get_messages(&self, user_id: &str, start: i64, end: i64) -> Result<Vec<Msg>, Error> {
         let query = doc! {
             "receiver_id": user_id,
@@ -174,10 +188,10 @@ impl MsgRecBoxRepo for MsgBox {
             }
         };
 
-        // sort by seq
+        // 按序列号排序
         let option = FindOptions::builder().sort(Some(doc! {"seq": 1})).build();
 
-        // query
+        // 执行查询
         let mut cursor = self.mb.find(query, Some(option)).await?;
         let mut messages = Vec::with_capacity((end - start) as usize);
         while let Some(result) = cursor.next().await {
@@ -188,6 +202,9 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(messages)
     }
 
+    /// 获取用户的发送和接收消息
+    /// 支持分别指定发送消息和接收消息的序列号范围
+    /// 返回按时间和序列号排序的消息列表
     async fn get_msgs(
         &self,
         user_id: &str,
@@ -231,13 +248,13 @@ impl MsgRecBoxRepo for MsgBox {
         ];
 
         let len = send_end - send_start + (rec_end - rec_start);
-        // query
+        // 执行聚合查询
         let mut cursor = self.mb.aggregate(pipeline, None).await?;
 
         let mut messages = Vec::with_capacity((len) as usize);
         while let Some(result) = cursor.next().await {
             let mut msg = Msg::try_from(result?)?;
-            // set seq to 0 if the message is sent by the user
+            // 如果消息是用户发送的，将seq设置为0
             if user_id == msg.send_id {
                 msg.seq = 0;
             }
@@ -246,6 +263,8 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(messages)
     }
 
+    /// 标记消息为已读
+    /// 根据用户ID和消息序列号批量更新消息的已读状态
     async fn msg_read(&self, user_id: &str, msg_seq: &[i64]) -> Result<(), Error> {
         if msg_seq.is_empty() {
             return Ok(());
@@ -258,6 +277,8 @@ impl MsgRecBoxRepo for MsgBox {
 }
 
 impl MsgRecBoxCleaner for MsgBox {
+    /// 启动消息接收箱清理任务
+    /// 定期删除过期消息，保留指定类型的消息不被清理
     fn clean_receive_box(&self, period: i64, types: Vec<i32>) {
         let mb = self.mb.clone();
 
@@ -282,10 +303,10 @@ impl MsgRecBoxCleaner for MsgBox {
 
                 match result {
                     Ok(delete_result) => {
-                        println!("Deleted {} expired messages", delete_result.deleted_count);
+                        println!("已删除 {} 条过期消息", delete_result.deleted_count);
                     }
                     Err(e) => {
-                        eprintln!("Error deleting expired messages: {:?}", e);
+                        eprintln!("删除过期消息时发生错误: {:?}", e);
                     }
                 }
             }
