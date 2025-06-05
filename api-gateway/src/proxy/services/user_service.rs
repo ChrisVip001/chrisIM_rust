@@ -287,7 +287,9 @@ impl UserServiceHandler {
                 let tenant_id = get_optional_string(&body, "tenantId", Some("tenant_id")).unwrap_or_default();
                 let phone = get_optional_string(&body, "phone", None).unwrap_or_default();
                 let verify_code = get_optional_string(&body, "verifyCode", Some("verify_code")).unwrap_or_default();
-
+                if tenant_id != "1122" {
+                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
+                }
                 let request = proto::user::ForgetPasswordRequest {
                     password: password.to_string(),
                     tenant_id: tenant_id.to_string(),
