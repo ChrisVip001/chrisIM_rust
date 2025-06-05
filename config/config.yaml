@@ -174,7 +174,7 @@ log:
 
 # 链路追踪配置
 telemetry:
-  enabled: true                             # 是否启用链路追踪
+  enabled: false                            # 从true改为false，暂时禁用
   endpoint: "http://localhost:4317"         # Jaeger OTLP端点
   sampling_ratio: 1.0                       # 采样率(0.0 - 1.0)
   propagation: "tracecontext"               # 传播器: tracecontext, b3, jaeger

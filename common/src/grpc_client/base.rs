@@ -17,35 +17,6 @@ use crate::service_discovery::{DynamicServiceDiscovery, LbWithServiceDiscovery, 
 // 重新导出服务注册中心模块
 pub use crate::service_register_center::{service_register_center, typos, ServiceRegister};
 
-/// 根据服务名称获取RPC通道
-pub async fn get_rpc_channel_by_name(
-    config: &AppConfig,
-    name: &str,
-    protocol: &str,
-) -> Result<Channel, Error> {
-    let center = service_register_center(config);
-    let mut service_list = center.find_by_name(name).await?;
-
-    // 如果没找到服务，重试5次
-    if service_list.is_empty() {
-        for i in 0..5 {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            service_list = center.find_by_name(name).await?;
-            if !service_list.is_empty() {
-                break;
-            }
-            if i == 5 {
-                return Err(Error::NotFound(name.to_string()));
-            }
-        }
-    }
-    let endpoints = service_list.values().map(|v| {
-        let url = format!("{}://{}:{}", protocol, v.host, v.port);
-        Endpoint::from_shared(url).unwrap()
-    });
-    let channel = Channel::balance_list(endpoints);
-    Ok(channel)
-}
 
 /// 服务解析器，用于从服务注册中心获取服务信息
 pub struct ServiceResolver {
@@ -83,67 +54,6 @@ impl ServiceResolver {
     }
 }
 
-/// 使用配置创建带服务发现功能的通道
-///
-/// # 参数
-/// * `config` - 应用配置
-/// * `service_name` - 服务名称
-/// * `protocol` - 通信协议
-///
-/// # 返回
-/// 返回带有负载均衡和服务发现功能的通道
-pub async fn get_channel_with_config(
-    config: &AppConfig,
-    service_name: impl ToString,
-    protocol: impl ToString,
-) -> Result<LbWithServiceDiscovery, Error> {
-    let (channel, sender) = Channel::balance_channel(1024);
-    let service_resolver =
-        ServiceResolver::new(service_register_center(config), service_name.to_string());
-    let discovery = DynamicServiceDiscovery::new(
-        service_resolver,
-        Duration::from_secs(10),
-        sender,
-        protocol.to_string(),
-    );
-    get_channel(discovery, channel).await
-}
-
-/// 使用指定的服务注册中心创建带服务发现功能的通道
-///
-/// # 参数
-/// * `register` - 服务注册中心
-/// * `service_name` - 服务名称
-/// * `protocol` - 通信协议
-///
-/// # 返回
-/// 返回带有负载均衡和服务发现功能的通道
-pub async fn get_channel_with_register(
-    register: Arc<dyn ServiceRegister>,
-    service_name: impl ToString,
-    protocol: impl ToString,
-) -> Result<LbWithServiceDiscovery, Error> {
-    let (channel, sender) = Channel::balance_channel(1024);
-    let service_resolver = ServiceResolver::new(register, service_name.to_string());
-    let discovery = DynamicServiceDiscovery::new(
-        service_resolver,
-        Duration::from_secs(10),
-        sender,
-        protocol.to_string(),
-    );
-    get_channel(discovery, channel).await
-}
-
-/// 内部函数，用于创建带服务发现的通道
-async fn get_channel(
-    mut discovery: DynamicServiceDiscovery<ServiceResolver>,
-    channel: Channel,
-) -> Result<LbWithServiceDiscovery, Error> {
-    discovery.discovery().await?;
-    tokio::spawn(discovery.run());
-    Ok(LbWithServiceDiscovery(channel))
-}
-
 /// 获取带负载均衡的通道
 ///
 /// 简化版的获取通道函数，使用应用配置和服务名称
@@ -156,7 +66,7 @@ pub async fn get_chan(config: &AppConfig, name: String) -> Result<LbWithServiceD
     // 创建 DynamicServiceDiscovery
     let mut discovery = DynamicServiceDiscovery::new(
         service_resolver,
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         sender,
         config.service_center.protocol.clone(),
     );
