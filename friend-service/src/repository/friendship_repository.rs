@@ -1156,7 +1156,7 @@ impl FriendshipRepository {
         let friends = sqlx::query!(
             r#"
             SELECT u.id as friend_id, u.username, u.nickname, u.avatar_url, 
-                   fr.created_at as friendship_created_at, NULL as remark
+                   fr.created_at as friendship_created_at, fr.remark as remark
             FROM friend_group_relation gr
             JOIN users u ON gr.friend_id = u.id
             JOIN friend_relation fr ON (fr.user_id = gr.user_id AND fr.friend_id = gr.friend_id)
