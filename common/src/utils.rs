@@ -2,9 +2,10 @@ use crate::{Error, Result};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHasher};
-use image::{DynamicImage, ImageBuffer, Rgb};
+use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
 use redis::{Client as RedisClient, Commands};
-use imageproc::drawing::draw_text_mut;
+use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_text_mut};
+use imageproc::noise::gaussian_noise_mut;
 use rand::distr::Alphanumeric;
 use rand::Rng;
 use uuid::Uuid;
@@ -135,29 +136,87 @@ pub fn generate_user_custom_id() -> String {
 /// 图片验证码生成
 pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_size: &f32) -> Vec<u8> {
     // 图片尺寸
-    let width = width;
-    let height = height;
+    let width = *width;
+    let height = *height;
 
-    // 创建一个白色背景的图片（使用 Rgb<u8>）
-    let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(*width, *height, Rgb([255, 255, 255]));
+    // 创建一个纯白色的背景图片
+    let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
+    for pixel in img.pixels_mut() {
+        *pixel = Rgba([255, 255, 255, 255]); // 纯白色背景
+    }
 
-    // 使用 DynamicImage 包装
-    let mut img = DynamicImage::ImageRgb8(img);
+    // 添加轻微噪点
+    let mut rng = rand::thread_rng();
+    for _ in 0..500 {
+        let x = rng.gen_range(0..width);
+        let y = rng.gen_range(0..height);
+        let color = Rgba([
+            rng.gen_range(180..220), // 浅灰色噪点
+            rng.gen_range(180..220),
+            rng.gen_range(180..220),
+            255,
+        ]);
+        img.put_pixel(x, y, color);
+    }
 
-    // 加载字体文件
-    let font_data = include_bytes!("../assets/Roboto-Regular.ttf"); // 确保路径正确
+    // 加载多种字体文件
+    let font_data = include_bytes!("../assets/Roboto-Regular.ttf");
     let font = Font::try_from_bytes(font_data).expect("加载字体失败");
 
-    // 设置字体大小和颜色
-    let scale = Scale::uniform(font_size.clone());
-    let color = Rgb([0, 0, 0]); // 黑色
-
     // 在图片上绘制文本
-    draw_text_mut(img.as_mut_rgb8().unwrap(),color,10,10,scale,&font,text_code);
+    let mut x_offset = rng.gen_range(10..=20); // 初始X轴偏移
+    for c in text_code.chars() {
+        // 随机字体颜色
+        let color = Rgba([
+            rng.gen_range(0..150),       // 红色分量
+            rng.gen_range(0..150),       // 绿色分量
+            rng.gen_range(0..150),       // 蓝色分量
+            255,                         // 完全不透明
+        ]);
+
+        // 随机字体大小和旋转角度
+        let scale = Scale::uniform(rng.gen_range(*font_size - 5.0..=*font_size + 5.0));
+        let angle = rng.gen_range(-20..=20) as f32;
+
+        // 绘制单个字符
+        draw_text_mut(
+            &mut img,
+            color,
+            x_offset,
+            rng.gen_range(10..=30), // 随机Y轴偏移
+            scale,
+            &font,
+            &c.to_string(),
+        );
+
+        // 更新X轴偏移
+        x_offset += rng.gen_range(20..=35); // 随机字符间距
+    }
+
+    // 添加简单装饰线条
+    for _ in 0..3 {
+        let start_x = rng.gen_range(0..width as i32);
+        let start_y = rng.gen_range(0..height as i32);
+        let end_x = rng.gen_range(0..width as i32);
+        let end_y = rng.gen_range(0..height as i32);
+        let line_color = Rgba([
+            rng.gen_range(150..200), // 浅灰色线条
+            rng.gen_range(150..200),
+            rng.gen_range(150..200),
+            255,
+        ]);
+        draw_line_segment_mut(
+            &mut img,
+            (start_x as f32, start_y as f32),
+            (end_x as f32, end_y as f32),
+            line_color,
+        );
+    }
 
     // 将图片转换为字节流
     let mut buffer = Vec::new();
-    img.write_to(&mut buffer, image::ImageOutputFormat::Png)
+    DynamicImage::ImageRgba8(img)
+        .write_to(&mut buffer, image::ImageOutputFormat::Png)
         .expect("写入图片失败");
 
     buffer
