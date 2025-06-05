@@ -172,11 +172,26 @@ impl GroupServiceHandler {
             // 获取群组成员列表
             (&Method::GET, "getMembers") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+                let page = get_i64_param(&body, "page", 1) as i32;
+                let page_size = get_i64_param(&body, "pageSize", 20) as i32;
 
-                let response = self.client.get_members(&group_id).await?;
+                let response = self.client.get_members_with_params(
+                    &group_id,
+                    page,
+                    page_size
+                ).await?;
+                
                 let members = response.members.iter().map(|m| self.convert_member_to_json(m)).collect::<Vec<_>>();
 
-                Ok(success_response(members, StatusCode::OK))
+                Ok(success_response(
+                    json!({
+                        "members": members,
+                        "total": response.total,
+                        "page": response.page,
+                        "pageSize": response.page_size
+                    }), 
+                    StatusCode::OK
+                ))
             }
 
             // 获取用户加入的群组列表

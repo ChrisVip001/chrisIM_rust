@@ -484,13 +484,20 @@ impl GroupService for GroupServiceImpl {
     ) -> Result<Response<GetMembersResponse>, Status> {
         let req = request.into_inner();
         let group_id = req.group_id;
+        
+        // 解析可选参数
+        let page = if req.page > 0 { Some(req.page) } else { None };
+        let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
 
-        match self.member_repository.get_members(group_id).await {
-            Ok(members) => {
+        match self.member_repository.get_members(group_id, page, page_size).await {
+            Ok((members, total)) => {
                 let proto_members = members.into_iter().map(|m| m.to_proto()).collect();
 
                 Ok(Response::new(GetMembersResponse {
                     members: proto_members,
+                    total: total as i32,
+                    page: page.unwrap_or(1),
+                    page_size: page_size.unwrap_or(20),
                 }))
             }
             Err(e) => {
