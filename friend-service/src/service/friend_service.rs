@@ -434,7 +434,7 @@ impl FriendService for FriendServiceImpl {
 
         let user_id = req.user_id;
         let friend_id = req.friend_id;
-        // 查询好友关系。已有好友返回状态0 ，待处理状态是1，已申请状态是2 ，没有好友状态返回None
+        // 查询好友关系。已有好友返回状态1 ，待处理状态是2，已申请状态是3 ，没有好友状态返回None/0
         
         // 检查用户是否存在
         self.check_user_exists(&user_id).await?;
@@ -459,16 +459,18 @@ impl FriendService for FriendServiceImpl {
         // 检查是否有待处理的好友请求
         match self.repository.check_friendship_request(&user_id, &friend_id).await {
             Ok(Some(request)) => {
-                if request.friend_id == user_id {
-                    // 对方发送的好友请求，待处理状态是2
-                    return Ok(Response::new(CheckFriendshipResponse {
-                        status: FriendRelationType::PendingRequest as i32,
-                    }));
-                } else if request.user_id == user_id {
-                    // 自己发送的好友请求，已申请状态是3
-                    return Ok(Response::new(CheckFriendshipResponse {
-                        status: FriendRelationType::Applied as i32,
-                    }));
+                if request.status == FriendshipStatus::Pending as i32 {
+                    if request.friend_id == user_id {
+                        // 对方发送的好友请求，待处理状态是2
+                        return Ok(Response::new(CheckFriendshipResponse {
+                            status: FriendRelationType::PendingRequest as i32,
+                        }));
+                    } else if request.user_id == user_id {
+                        // 自己发送的好友请求，已申请状态是3
+                        return Ok(Response::new(CheckFriendshipResponse {
+                            status: FriendRelationType::Applied as i32,
+                        }));
+                    }
                 }
             },
             Ok(None) => {
