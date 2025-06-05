@@ -132,11 +132,16 @@ message UpdateMemberRoleRequest {
 // 获取成员列表请求
 message GetMembersRequest {
   string group_id = 1;
+  int32 page = 2;        // 页码，默认为1
+  int32 page_size = 3;   // 每页数量，默认为20
 }
 
 // 获取成员列表响应
 message GetMembersResponse {
   repeated Member members = 1;
+  int32 total = 2;       // 总成员数
+  int32 page = 3;        // 当前页码
+  int32 page_size = 4;   // 每页数量
 }
 
 // 获取用户群组列表请求

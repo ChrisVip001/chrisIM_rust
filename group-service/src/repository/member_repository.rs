@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use common::proto::group::MemberRole;
 use sqlx::PgPool;
+use sqlx::Row;
 
 use crate::model::member::Member;
 
@@ -191,37 +192,61 @@ impl MemberRepository {
     }
 
     // 获取群组成员列表
-    pub async fn get_members(&self, group_id: String) -> Result<Vec<Member>> {
-        // 在真实环境中，这需要从user-service获取用户信息
-        let members = sqlx::query!(
-            r#"
+    pub async fn get_members(
+        &self,
+        group_id: String,
+        page: Option<i32>,
+        page_size: Option<i32>,
+    ) -> Result<(Vec<Member>, i64)> {
+        // 设置默认分页参数
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(20);
+        let offset = (page - 1) * page_size;
+
+        // 获取总记录数
+        let total = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) as count FROM group_members WHERE group_id = $1"
+        )
+        .bind(&group_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        // 查询成员列表
+        let query = r#"
             SELECT m.id, m.group_id, m.user_id, m.role, m.joined_at,
-                   u.username, u.nickname, u.avatar_url
+                  u.username, u.nickname, u.avatar_url
             FROM group_members m
             JOIN users u ON m.user_id = u.id
             WHERE m.group_id = $1
             ORDER BY m.role DESC, m.joined_at ASC
-            "#,
-            group_id
-        )
-        .fetch_all(&self.pool)
-        .await?;
+            LIMIT $2 OFFSET $3
+        "#;
+
+        let members = sqlx::query(query)
+            .bind(&group_id)
+            .bind(page_size as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await?;
 
         let result = members
             .into_iter()
-            .map(|m| Member {
-                id: m.id,
-                group_id: m.group_id,
-                user_id: m.user_id,
-                username: m.username,
-                nickname: m.nickname,
-                avatar_url: m.avatar_url,
-                role: m.role.parse::<i32>().unwrap_or(0),
-                joined_at: Utc.from_utc_datetime(&m.joined_at),
+            .map(|row| {
+                let row: sqlx::postgres::PgRow = row;
+                Member {
+                    id: row.get("id"),
+                    group_id: row.get("group_id"),
+                    user_id: row.get("user_id"),
+                    username: row.get("username"),
+                    nickname: row.get("nickname"),
+                    avatar_url: row.get("avatar_url"),
+                    role: row.get::<String, _>("role").parse::<i32>().unwrap_or(0),
+                    joined_at: Utc.from_utc_datetime(&row.get::<chrono::NaiveDateTime, _>("joined_at")),
+                }
             })
             .collect();
 
-        Ok(result)
+        Ok((result, total))
     }
 
     // 检查用户是否是群组成员

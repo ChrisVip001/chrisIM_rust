@@ -47,6 +47,9 @@ service FriendService {
   
   // 获取分组好友列表
   rpc GetGroupFriends (GetGroupFriendsRequest) returns (GetGroupFriendsResponse);
+
+  // 获取好友所在分组列表
+  rpc GetFriendInGroups (GetFriendInGroupsRequest) returns (GetFriendInGroupsResponse);
   
   // 搜索潜在好友
   rpc SearchPotentialFriends (SearchPotentialFriendsRequest) returns (SearchPotentialFriendsResponse);
@@ -312,6 +315,17 @@ message GetGroupFriendsRequest {
 message GetGroupFriendsResponse {
   repeated Friend friends = 1;  // 好友列表
   int32 total = 2;             // 总数
+}
+
+// 获取好友所在分组列表请求
+message GetFriendInGroupsRequest {
+  string user_id = 1;      // 用户ID
+  string friend_id = 2;    // 好友ID
+}
+
+// 获取好友所在分组列表响应
+message GetFriendInGroupsResponse {
+  repeated FriendGroup groups = 1;  // 好友所在的分组列表
 }
 
 // 搜索潜在好友请求

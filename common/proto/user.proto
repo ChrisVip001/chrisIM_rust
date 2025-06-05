@@ -300,6 +300,13 @@ message FriendRelation{
   bool is_starred = 2;           // 是否星标
   bool is_top = 3;               // 是否置顶
   int32 friend_type = 4;         // 好友类型：0-普通好友 1-官方账号 2-系统账号
+  repeated FriendGroupInfo groups = 5; // 好友所在的分组信息
+}
+
+// 好友分组信息
+message FriendGroupInfo {
+  string id = 1;           // 分组ID
+  string group_name = 2;   // 分组名称
 }
 
 message UserWithMatchType {

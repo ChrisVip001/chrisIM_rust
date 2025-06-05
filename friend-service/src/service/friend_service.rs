@@ -1,6 +1,6 @@
 use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
-use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse};
+use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse, GetFriendInGroupsRequest, GetFriendInGroupsResponse};
 use anyhow;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -1070,6 +1070,48 @@ impl FriendService for FriendServiceImpl {
                 } else {
                     Err(Status::internal("从分组中移除好友失败"))
                 }
+            }
+        }
+    }
+
+    // 获取好友所在分组列表
+    async fn get_friend_in_groups(
+        &self,
+        request: Request<GetFriendInGroupsRequest>,
+    ) -> Result<Response<GetFriendInGroupsResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = req.user_id;
+        let friend_id = req.friend_id;
+
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        self.check_user_exists(&friend_id).await?;
+
+        // 检查是否是好友关系
+        match self.repository.check_friend_relation_exists(&user_id, &friend_id).await {
+            Ok(exists) => {
+                if !exists {
+                    return Err(Status::failed_precondition("不是好友关系"));
+                }
+            },
+            Err(e) => {
+                error!("检查好友关系失败: {}", e);
+                return Err(Status::internal("内部服务错误"));
+            }
+        }
+
+        // 获取好友所在的分组列表
+        match self.repository.get_friend_in_groups(&user_id, &friend_id).await {
+            Ok(groups) => {
+                let group_protos = groups.into_iter().map(|g| g.to_proto()).collect();
+                
+                Ok(Response::new(GetFriendInGroupsResponse {
+                    groups: group_protos,
+                }))
+            },
+            Err(e) => {
+                error!("获取好友所在分组列表失败: {}", e);
+                Err(Status::internal("获取好友所在分组列表失败"))
             }
         }
     }
