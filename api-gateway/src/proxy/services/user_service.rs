@@ -483,8 +483,8 @@ impl UserServiceHandler {
 
             // 图片验证码生成
             (&Method::POST, "genCaptchaImage")=> {
-                let width = get_optional_string(&body, "width", Some("width")).unwrap_or("150".to_string());
-                let height = get_optional_string(&body, "height", Some("height")).unwrap_or("50".to_string());
+                let width = get_optional_string(&body, "width", Some("width")).unwrap_or("180".to_string());
+                let height = get_optional_string(&body, "height", Some("height")).unwrap_or("60".to_string());
                 let font_size = get_optional_string(&body, "font_size", Some("font_size")).unwrap_or("30".to_string());
                 let request = proto::user::CaptchaImageRequest {
                     width: width.parse()?,
