@@ -12,7 +12,7 @@ use std::time::{Duration as StdDuration, SystemTime};
 use super::common::{
     success_response, extract_string_param, get_optional_string, 
     get_i64_param, timestamp_to_datetime_string, get_user_id_from_jwt,
-    get_bool_param,
+    get_bool_param,get_option_bool_param,
 };
 use crate::auth::jwt::UserInfo;
 
@@ -478,28 +478,13 @@ impl GroupServiceHandler {
             // 更新成员设置
             (&Method::POST, "updateMemberSettings") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                
-                // 使用Option类型获取参数，如果前端未传递则为None
-                let mute_notifications = body.get("muteNotifications")
-                    .or_else(|| body.get("mute_notifications"))
-                    .and_then(|v| v.as_bool());
-                
+                let mute_notifications = get_option_bool_param(&body, "muteNotifications", Some("mute_notifications"));
+                let is_top = get_option_bool_param(&body, "isTop", Some("is_top"));
+                let recall_notification = get_option_bool_param(&body, "recallNotification", Some("recall_notification"));
+                let show_nickname = get_option_bool_param(&body, "showNickname", Some("show_nickname"));
                 let nickname_in_group = get_optional_string(&body, "nicknameInGroup", Some("nickname_in_group"));
-
                 let remark = get_optional_string(&body, "remark", Some("remark"));
 
-
-                let is_top = body.get("isTop")
-                    .or_else(|| body.get("is_top"))
-                    .and_then(|v| v.as_bool());
-                
-                let recall_notification = body.get("recallNotification")
-                    .or_else(|| body.get("recall_notification"))
-                    .and_then(|v| v.as_bool());
-                
-                let show_nickname = body.get("showNickname")
-                    .or_else(|| body.get("show_nickname"))
-                    .and_then(|v| v.as_bool());
                 
                 // 直接使用可选参数调用客户端方法
                 let response = self.client.update_member_settings(
