@@ -121,28 +121,62 @@ impl GroupServiceHandler {
             // 添加成员
             (&Method::POST, "addMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 
-                let role_value = get_i64_param(&body, "role", 0);
-                let role = match role_value {
-                    0 => proto::group::MemberRole::Member,
-                    1 => proto::group::MemberRole::Admin,
-                    2 => proto::group::MemberRole::Owner,
-                    _ => proto::group::MemberRole::Member,
-                };
+                // 处理成员ID列表
+                let mut members = Vec::new();
+                if let Some(member_ids) = body.get("members").and_then(|v| v.as_array()) {
+                    for member_id in member_ids {
+                        if let Some(member_user_id) = member_id.as_str() {
+                            members.push(member_user_id.to_string());
+                        }
+                    }
+                } else if let Some(user_id) = body.get("userId").and_then(|v| v.as_str()) {
+                    // 兼容单个用户ID的旧接口
+                    members.push(user_id.to_string());
+                }
+                
+                // 确保有成员要添加
+                if members.is_empty() {
+                    return Err(anyhow::anyhow!("没有指定要添加的成员"));
+                }
 
-                let response = self.client.add_member(&group_id, &member_id, &current_user_id, role).await?;
-                let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
+                // 固定使用普通成员角色
+                let role = proto::group::MemberRole::Member;
 
-                Ok(success_response(self.convert_member_to_json(&member), StatusCode::OK))
+                let response = self.client.add_member(&group_id, members, &current_user_id, role).await?;
+                
+                Ok(success_response(
+                    json!({
+                        "success": response.success,
+                        "addedCount": response.added_count
+                    }),
+                    StatusCode::OK
+                ))
             }
 
             // 移除成员
             (&Method::POST, "removeMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                
+                // 处理成员ID列表
+                let mut members = Vec::new();
+                if let Some(member_ids) = body.get("members").and_then(|v| v.as_array()) {
+                    for member_id in member_ids {
+                        if let Some(member_user_id) = member_id.as_str() {
+                            members.push(member_user_id.to_string());
+                        }
+                    }
+                } else if let Some(user_id) = body.get("userId").and_then(|v| v.as_str()) {
+                    // 兼容单个用户ID的旧接口
+                    members.push(user_id.to_string());
+                }
+                
+                // 确保有成员要移除
+                if members.is_empty() {
+                    return Err(anyhow::anyhow!("没有指定要移除的成员"));
+                }
 
-                let response = self.client.remove_member(&group_id, &member_id, &current_user_id).await?;
+                let response = self.client.remove_member(&group_id, members, &current_user_id).await?;
                 
                 Ok(success_response(
                     response.success,

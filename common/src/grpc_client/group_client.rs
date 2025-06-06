@@ -18,6 +18,7 @@ use crate::proto::group::{
     UnmuteResponse, GetMutedMembersRequest, GetMutedMembersResponse,
     GetMemberSettingsRequest, MemberSettingsResponse, UpdateMemberSettingsRequest,
     CreateGroupQrcodeRequest, GroupQrcodeResponse, GetGroupQrcodeRequest,
+    AddMemberResponse,
 };
 
 use crate::service_discovery::LbWithServiceDiscovery;
@@ -99,14 +100,14 @@ impl GroupServiceGrpcClient {
     pub async fn add_member(
         &mut self,
         group_id: &str,
-        user_id: &str,
+        user_ids: Vec<String>,
         added_by_id: &str,
         role: MemberRole,
-    ) -> Result<MemberResponse> {
+    ) -> Result<AddMemberResponse> {
 
         let request = Request::new(AddMemberRequest {
             group_id: group_id.to_string(),
-            user_id: user_id.to_string(),
+            user_ids,
             added_by_id: added_by_id.to_string(),
             role: role as i32,
         });
@@ -119,12 +120,12 @@ impl GroupServiceGrpcClient {
     pub async fn remove_member(
         &mut self,
         group_id: &str,
-        user_id: &str,
+        user_ids: Vec<String>,
         removed_by_id: &str,
     ) -> Result<RemoveMemberResponse> {
         let request = Request::new(RemoveMemberRequest {
             group_id: group_id.to_string(),
-            user_id: user_id.to_string(),
+            user_ids,
             removed_by_id: removed_by_id.to_string(),
         });
 

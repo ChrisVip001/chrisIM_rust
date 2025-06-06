@@ -19,7 +19,7 @@ service GroupService {
   rpc DeleteGroup (DeleteGroupRequest) returns (DeleteGroupResponse);
   
   // 添加群组成员
-  rpc AddMember (AddMemberRequest) returns (MemberResponse);
+  rpc AddMember (AddMemberRequest) returns (AddMemberResponse);
   
   // 移除群组成员
   rpc RemoveMember (RemoveMemberRequest) returns (RemoveMemberResponse);
@@ -104,15 +104,21 @@ message DeleteGroupResponse {
 // 添加成员请求
 message AddMemberRequest {
   string group_id = 1;
-  string user_id = 2;
+  repeated string user_ids = 2;       // 修改为用户ID列表
   string added_by_id = 3;
-  MemberRole role = 4;
+  MemberRole role = 4;                // 默认角色（所有添加的成员都是此角色）
+}
+
+// 添加成员响应
+message AddMemberResponse {
+  bool success = 1;
+  int32 added_count = 2;              // 成功添加的成员数量
 }
 
 // 移除成员请求
 message RemoveMemberRequest {
   string group_id = 1;
-  string user_id = 2;
+  repeated string user_ids = 2;       // 修改为用户ID列表
   string removed_by_id = 3;
 }
 

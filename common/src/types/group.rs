@@ -36,8 +36,8 @@ impl Validator for RemoveMemberRequest {
         if self.group_id.is_empty() {
             return Err(Status::invalid_argument("group_id is empty"));
         }
-        if self.user_id.is_empty() {
-            return Err(Status::invalid_argument("user_id is empty"));
+        if self.user_ids.is_empty() {
+            return Err(Status::invalid_argument("user_ids is empty"));
         }
         if self.removed_by_id.is_empty() {
             return Err(Status::invalid_argument("removed_by_id is empty"));

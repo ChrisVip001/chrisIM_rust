@@ -5,6 +5,7 @@ use crate::repository::group_repository::GroupRepository;
 use crate::repository::group_settings_repository::GroupSettingsRepository;
 use crate::repository::member_repository::MemberRepository;
 use crate::repository::member_settings_repository::MemberSettingsRepository;
+use crate::model::member::Member;
 use common::config::ConfigLoader;
 use common::grpc_client::base::get_rpc_client;
 use common::proto::friend::friend_service_client::FriendServiceClient;
@@ -24,6 +25,7 @@ use common::proto::group::{
     RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse,
     UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest,
     UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest,
+    AddMemberResponse,
 };
 use common::proto::user::user_service_client::UserServiceClient;
 use common::service_discovery::LbWithServiceDiscovery;
@@ -321,11 +323,16 @@ impl GroupService for GroupServiceImpl {
     async fn add_member(
         &self,
         request: Request<AddMemberRequest>,
-    ) -> Result<Response<MemberResponse>, Status> {
+    ) -> Result<Response<AddMemberResponse>, Status> {
         let req = request.into_inner();
         let group_id = req.group_id.clone();
-        let user_id = req.user_id.clone();
+        let user_ids = req.user_ids.clone();
         let added_by_id = req.added_by_id.clone();
+        
+        // 确保至少有一个要添加的成员
+        if user_ids.is_empty() {
+            return Err(Status::invalid_argument("成员列表不能为空"));
+        }
 
         // 检查添加者权限
         match self
@@ -343,68 +350,87 @@ impl GroupService for GroupServiceImpl {
             }
         }
 
-        // 检查用户是否已经是成员
-        match self
-            .member_repository
-            .check_membership(group_id.clone(), user_id.clone())
-            .await
-        {
-            Ok((is_member, _)) => {
-                if is_member {
-                    return Err(Status::already_exists("用户已经是群组成员"));
+        // 过滤掉已经是成员的用户ID
+        let mut valid_user_ids = Vec::new();
+        for user_id in user_ids.clone() {
+            match self
+                .member_repository
+                .check_membership(group_id.clone(), user_id.clone())
+                .await
+            {
+                Ok((is_member, _)) => {
+                    if !is_member {
+                        valid_user_ids.push(user_id);
+                    } else {
+                        info!("用户 {} 已经是群组 {} 的成员，跳过", user_id, group_id);
+                    }
+                }
+                Err(e) => {
+                    error!("检查成员资格失败: {} (user_id={})", e, user_id);
+                    // 跳过错误，继续处理下一个用户
                 }
             }
-            Err(e) => {
-                error!("检查成员资格失败: {}", e);
-                return Err(Status::internal("检查成员资格失败"));
-            }
         }
 
-        // 获取用户信息
-        let user_info = match self.user_service_client.clone().get_user_by_id(
-            Request::new(common::proto::user::GetUserByIdRequest {
-                user_id: user_id.clone(),
-            })
-        ).await {
-            Ok(response) => response.into_inner().user,
-            Err(e) => {
-                error!("获取用户信息失败: {}", e);
-                None
-            }
-        };
+        // 如果没有有效的用户ID，直接返回
+        if valid_user_ids.is_empty() {
+            return Ok(Response::new(AddMemberResponse { 
+                success: true,
+                added_count: 0
+            }));
+        }
 
-        // 添加成员
-        match self
-            .member_repository
-            .add_member(
-                group_id.clone(),
-                user_id.clone(),
-                user_info.as_ref().map(|u| u.username.clone()),
-                user_info.as_ref().and_then(|u| u.nickname.clone()),
-                user_info.as_ref().and_then(|u| u.avatar_url.clone()),
-                req.role(),
-            )
-            .await
-        {
-            Ok(member) => {
-                info!("添加群组成员成功: {:?}", member);
-                
-                // 为新成员创建默认设置
-                self.create_default_member_settings(
-                    &group_id, 
-                    &user_id,
-                    user_info.as_ref()
-                ).await?;
-                
-                Ok(Response::new(MemberResponse {
-                    member: Some(member.to_proto()),
-                }))
-            }
-            Err(e) => {
-                error!("添加群组成员失败: {}", e);
-                Err(Status::internal("添加群组成员失败"))
+        // 批量获取用户信息
+        let users_map = self.fetch_users_info(valid_user_ids.clone()).await?;
+        
+        // 记录成功添加的成员数量
+        let mut added_count = 0;
+        
+        // 逐个添加成员
+        for user_id in valid_user_ids {
+            // 从用户映射中获取用户信息
+            let user_info = users_map.get(&user_id);
+    
+            // 添加成员
+            match self
+                .member_repository
+                .add_member(
+                    group_id.clone(),
+                    user_id.clone(),
+                    user_info.map(|u| u.username.clone()),
+                    user_info.and_then(|u| u.nickname.clone()),
+                    user_info.and_then(|u| u.avatar_url.clone()),
+                    req.role(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    info!("添加群组成员成功: user_id={}", user_id);
+                    
+                    // 为新成员创建默认设置
+                    if let Err(e) = self.create_default_member_settings(
+                        &group_id, 
+                        &user_id,
+                        user_info
+                    ).await {
+                        error!("创建成员默认设置失败: {}", e);
+                    }
+                    
+                    // 增加成功添加计数
+                    added_count += 1;
+                }
+                Err(e) => {
+                    error!("添加群组成员失败: {}", e);
+                    // 继续添加其他成员
+                }
             }
         }
+        
+        // 如果至少有一个成员添加成功，返回成功
+        Ok(Response::new(AddMemberResponse { 
+            success: added_count > 0,
+            added_count
+        }))
     }
 
     // 移除群组成员
@@ -414,35 +440,50 @@ impl GroupService for GroupServiceImpl {
     ) -> Result<Response<RemoveMemberResponse>, Status> {
         let req = request.into_inner();
         let group_id = req.group_id.clone();
-        let user_id = req.user_id.clone();
+        let user_ids = req.user_ids.clone();
         let removed_by_id = req.removed_by_id.clone();
+        
+        // 确保至少有一个要移除的成员
+        if user_ids.is_empty() {
+            return Err(Status::invalid_argument("成员列表不能为空"));
+        }
 
-        match self
-            .member_repository
-            .remove_member(group_id.clone(), user_id.clone(), removed_by_id)
-            .await
-        {
-            Ok(success) => {
-                if success {
-                    info!(
-                        "移除群组成员成功: group_id={}, user_id={}",
-                        group_id, user_id
-                    );
-                    Ok(Response::new(RemoveMemberResponse { success }))
-                } else {
-                    Err(Status::not_found("用户不是群组成员"))
+        // 移除成功的成员数量
+        let mut success_count = 0;
+        
+        // 逐个移除成员
+        for user_id in user_ids {
+            match self
+                .member_repository
+                .remove_member(group_id.clone(), user_id.clone(), removed_by_id.clone())
+                .await
+            {
+                Ok(success) => {
+                    if success {
+                        info!(
+                            "移除群组成员成功: group_id={}, user_id={}",
+                            group_id, user_id
+                        );
+                        success_count += 1;
+                    } else {
+                        info!(
+                            "用户不是群组成员: group_id={}, user_id={}",
+                            group_id, user_id
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("移除群组成员失败: {} (user_id={})", e, user_id);
+                    // 继续处理下一个成员
                 }
             }
-            Err(e) => {
-                error!("移除群组成员失败: {}", e);
-                if e.to_string().contains("没有权限") {
-                    Err(Status::permission_denied(e.to_string()))
-                } else if e.to_string().contains("无法移除") {
-                    Err(Status::permission_denied(e.to_string()))
-                } else {
-                    Err(Status::internal("移除群组成员失败"))
-                }
-            }
+        }
+        
+        // 如果至少有一个成员被成功移除，返回成功
+        if success_count > 0 {
+            Ok(Response::new(RemoveMemberResponse { success: true }))
+        } else {
+            Err(Status::not_found("没有成功移除任何成员"))
         }
     }
 
