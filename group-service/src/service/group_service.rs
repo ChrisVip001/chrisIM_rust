@@ -103,8 +103,12 @@ impl GroupServiceImpl {
         match self.member_settings_repository.update_member_settings(
             group_id.to_string(),
             user_id.to_string(),
-            false, // 默认不静音通知
-            nickname_in_group,
+            Some(false), // 默认不静音通知
+            Some(nickname_in_group),
+            Some(String::new()), // 默认空备注
+            Some(false),         // 默认不置顶
+            Some(false),         // 默认不开启撤回通知
+            Some(true),          // 默认显示群昵称
         ).await {
             Ok(_) => {
                 debug!("已为用户 {} 在群组 {} 创建默认设置", user_id, group_id);
@@ -1074,6 +1078,10 @@ impl GroupService for GroupServiceImpl {
             user_id,
             req.mute_notifications,
             req.nickname_in_group,
+            req.remark,
+            req.is_top,
+            req.recall_notification,
+            req.show_nickname,
         ).await {
             Ok(settings) => {
                 info!("更新成员设置成功: {:?}", settings);

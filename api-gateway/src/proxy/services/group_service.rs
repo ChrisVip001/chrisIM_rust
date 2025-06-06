@@ -444,18 +444,39 @@ impl GroupServiceHandler {
             // 更新成员设置
             (&Method::POST, "updateMemberSettings") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let mute_notifications = get_bool_param(&body, "muteNotifications", Some("mute_notifications"), false);
-                let nickname_in_group = body.get("nicknameInGroup")
-                    .or_else(|| body.get("nickname_in_group"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                
+                // 使用Option类型获取参数，如果前端未传递则为None
+                let mute_notifications = body.get("muteNotifications")
+                    .or_else(|| body.get("mute_notifications"))
+                    .and_then(|v| v.as_bool());
+                
+                let nickname_in_group = get_optional_string(&body, "nicknameInGroup", Some("nickname_in_group"));
 
+                let remark = get_optional_string(&body, "remark", Some("remark"));
+
+
+                let is_top = body.get("isTop")
+                    .or_else(|| body.get("is_top"))
+                    .and_then(|v| v.as_bool());
+                
+                let recall_notification = body.get("recallNotification")
+                    .or_else(|| body.get("recall_notification"))
+                    .and_then(|v| v.as_bool());
+                
+                let show_nickname = body.get("showNickname")
+                    .or_else(|| body.get("show_nickname"))
+                    .and_then(|v| v.as_bool());
+                
+                // 直接使用可选参数调用客户端方法
                 let response = self.client.update_member_settings(
                     &group_id,
                     &current_user_id,
                     mute_notifications,
-                    &nickname_in_group
+                    nickname_in_group,
+                    remark,
+                    is_top,
+                    recall_notification,
+                    show_nickname
                 ).await?;
 
                 let settings = response.settings.ok_or_else(|| anyhow::anyhow!("成员设置数据为空"))?;
@@ -631,6 +652,10 @@ impl GroupServiceHandler {
             "userId": settings.user_id,
             "muteNotifications": settings.mute_notifications,
             "nicknameInGroup": settings.nickname_in_group,
+            "remark": settings.remark,
+            "isTop": settings.is_top,
+            "recallNotification": settings.recall_notification,
+            "showNickname": settings.show_nickname,
             "createdAt": timestamp_to_datetime_string(&settings.created_at),
             "updatedAt": timestamp_to_datetime_string(&settings.updated_at),
         })

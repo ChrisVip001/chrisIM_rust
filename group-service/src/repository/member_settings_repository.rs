@@ -35,7 +35,7 @@ impl MemberSettingsRepository {
             // 获取现有设置
             let row = sqlx::query!(
                 r#"
-                SELECT id, group_id, user_id, mute_notifications, nickname_in_group, updated_at
+                SELECT id, group_id, user_id, mute_notifications, nickname_in_group, updated_at,remark,is_top,recall_notification,show_nickname
                 FROM group_member_settings
                 WHERE group_id = $1 AND user_id = $2
                 "#,
@@ -49,6 +49,10 @@ impl MemberSettingsRepository {
                 id: row.id,
                 group_id: row.group_id,
                 user_id: row.user_id,
+                remark: row.remark.unwrap_or_default(),
+                is_top: row.is_top != 0,
+                recall_notification: row.recall_notification != 0,
+                show_nickname: row.show_nickname != 0,
                 mute_notifications: row.mute_notifications != 0,
                 nickname_in_group: row.nickname_in_group.unwrap_or_default(),
                 created_at: Utc::now(), // 简化处理，使用当前时间
@@ -68,15 +72,19 @@ impl MemberSettingsRepository {
         sqlx::query!(
             r#"
             INSERT INTO group_member_settings 
-            (id, group_id, user_id, mute_notifications, nickname_in_group, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            (id, group_id, user_id, mute_notifications, nickname_in_group, updated_at, remark, is_top, recall_notification, show_nickname)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
             settings.id,
             settings.group_id,
             settings.user_id,
             settings.mute_notifications as i32,
             settings.nickname_in_group,
-            updated_at
+            updated_at,
+            settings.remark,
+            settings.is_top as i32,
+            settings.recall_notification as i32,
+            settings.show_nickname as i32
         )
         .execute(&self.pool)
         .await?;
@@ -89,8 +97,12 @@ impl MemberSettingsRepository {
         &self,
         group_id: String,
         user_id: String,
-        mute_notifications: bool,
-        nickname_in_group: String,
+        mute_notifications: Option<bool>,
+        nickname_in_group: Option<String>,
+        remark: Option<String>,
+        is_top: Option<bool>,
+        recall_notification: Option<bool>,
+        show_nickname: Option<bool>,
     ) -> Result<MemberSettings> {
         let now = Utc::now();
         let now_naive = now.naive_utc();
@@ -107,29 +119,75 @@ impl MemberSettingsRepository {
         .await?;
 
         if exists {
-            // 更新现有设置
-            let result = sqlx::query!(
+            // 获取现有设置
+            let current = sqlx::query!(
                 r#"
-                UPDATE group_member_settings
-                SET mute_notifications = $1, nickname_in_group = $2, updated_at = $3
-                WHERE group_id = $4 AND user_id = $5
-                RETURNING id
+                SELECT id, mute_notifications, nickname_in_group, remark, is_top, recall_notification, show_nickname
+                FROM group_member_settings
+                WHERE group_id = $1 AND user_id = $2
                 "#,
-                mute_notifications as i32,
-                nickname_in_group,
-                now_naive,
                 group_id,
                 user_id
             )
             .fetch_one(&self.pool)
             .await?;
 
+            // 构建更新SQL，只更新有值的字段
+            let mut query_builder = sqlx::QueryBuilder::new(
+                "UPDATE group_member_settings SET updated_at = "
+            );
+            
+            query_builder.push_bind(now_naive);
+            
+            let mut separated = query_builder.separated(", ");
+            
+            if let Some(mute) = mute_notifications {
+                separated.push("mute_notifications = ");
+                separated.push_bind(if mute { 1 } else { 0 });
+            }
+            
+            if let Some(nickname) = &nickname_in_group {
+                separated.push("nickname_in_group = ");
+                separated.push_bind(nickname);
+            }
+            
+            if let Some(rem) = &remark {
+                separated.push("remark = ");
+                separated.push_bind(rem);
+            }
+            
+            if let Some(top) = is_top {
+                separated.push("is_top = ");
+                separated.push_bind(if top { 1 } else { 0 });
+            }
+            
+            if let Some(recall) = recall_notification {
+                separated.push("recall_notification = ");
+                separated.push_bind(if recall { 1 } else { 0 });
+            }
+            
+            if let Some(show) = show_nickname {
+                separated.push("show_nickname = ");
+                separated.push_bind(if show { 1 } else { 0 });
+            }
+            
+            query_builder.push(" WHERE group_id = ");
+            query_builder.push_bind(&group_id);
+            query_builder.push(" AND user_id = ");
+            query_builder.push_bind(&user_id);
+            
+            query_builder.build().execute(&self.pool).await?;
+
             Ok(MemberSettings {
-                id: result.id,
+                id: current.id,
                 group_id,
                 user_id,
-                mute_notifications,
-                nickname_in_group,
+                mute_notifications: mute_notifications.unwrap_or(current.mute_notifications != 0),
+                nickname_in_group: nickname_in_group.unwrap_or(current.nickname_in_group.unwrap_or_default()),
+                remark: remark.unwrap_or(current.remark.unwrap_or_default()),
+                is_top: is_top.unwrap_or(current.is_top != 0),
+                recall_notification: recall_notification.unwrap_or(current.recall_notification != 0),
+                show_nickname: show_nickname.unwrap_or(current.show_nickname != 0),
                 created_at: now, // 简化处理，使用当前时间
                 updated_at: now,
             })
@@ -139,8 +197,12 @@ impl MemberSettingsRepository {
                 id: Uuid::new_v4().to_string(),
                 group_id,
                 user_id,
-                mute_notifications,
-                nickname_in_group,
+                mute_notifications: mute_notifications.unwrap_or(false),
+                nickname_in_group: nickname_in_group.unwrap_or_default(),
+                remark: remark.unwrap_or_default(),
+                is_top: is_top.unwrap_or(false),
+                recall_notification: recall_notification.unwrap_or(false),
+                show_nickname: show_nickname.unwrap_or(true),
                 created_at: now,
                 updated_at: now,
             };

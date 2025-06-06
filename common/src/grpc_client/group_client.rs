@@ -431,17 +431,45 @@ impl GroupServiceGrpcClient {
         &mut self,
         group_id: &str,
         user_id: &str,
-        mute_notifications: bool,
-        nickname_in_group: &str,
+        mute_notifications: Option<bool>,
+        nickname_in_group: Option<String>,
+        remark: Option<String>,
+        is_top: Option<bool>,
+        recall_notification: Option<bool>,
+        show_nickname: Option<bool>,
     ) -> Result<MemberSettingsResponse> {
-        let request = Request::new(UpdateMemberSettingsRequest {
+        let mut request = UpdateMemberSettingsRequest {
             group_id: group_id.to_string(),
             user_id: user_id.to_string(),
-            mute_notifications,
-            nickname_in_group: nickname_in_group.to_string(),
-        });
+            ..Default::default()
+        };
+        
+        // 只设置提供的字段
+        if let Some(val) = mute_notifications {
+            request.mute_notifications = Some(val);
+        }
+        
+        if let Some(val) = nickname_in_group {
+            request.nickname_in_group = Some(val);
+        }
+        
+        if let Some(val) = remark {
+            request.remark = Some(val);
+        }
+        
+        if let Some(val) = is_top {
+            request.is_top = Some(val);
+        }
+        
+        if let Some(val) = recall_notification {
+            request.recall_notification = Some(val);
+        }
+        
+        if let Some(val) = show_nickname {
+            request.show_nickname = Some(val);
+        }
 
-        let response = self.service_client.update_member_settings(request).await?;
+        let response = self.service_client.update_member_settings(Request::new(request)).await?;
         Ok(response.into_inner())
     }
 
