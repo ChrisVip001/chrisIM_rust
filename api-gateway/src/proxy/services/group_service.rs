@@ -121,7 +121,7 @@ impl GroupServiceHandler {
             // 添加成员
             (&Method::POST, "addMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
+                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 
                 let role_value = get_i64_param(&body, "role", 0);
                 let role = match role_value {
@@ -140,7 +140,7 @@ impl GroupServiceHandler {
             // 移除成员
             (&Method::POST, "removeMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
+                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.client.remove_member(&group_id, &member_id, &current_user_id).await?;
                 
@@ -153,7 +153,7 @@ impl GroupServiceHandler {
             // 更新成员角色
             (&Method::POST, "updateMemberRole") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let member_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
+                let member_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 
                 let role_value = get_i64_param(&body, "role", 0);
                 let role = match role_value {
@@ -332,7 +332,7 @@ impl GroupServiceHandler {
             // 添加用户到黑名单
             (&Method::POST, "addToBlacklist") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
                 let response = self.client.add_to_blacklist(
@@ -350,7 +350,7 @@ impl GroupServiceHandler {
             // 从黑名单移除用户
             (&Method::POST, "removeFromBlacklist") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.client.remove_from_blacklist(
                     &group_id,
@@ -367,7 +367,7 @@ impl GroupServiceHandler {
             // 禁言成员
             (&Method::POST, "muteMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let is_permanent = get_bool_param(&body, "isPermanent", Some("is_permanent"), false);
                 
@@ -401,7 +401,7 @@ impl GroupServiceHandler {
             // 解除成员禁言
             (&Method::POST, "unmuteMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let target_user_id = extract_string_param(&body, "userId", Some("current_user_id"))?;
+                let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.client.unmute_member(
                     &group_id,
