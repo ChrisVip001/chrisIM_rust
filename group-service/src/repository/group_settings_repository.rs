@@ -18,7 +18,7 @@ impl GroupSettingsRepository {
         let result = sqlx::query!(
             r#"
             SELECT group_id, allow_member_friendship, join_approval_required, 
-                   only_admin_can_invite, only_admin_can_modify, updated_at
+                   only_admin_can_invite, only_admin_can_modify, updated_at,notify_member_join,all_member_muted
             FROM group_settings
             WHERE group_id = $1
             "#,
@@ -35,6 +35,8 @@ impl GroupSettingsRepository {
                 join_approval_required: row.join_approval_required != 0,
                 only_admin_can_invite: row.only_admin_can_invite != 0,
                 only_admin_can_modify: row.only_admin_can_modify != 0,
+                notify_member_join: row.notify_member_join != 0,  // 默认值
+                all_member_muted: row.all_member_muted != 0,   // 默认值
                 updated_at: Utc.from_utc_datetime(&row.updated_at),
             }),
             None => {
@@ -95,7 +97,7 @@ impl GroupSettingsRepository {
             // 获取现有设置
             let current = sqlx::query!(
                 r#"
-                SELECT allow_member_friendship, join_approval_required, only_admin_can_invite, only_admin_can_modify
+                SELECT allow_member_friendship, join_approval_required, only_admin_can_invite, only_admin_can_modify,notify_member_join,all_member_muted
                 FROM group_settings
                 WHERE group_id = $1
                 "#,
@@ -154,6 +156,8 @@ impl GroupSettingsRepository {
                 join_approval_required: join_approval_required.unwrap_or(current.join_approval_required != 0),
                 only_admin_can_invite: only_admin_can_invite.unwrap_or(current.only_admin_can_invite != 0),
                 only_admin_can_modify: only_admin_can_modify.unwrap_or(current.only_admin_can_modify != 0),
+                notify_member_join: notify_member_join.unwrap_or(current.notify_member_join != 0),
+                all_member_muted: all_member_muted.unwrap_or(current.all_member_muted != 0),
                 updated_at: now,
             })
         } else {
@@ -165,6 +169,8 @@ impl GroupSettingsRepository {
                 join_approval_required: join_approval_required.unwrap_or(default.join_approval_required),
                 only_admin_can_invite: only_admin_can_invite.unwrap_or(default.only_admin_can_invite),
                 only_admin_can_modify: only_admin_can_modify.unwrap_or(default.only_admin_can_modify),
+                notify_member_join: notify_member_join.unwrap_or(default.notify_member_join),
+                all_member_muted: all_member_muted.unwrap_or(default.all_member_muted),
                 updated_at: now,
             };
 

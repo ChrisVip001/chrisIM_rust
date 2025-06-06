@@ -9,6 +9,8 @@ pub struct GroupSettings {
     pub join_approval_required: bool,
     pub only_admin_can_invite: bool,
     pub only_admin_can_modify: bool,
+    pub notify_member_join: bool,
+    pub all_member_muted: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -20,6 +22,8 @@ impl GroupSettings {
             join_approval_required: false,     // 默认不需要审批加入
             only_admin_can_invite: false,      // 默认所有成员都可以邀请
             only_admin_can_modify: false,      // 默认所有成员都可以修改群信息
+            notify_member_join: true,          // 默认开启群成员进群提醒
+            all_member_muted: false,           // 默认关闭全员禁言
             updated_at: Utc::now(),
         }
     }
@@ -32,6 +36,8 @@ impl GroupSettings {
             join_approval_required: self.join_approval_required,
             only_admin_can_invite: self.only_admin_can_invite,
             only_admin_can_modify: self.only_admin_can_modify,
+            notify_member_join: self.notify_member_join,
+            all_member_muted: self.all_member_muted,
         }
     }
 } 

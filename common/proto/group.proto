@@ -271,6 +271,8 @@ message GroupSettings {
   bool join_approval_required = 3;
   bool only_admin_can_invite = 4;
   bool only_admin_can_modify = 5;
+  bool notify_member_join = 6;
+  bool all_member_muted = 7;
 }
 
 message GetGroupSettingsRequest {
@@ -288,8 +290,8 @@ message UpdateGroupSettingsRequest {
   optional bool join_approval_required = 4;
   optional bool only_admin_can_invite = 5;
   optional bool only_admin_can_modify = 6;
-  optional bool only_admin_can_modify = 7;
-  optional bool only_admin_can_modify = 8;
+  optional bool notify_member_join = 7;
+  optional bool all_member_muted = 8;
 }
 
 // 新增消息定义 - 群公告
