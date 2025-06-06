@@ -332,10 +332,12 @@ impl GroupServiceHandler {
             // 更新群组设置
             (&Method::POST, "updateGroupSettings") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
-                let allow_member_friendship = get_bool_param(&body, "allowMemberFriendship", Some("allow_member_friendship"), true);
-                let join_approval_required = get_bool_param(&body, "joinApprovalRequired", Some("join_approval_required"), false);
-                let only_admin_can_invite = get_bool_param(&body, "onlyAdminCanInvite", Some("only_admin_can_invite"), false);
-                let only_admin_can_modify = get_bool_param(&body, "onlyAdminCanModify", Some("only_admin_can_modify"), false);
+                let allow_member_friendship = get_option_bool_param(&body, "allowMemberFriendship", Some("allow_member_friendship"));
+                let join_approval_required = get_option_bool_param(&body, "joinApprovalRequired", Some("join_approval_required"));
+                let only_admin_can_invite = get_option_bool_param(&body, "onlyAdminCanInvite", Some("only_admin_can_invite"));
+                let only_admin_can_modify = get_option_bool_param(&body, "onlyAdminCanModify", Some("only_admin_can_modify"));
+                let notify_member_join = get_option_bool_param(&body, "notifyMemberJoin", Some("notify_member_join"));
+                let all_member_muted = get_option_bool_param(&body, "allMemberMuted", Some("all_member_muted"));
 
                 let response = self.client.update_group_settings(
                     &group_id,
@@ -343,7 +345,9 @@ impl GroupServiceHandler {
                     allow_member_friendship,
                     join_approval_required,
                     only_admin_can_invite,
-                    only_admin_can_modify
+                    only_admin_can_modify,
+                    notify_member_join,
+                    all_member_muted
                 ).await?;
 
                 let settings = response.settings.ok_or_else(|| anyhow::anyhow!("群组设置数据为空"))?;

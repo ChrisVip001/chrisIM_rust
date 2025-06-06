@@ -284,10 +284,12 @@ message GroupSettingsResponse {
 message UpdateGroupSettingsRequest {
   string group_id = 1;
   string updated_by_id = 2;
-  bool allow_member_friendship = 3;
-  bool join_approval_required = 4;
-  bool only_admin_can_invite = 5;
-  bool only_admin_can_modify = 6;
+  optional bool allow_member_friendship = 3;
+  optional bool join_approval_required = 4;
+  optional bool only_admin_can_invite = 5;
+  optional bool only_admin_can_modify = 6;
+  optional bool only_admin_can_modify = 7;
+  optional bool only_admin_can_modify = 8;
 }
 
 // 新增消息定义 - 群公告

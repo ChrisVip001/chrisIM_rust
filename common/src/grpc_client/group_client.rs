@@ -298,10 +298,12 @@ impl GroupServiceGrpcClient {
         &mut self,
         group_id: &str,
         updated_by_id: &str,
-        allow_member_friendship: bool,
-        join_approval_required: bool,
-        only_admin_can_invite: bool,
-        only_admin_can_modify: bool,
+        allow_member_friendship: Option<bool>,
+        join_approval_required: Option<bool>,
+        only_admin_can_invite: Option<bool>,
+        only_admin_can_modify: Option<bool>,
+        notify_member_join: Option<bool>,
+        all_member_muted: Option<bool>,
     ) -> Result<GroupSettingsResponse> {
         let request = Request::new(UpdateGroupSettingsRequest {
             group_id: group_id.to_string(),
@@ -310,6 +312,8 @@ impl GroupServiceGrpcClient {
             join_approval_required,
             only_admin_can_invite,
             only_admin_can_modify,
+            notify_member_join,
+            all_member_muted
         });
 
         let response = self.service_client.update_group_settings(request).await?;

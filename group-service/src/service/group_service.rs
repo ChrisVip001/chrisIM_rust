@@ -831,6 +831,8 @@ impl GroupService for GroupServiceImpl {
             req.join_approval_required,
             req.only_admin_can_invite,
             req.only_admin_can_modify,
+            req.notify_member_join,
+            req.all_member_muted,
         ).await {
             Ok(settings) => {
                 info!("更新群组设置成功: {:?}", settings);

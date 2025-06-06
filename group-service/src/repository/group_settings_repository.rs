@@ -71,73 +71,104 @@ impl GroupSettingsRepository {
     pub async fn update_group_settings(
         &self,
         group_id: String,
-        allow_member_friendship: bool,
-        join_approval_required: bool,
-        only_admin_can_invite: bool,
-        only_admin_can_modify: bool,
+        allow_member_friendship: Option<bool>,
+        join_approval_required: Option<bool>,
+        only_admin_can_invite: Option<bool>,
+        only_admin_can_modify: Option<bool>,
+        notify_member_join: Option<bool>,
+        all_member_muted: Option<bool>,
     ) -> Result<GroupSettings> {
         let now = Utc::now();
         let now_naive = now.naive_utc();
 
         // 先检查是否已存在设置
-        let exists = sqlx::query!(
+        let exists = sqlx::query_scalar!(
             r#"
-            SELECT EXISTS(SELECT 1 FROM group_settings WHERE group_id = $1) AS exists
+            SELECT EXISTS(SELECT 1 FROM group_settings WHERE group_id = $1) as "exists!"
             "#,
             group_id
         )
         .fetch_one(&self.pool)
-        .await?
-        .exists
-        .unwrap_or(false);
+        .await?;
 
         if exists {
-            // 更新现有设置
-            sqlx::query!(
+            // 获取现有设置
+            let current = sqlx::query!(
                 r#"
-                UPDATE group_settings
-                SET allow_member_friendship = $1,
-                    join_approval_required = $2,
-                    only_admin_can_invite = $3,
-                    only_admin_can_modify = $4,
-                    updated_at = $5
-                WHERE group_id = $6
+                SELECT allow_member_friendship, join_approval_required, only_admin_can_invite, only_admin_can_modify
+                FROM group_settings
+                WHERE group_id = $1
                 "#,
-                allow_member_friendship as i32,
-                join_approval_required as i32,
-                only_admin_can_invite as i32,
-                only_admin_can_modify as i32,
-                now_naive,
                 group_id
             )
-            .execute(&self.pool)
+            .fetch_one(&self.pool)
             .await?;
-        } else {
-            // 创建新设置
-            sqlx::query!(
-                r#"
-                INSERT INTO group_settings (group_id, allow_member_friendship, join_approval_required, 
-                                           only_admin_can_invite, only_admin_can_modify, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                "#,
-                group_id,
-                allow_member_friendship as i32,
-                join_approval_required as i32,
-                only_admin_can_invite as i32,
-                only_admin_can_modify as i32,
-                now_naive
-            )
-            .execute(&self.pool)
-            .await?;
-        }
 
-        Ok(GroupSettings {
-            group_id,
-            allow_member_friendship,
-            join_approval_required,
-            only_admin_can_invite,
-            only_admin_can_modify,
-            updated_at: now,
-        })
+            // 构建更新SQL，只更新有值的字段
+            let mut query_builder = sqlx::QueryBuilder::new(
+                "UPDATE group_settings SET updated_at = "
+            );
+            
+            query_builder.push_bind(now_naive);
+            
+            let mut separated = query_builder.separated(", ");
+            
+            if let Some(allow) = allow_member_friendship {
+                separated.push("allow_member_friendship = ");
+                separated.push_bind(if allow { 1 } else { 0 });
+            }
+            
+            if let Some(approval) = join_approval_required {
+                separated.push("join_approval_required = ");
+                separated.push_bind(if approval { 1 } else { 0 });
+            }
+            
+            if let Some(admin_invite) = only_admin_can_invite {
+                separated.push("only_admin_can_invite = ");
+                separated.push_bind(if admin_invite { 1 } else { 0 });
+            }
+            
+            if let Some(admin_modify) = only_admin_can_modify {
+                separated.push("only_admin_can_modify = ");
+                separated.push_bind(if admin_modify { 1 } else { 0 });
+            }
+            
+            if let Some(notify) = notify_member_join {
+                separated.push("notify_member_join = ");
+                separated.push_bind(if notify { 1 } else { 0 });
+            }
+            
+            if let Some(muted) = all_member_muted {
+                separated.push("all_member_muted = ");
+                separated.push_bind(if muted { 1 } else { 0 });
+            }
+            
+            query_builder.push(" WHERE group_id = ");
+            query_builder.push_bind(&group_id);
+            
+            query_builder.build().execute(&self.pool).await?;
+
+            Ok(GroupSettings {
+                group_id,
+                allow_member_friendship: allow_member_friendship.unwrap_or(current.allow_member_friendship != 0),
+                join_approval_required: join_approval_required.unwrap_or(current.join_approval_required != 0),
+                only_admin_can_invite: only_admin_can_invite.unwrap_or(current.only_admin_can_invite != 0),
+                only_admin_can_modify: only_admin_can_modify.unwrap_or(current.only_admin_can_modify != 0),
+                updated_at: now,
+            })
+        } else {
+            // 创建新设置，使用默认值或传入的值
+            let default = GroupSettings::new(group_id.clone());
+            let settings = GroupSettings {
+                group_id,
+                allow_member_friendship: allow_member_friendship.unwrap_or(default.allow_member_friendship),
+                join_approval_required: join_approval_required.unwrap_or(default.join_approval_required),
+                only_admin_can_invite: only_admin_can_invite.unwrap_or(default.only_admin_can_invite),
+                only_admin_can_modify: only_admin_can_modify.unwrap_or(default.only_admin_can_modify),
+                updated_at: now,
+            };
+
+            self.create_group_settings(settings).await
+        }
     }
 } 
