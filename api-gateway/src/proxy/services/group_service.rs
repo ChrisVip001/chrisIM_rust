@@ -407,7 +407,7 @@ impl GroupServiceHandler {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
                 let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
                 let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let is_permanent = get_bool_param(&body, "isPermanent", Some("is_permanent"), false);
+                let is_permanent = get_bool_param(&body, "isPermanent", Some("is_permanent"), true);
                 
                 // 处理禁言截止时间
                 let mute_until = if is_permanent {
