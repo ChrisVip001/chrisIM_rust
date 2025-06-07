@@ -18,6 +18,7 @@ use common::service_discovery::LbWithServiceDiscovery;
 use crate::proxy::extract_request_body;
 use crate::proxy::services::{ChatServiceHandler, CommonServiceHandler, FriendServiceHandler, GroupServiceHandler, UserServiceHandler};
 use tokio::sync::{OnceCell, RwLock};
+use common::proto::message::chat_service_client::ChatServiceClient;
 
 /// 服务客户端连接池
 struct ServiceClients {
@@ -99,8 +100,14 @@ impl ServiceProxy {
                 .await
                 .map(|client| GroupServiceGrpcClient::new(client))
         };
+        
+        let chat_task = async {
+            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&self.config, "chat".to_string())
+                .await
+                .map(|client| ChatServiceGrpcClient::new(client))
+        };
 
-        let (user_result, friend_result, group_result) = tokio::join!(user_task, friend_task, group_task);
+        let (user_result, friend_result, group_result,  chat_result) = tokio::join!(user_task, friend_task, group_task, chat_task);
 
         // 更新客户端连接池
         let mut clients = self.clients.write().await;
@@ -127,6 +134,14 @@ impl ServiceProxy {
                 info!("群组服务客户端初始化成功");
             }
             Err(e) => warn!("群组服务客户端初始化失败: {}", e),
+        }
+        
+        match chat_result {
+            Ok(client) => {
+                clients.chat_client = Some(client);
+                info!("聊天服务客户端初始化成功");
+            }
+            Err(e) => warn!("聊天服务客户端初始化失败: {}", e),
         }
 
         info!("服务客户端连接池初始化完成");
