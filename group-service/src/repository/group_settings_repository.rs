@@ -53,15 +53,17 @@ impl GroupSettingsRepository {
         sqlx::query!(
             r#"
             INSERT INTO group_settings (group_id, allow_member_friendship, join_approval_required, 
-                                       only_admin_can_invite, only_admin_can_modify, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                                       only_admin_can_invite, only_admin_can_modify, updated_at, all_member_muted,  notify_member_join)
+            VALUES ($1, $2, $3, $4, $5, $6,  $7, $8)
             "#,
             settings.group_id,
             settings.allow_member_friendship as i32,
             settings.join_approval_required as i32,
             settings.only_admin_can_invite as i32,
             settings.only_admin_can_modify as i32,
-            updated_at_naive
+            updated_at_naive,
+            settings.all_member_muted as i32,
+            settings.notify_member_join as i32
         )
         .execute(&self.pool)
         .await?;
@@ -108,7 +110,7 @@ impl GroupSettingsRepository {
 
             // 构建更新SQL，只更新有值的字段
             let mut query_builder = sqlx::QueryBuilder::new(
-                "UPDATE group_settings SET updated_at = "
+                "UPDATE group_settings SET updated_at = $1"
             );
             
             query_builder.push_bind(now_naive);
