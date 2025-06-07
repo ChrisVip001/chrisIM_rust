@@ -50,6 +50,8 @@ impl Member {
             avatar_url: self.avatar_url.clone(),
             role: self.role,
             joined_at: Some(prost_types::Timestamp::from(joined_system_time)),
+            is_muted: false,
+            mute_info: None,
         }
     }
 }

@@ -92,6 +92,8 @@ impl FromRow<'_, PgRow> for Member {
                 seconds: dt.timestamp(),
                 nanos: dt.timestamp_subsec_nanos() as i32,
             }),
+            is_muted: false,
+            mute_info: None,
         })
     }
 }
