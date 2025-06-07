@@ -67,6 +67,12 @@ enum MsgType {
   MsgTypeFriendshipReceived = 27;  // 好友关系确认
   /// 单聊消息
   MsgTypeSingleMsg = 28;
+  /// 撤回消息
+  MsgTypeRevoke = 29;         // 撤回消息
+  /// 转发消息
+  MsgTypeForward = 30;        // 转发消息
+  /// 回复消息
+  MsgTypeReply = 31;          // 回复消息
 }
 
 /// 消息结构体
@@ -102,11 +108,21 @@ message Msg {
   string avatar = 17;      // 发送者头像URL
   string nickname = 18;    // 发送者昵称
 
-  // 关联消息ID（用于回复、引用等功能）
+  // 关联消息ID（用于回复、引用、转发等功能）
   optional string related_msg_id = 19;
 
   /// 发送序列号，用于发送者的消息排序
   int64 send_seq = 20;
+  
+  /// 撤回相关字段
+  bool is_revoked = 21;        // 是否已撤回
+  int64 revoke_time = 22;      // 撤回时间戳
+  string revoked_by = 23;      // 撤回者ID（通常是发送者，群聊中可能是管理员）
+  
+  /// 转发相关字段
+  optional string forward_comment = 25;      // 转发时的附加评论
+  bool is_forwarded = 26;                    // 是否为转发消息
+  bool is_reply = 27;                        // 是否为回复消息
 }
 
 /// 消息已读信息
@@ -242,6 +258,27 @@ service MsgService {
 service ChatService { 
   /// 发送消息到Kafka队列
   rpc SendMsg(SendMsgRequest) returns (MsgResponse); 
+  
+  /// 标记消息已读
+  rpc MarkMessagesAsRead(MarkMessagesAsReadRequest) returns (MarkMessagesAsReadResponse);
+  
+  /// 获取消息历史
+  rpc GetMessageHistory(GetMessageHistoryRequest) returns (GetMessageHistoryResponse);
+  
+  /// 获取会话列表
+  rpc GetConversations(GetConversationsRequest) returns (GetConversationsResponse);
+  
+  /// 撤回消息
+  rpc RevokeMessage(RevokeMessageRequest) returns (RevokeMessageResponse);
+  
+  /// 删除消息
+  rpc DeleteMessages(DeleteMessagesRequest) returns (DeleteMessagesResponse);
+  
+  /// 转发消息
+  rpc ForwardMessage(ForwardMessageRequest) returns (ForwardMessageResponse);
+  
+  /// 回复消息
+  rpc ReplyMessage(ReplyMessageRequest) returns (ReplyMessageResponse);
 }
 
 /// 消息内容（包含@提及功能）
@@ -296,4 +333,119 @@ message DelMsgRequest {
 /// 保存最大序列号请求
 message SaveMaxSeqRequest { 
   string user_id = 1;  // 用户ID
+}
+
+/// 标记消息已读请求
+message MarkMessagesAsReadRequest {
+  string user_id = 1;           // 用户ID
+  repeated int64 msg_seqs = 2;  // 要标记已读的消息序列号列表
+}
+
+/// 标记消息已读响应
+message MarkMessagesAsReadResponse {
+  bool success = 1;       // 是否成功
+  int32 read_count = 2;   // 标记已读的消息数量
+  string error = 3;       // 错误信息（如果有）
+}
+
+/// 获取消息历史请求
+message GetMessageHistoryRequest {
+  string user_id = 1;         // 用户ID
+  string conversation_id = 2; // 会话ID（单聊时是对方用户ID，群聊时是群组ID）
+  int32 page = 3;            // 页码（从1开始）
+  int32 page_size = 4;       // 每页数量
+  int64 before_seq = 5;      // 在此序列号之前的消息（用于分页）
+}
+
+/// 获取消息历史响应
+message GetMessageHistoryResponse {
+  repeated Msg messages = 1;    // 消息列表
+  bool has_more = 2;           // 是否还有更多消息
+  int64 next_seq = 3;          // 下一页的起始序列号
+  string conversation_id = 4;   // 会话ID
+  int32 current_page = 5;      // 当前页码
+  int32 page_size = 6;         // 每页数量
+  string error = 7;            // 错误信息（如果有）
+}
+
+/// 获取会话列表请求
+message GetConversationsRequest {
+  string user_id = 1;  // 用户ID
+}
+
+/// 会话信息
+message Conversation {
+  string conversation_id = 1;    // 会话ID
+  string conversation_type = 2;  // 会话类型（single/group）
+  Msg last_message = 3;         // 最后一条消息
+  int32 unread_count = 4;       // 未读消息数量
+  int64 last_active_time = 5;   // 最后活跃时间
+}
+
+/// 获取会话列表响应
+message GetConversationsResponse {
+  repeated Conversation conversations = 1;  // 会话列表
+  int32 total = 2;                         // 总会话数
+  string error = 3;                        // 错误信息（如果有）
+}
+
+/// 撤回消息请求
+message RevokeMessageRequest {
+  string user_id = 1;      // 用户ID
+  string message_id = 2;   // 要撤回的消息ID
+}
+
+/// 撤回消息响应
+message RevokeMessageResponse {
+  bool success = 1;        // 是否成功
+  string error = 2;        // 错误信息（如果有）
+  int64 revoke_time = 3;   // 撤回时间戳
+}
+
+/// 删除消息请求
+message DeleteMessagesRequest {
+  string user_id = 1;              // 用户ID
+  repeated string message_ids = 2; // 要删除的消息ID列表
+  repeated int64 message_seqs = 3; // 要删除的消息序列号列表（可选，用于批量删除）
+}
+
+/// 删除消息响应
+message DeleteMessagesResponse {
+  bool success = 1;           // 是否成功
+  int32 deleted_count = 2;    // 删除的消息数量
+  string error = 3;           // 错误信息（如果有）
+}
+
+/// 转发消息请求
+message ForwardMessageRequest {
+  string user_id = 1;                    // 转发者用户ID
+  string original_message_id = 2;        // 要转发的原始消息ID
+  repeated string target_user_ids = 3;   // 转发给的用户ID列表（单聊）
+  repeated string target_group_ids = 4;  // 转发给的群组ID列表（群聊）
+  optional string forward_comment = 5;   // 转发时的附加评论
+}
+
+/// 转发消息响应
+message ForwardMessageResponse {
+  bool success = 1;                      // 是否成功
+  repeated string forwarded_message_ids = 2; // 转发后生成的新消息ID列表
+  int32 forward_count = 3;               // 成功转发的数量
+  string error = 4;                      // 错误信息（如果有）
+}
+
+/// 回复消息请求
+message ReplyMessageRequest {
+  string user_id = 1;              // 回复者用户ID
+  string original_message_id = 2;  // 要回复的原始消息ID
+  string reply_content = 3;        // 回复内容
+  ContentType content_type = 4;    // 回复内容类型
+  optional string conversation_id = 5; // 会话ID（单聊时是对方用户ID，群聊时是群组ID）
+}
+
+/// 回复消息响应
+message ReplyMessageResponse {
+  bool success = 1;           // 是否成功
+  string reply_message_id = 2; // 回复消息的ID
+  int64 send_time = 3;        // 发送时间
+  string error = 4;           // 错误信息（如果有）
 }

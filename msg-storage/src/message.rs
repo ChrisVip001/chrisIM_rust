@@ -12,6 +12,18 @@ use common::proto::message::{GroupMemSeq, Msg};
 pub trait MsgStoreRepo: Sync + Send + Debug {
     /// 保存消息到数据库
     async fn save_message(&self, message: Msg) -> Result<(), Error>;
+
+    /// 撤回消息
+    /// 将指定消息标记为已撤回状态，并设置撤回时间和撤回者
+    async fn revoke_message(&self, message_id: &str, user_id: &str) -> Result<(), Error>;
+
+    /// 删除消息
+    /// 从数据库中物理删除指定消息
+    async fn delete_message(&self, message_id: &str) -> Result<(), Error>;
+
+    /// 获取消息
+    /// 根据消息ID获取单条消息
+    async fn get_message(&self, message_id: &str) -> Result<Option<Msg>, Error>;
 }
 
 /// 消息接收箱仓库trait
@@ -31,6 +43,10 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
 
     /// 根据用户ID和消息序列号批量删除消息
     async fn delete_messages(&self, user_id: &str, msg_seq: Vec<i64>) -> Result<(), Error>;
+
+    /// 撤回消息
+    /// 将指定消息标记为已撤回状态，并设置撤回时间和撤回者
+    async fn revoke_message(&self, message_id: &str, user_id: &str) -> Result<(), Error>;
 
     #[allow(dead_code)]
     /// 根据消息ID获取单条消息
@@ -62,6 +78,21 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
 
     /// 根据用户ID和消息序列号更新消息已读状态
     async fn msg_read(&self, user_id: &str, msg_seq: &[i64]) -> Result<(), Error>;
+
+    /// 根据消息ID删除消息（支持批量）
+    async fn delete_messages_by_ids(&self, user_id: &str, message_ids: &[String]) -> Result<i32, Error>;
+
+    /// 拉取离线消息
+    /// 获取用户从上次登录到现在的所有未读消息
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `last_login_time` - 上次登录时间戳（毫秒）
+    /// 
+    /// # 返回值
+    /// * `Ok(Vec<Msg>)` - 离线消息列表
+    /// * `Err(Error)` - 获取失败的错误信息
+    async fn pull_offline_messages(&self, user_id: &str, last_login_time: i64) -> Result<Vec<Msg>, Error>;
 }
 
 /// 消息接收箱清理器trait

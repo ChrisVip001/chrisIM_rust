@@ -47,6 +47,8 @@ pub enum ServiceType {
     Static,
     /// 通用服务
     Common,
+    /// 文件服务
+    File,
 }
 
 /// 路径重写规则

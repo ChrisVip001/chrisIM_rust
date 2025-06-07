@@ -12,7 +12,7 @@ use tracing::log::{debug, warn};
 
 use common::config::AppConfig;
 use common::error::Error;
-use common::proto::message::{GroupMemSeq, Msg};
+use common::proto::message::{GroupMemSeq, Msg, MsgType, PlatformType};
 
 use crate::message::{MsgRecBoxCleaner, MsgRecBoxRepo};
 use crate::mongodb::utils::to_doc;
@@ -274,6 +274,93 @@ impl MsgRecBoxRepo for MsgBox {
         self.mb.update_many(query, update, None).await?;
         Ok(())
     }
+    
+    /// 撤回消息
+    /// 将指定消息标记为已撤回状态，并设置撤回时间和撤回者
+    async fn revoke_message(&self, message_id: &str, user_id: &str) -> Result<(), Error> {
+        let now = chrono::Utc::now().timestamp_millis();
+        
+        // 查询条件：消息ID匹配且发送者是当前用户
+        let query = doc! {
+            "server_id": message_id,
+            "send_id": user_id
+        };
+        
+        // 更新字段：标记为已撤回，设置撤回时间和撤回者
+        let update = doc! {
+            "$set": {
+                "is_revoked": true,
+                "revoke_time": now,
+                "revoked_by": user_id
+            }
+        };
+        
+        let result = self.mb.update_many(query, update, None).await?;
+        
+        // 检查是否有消息被更新
+        if result.modified_count == 0 {
+            return Err(Error::NotFound("消息不存在或无权撤回".to_string()));
+        }
+        
+        Ok(())
+    }
+    
+    /// 根据消息ID删除消息（支持批量）
+    async fn delete_messages_by_ids(&self, user_id: &str, message_ids: &[String]) -> Result<i32, Error> {
+        if message_ids.is_empty() {
+            return Ok(0);
+        }
+        
+        // 查询条件：消息ID在列表中且接收者是当前用户
+        let query = doc! {
+            "server_id": {"$in": message_ids},
+            "receiver_id": user_id
+        };
+        
+        let result = self.mb.delete_many(query, None).await?;
+        Ok(result.deleted_count as i32)
+    }
+
+    /// 拉取离线消息
+    /// 获取用户从上次登录到现在的所有未读消息
+    async fn pull_offline_messages(&self, user_id: &str, last_login_time: i64) -> Result<Vec<Msg>, Error> {
+        // 构建查询条件：
+        // 1. 接收者是当前用户
+        // 2. 消息发送时间大于上次登录时间
+        // 3. 消息未读
+        // 4. 消息未被撤回
+        let filter = doc! {
+            "receiver_id": user_id,
+            "send_time": { "$gt": last_login_time },
+            "is_read": false,
+            "is_revoked": false,
+            // 排除一些不需要的消息类型
+            "msg_type": { 
+                "$nin": [
+                    MsgType::Read as i32,
+                    MsgType::MsgRecResp as i32,
+                    MsgType::Notification as i32,
+                    MsgType::Service as i32,
+                ]
+            }
+        };
+
+        // 按发送时间升序排序
+        let options = FindOptions::builder()
+            .sort(doc! { "send_time": 1 })
+            .build();
+
+        // 执行查询
+        let mut cursor = self.mb.find(filter, options).await?;
+        
+        // 收集结果
+        let mut messages = Vec::new();
+        while let Some(doc) = cursor.try_next().await? {
+            messages.push(Msg::try_from(doc)?);
+        }
+
+        Ok(messages)
+    }
 }
 
 impl MsgRecBoxCleaner for MsgBox {
@@ -395,13 +482,16 @@ mod tests {
             msg_type: MsgType::SingleMsg as i32,
             is_read: false,
             platform: PlatformType::Mobile as i32,
-            // sdp: None,
-            // sdp_mid: None,
-            // sdp_m_index: None,
             group_id: "".to_string(),
             avatar: "".to_string(),
             nickname: "".to_string(),
             related_msg_id: None,
+            is_revoked: false,
+            revoke_time: 0,
+            revoked_by: String::new(),
+            forward_comment: None,
+            is_forwarded: false,
+            is_reply: false,
         }
     }
     #[tokio::test]

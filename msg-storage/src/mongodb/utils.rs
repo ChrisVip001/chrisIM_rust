@@ -19,6 +19,16 @@ pub(crate) fn to_doc(msg: &Msg) -> Result<Document, Error> {
         "msg_type": msg.msg_type,
         "is_read": msg.is_read,
         "group_id": &msg.group_id,
+        "platform": msg.platform,
+        "avatar": &msg.avatar,
+        "nickname": &msg.nickname,
+        "related_msg_id": msg.related_msg_id.as_deref().unwrap_or(""),
+        "is_revoked": msg.is_revoked,
+        "revoke_time": msg.revoke_time,
+        "revoked_by": &msg.revoked_by,
+        "forward_comment": msg.forward_comment.as_deref().unwrap_or(""),
+        "is_forwarded": msg.is_forwarded,
+        "is_reply": msg.is_reply,
     };
 
     Ok(document)

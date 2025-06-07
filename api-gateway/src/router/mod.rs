@@ -4,7 +4,7 @@ use crate::proxy::ServiceProxy;
 use axum::{
     body::Body,
     extract::{Json, Extension},
-    http::{Request, StatusCode},
+    http::{Request, Response, StatusCode},
     middleware,
     response::IntoResponse,
     routing::{any, get, post},
@@ -141,7 +141,11 @@ fn add_service_route(
         move |req: Request<Body>| {
             let service_proxy = service_proxy.clone();
             let service_type = service_type.clone();
-            async move { service_proxy.forward_request(req, &service_type).await }
+            async move { service_proxy.forward_request(req, &service_type).await.unwrap_or_else(
+                |err| {
+                    error_response(&format!("转发请求到后端服务失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
+                },
+            ) }
         }
     };
 

@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use nanoid::nanoid;
@@ -8,14 +9,26 @@ use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
 use tonic::transport::Server;
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 // 添加gRPC健康检查相关导入
 use tonic_health::server::HealthReporter;
 
 use common::config::{AppConfig, Component};
 use common::grpc::LoggingInterceptor;
 use common::proto::message::chat_service_server::{ChatService, ChatServiceServer};
-use common::proto::message::{MsgResponse, MsgType, SendMsgRequest};
+use common::proto::message::{
+    MsgResponse, MsgType, SendMsgRequest, Msg,
+    MarkMessagesAsReadRequest, MarkMessagesAsReadResponse,
+    GetMessageHistoryRequest, GetMessageHistoryResponse,
+    GetConversationsRequest, GetConversationsResponse,
+    RevokeMessageRequest, RevokeMessageResponse,
+    DeleteMessagesRequest, DeleteMessagesResponse,
+    ForwardMessageRequest, ForwardMessageResponse,
+    ReplyMessageRequest, ReplyMessageResponse,
+    Conversation
+};
+use msg_storage::{msg_rec_box_repo, message::MsgRecBoxRepo};
+use cache::Cache;
 
 /// 聊天消息RPC服务实现
 /// 
@@ -24,6 +37,7 @@ use common::proto::message::{MsgResponse, MsgType, SendMsgRequest};
 /// 2. 为消息生成唯一的服务器ID和时间戳
 /// 3. 将消息序列化后发送到Kafka消息队列
 /// 4. 向客户端返回发送结果
+/// 5. 处理消息查询和已读状态更新
 /// 
 /// 工作流程：
 /// 客户端 -> gRPC请求 -> ChatRpcService -> Kafka队列 -> ConsumerService
@@ -35,6 +49,12 @@ pub struct ChatRpcService {
     /// Kafka主题名称，所有消息都将发送到这个主题
     /// 消费者服务会从同一个主题消费消息进行后续处理
     topic: String,
+    
+    /// 消息存储仓库，用于访问MongoDB中的消息数据
+    msg_storage: Arc<dyn MsgRecBoxRepo>,
+    
+    /// 缓存接口，用于获取用户序列号等信息
+    cache: Arc<dyn Cache>,
 }
 
 impl ChatRpcService {
@@ -43,11 +63,23 @@ impl ChatRpcService {
     /// # 参数
     /// * `kafka` - 已配置的Kafka生产者实例
     /// * `topic` - 消息要发送到的Kafka主题名称
+    /// * `msg_storage` - 消息存储仓库
+    /// * `cache` - 缓存接口
     /// 
     /// # 返回值
     /// 返回ChatRpcService实例
-    pub fn new(kafka: FutureProducer, topic: String) -> Self {
-        Self { kafka, topic }
+    pub fn new(
+        kafka: FutureProducer, 
+        topic: String,
+        msg_storage: Arc<dyn MsgRecBoxRepo>,
+        cache: Arc<dyn Cache>,
+    ) -> Self {
+        Self { 
+            kafka, 
+            topic,
+            msg_storage,
+            cache,
+        }
     }
     
     /// 启动聊天消息服务
@@ -60,46 +92,45 @@ impl ChatRpcService {
     /// 
     /// # 参数
     /// * `config` - 应用程序配置，包含Kafka、gRPC等所有配置信息
-    pub async fn start(config: &AppConfig) {
-        // 构建Kafka代理服务器地址列表
-        // 支持多个Kafka节点，用逗号分隔
-        let broker = config.kafka.hosts.join(",");
-        
-        // 配置并创建Kafka生产者
-        // 这些配置确保消息的可靠性和性能
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", &broker)                    // Kafka集群地址
-            .set(
-                "message.timeout.ms",
-                config.kafka.producer.timeout.to_string(),        // 消息发送超时时间
-            )
-            .set(
-                "socket.timeout.ms",
-                config.kafka.connect_timeout.to_string(),         // 连接超时时间
-            )
-            .set("acks", config.kafka.producer.acks.clone())      // 确认模式(all表示所有副本确认)
-            .set("enable.idempotence", "true")                    // 启用幂等性，防止重复消息
-            .set("retries", config.kafka.producer.max_retry.to_string())  // 最大重试次数
-            .set(
-                "retry.backoff.ms",
-                config.kafka.producer.retry_interval.to_string(), // 重试间隔时间
-            )
-            .create()
-            .expect("Kafka生产者创建失败");
+    pub async fn start(config: &AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 配置Kafka生产者
+        let mut kafka_config = ClientConfig::new();
+        kafka_config
+            .set("bootstrap.servers", &config.kafka.hosts.join(","))
+            .set("message.timeout.ms", "30000")
+            .set("queue.buffering.max.messages", "100000")
+            .set("queue.buffering.max.kbytes", "1048576")
+            .set("batch.num.messages", "1000")
+            .set("enable.idempotence", "true")
+            .set("retries", "2147483647")
+            .set("max.in.flight.requests.per.connection", "5")
+            .set("acks", "all")
+            .set("compression.type", "snappy");
 
-        // 确保Kafka主题存在，如果不存在则自动创建
-        // 这样避免了消息发送到不存在的主题而失败
-        if let Err(e) = Self::ensure_topic_exists(&config.kafka.topic, &broker, config.kafka.connect_timeout as u16).await {
-            error!("Kafka主题创建失败: {}，但服务将继续运行", e);
-            warn!("Kafka服务可能未启动，请检查Kafka服务状态");
-        }
+        // 创建Kafka生产者
+        let producer: FutureProducer = kafka_config.create().unwrap();
 
-        // 向服务注册中心（Consul）注册当前服务
-        // 这样其他服务就可以通过服务发现找到这个消息服务
+        // 确保Kafka主题存在
+        Self::ensure_topic_exists(
+            &config.kafka.topic,
+            &config.kafka.hosts.join(","),
+            config.kafka.connect_timeout as u16,
+        )
+        .await?;
+
+        info!("Kafka主题 '{}' 已确保存在", config.kafka.topic);
+
+        // 向服务注册中心注册当前服务
         common::grpc_client::base::register_service(config, Component::MessageServer)
             .await
-            .expect("服务注册到Consul失败");
+            .unwrap();
+
         info!("聊天RPC服务已注册到服务注册中心");
+
+        // 初始化消息存储和缓存
+        let msg_storage = msg_rec_box_repo(config).await
+            .map_err(|e| format!("初始化消息存储失败: {}", e))?;
+        let cache = cache::cache(config).await;
 
         // 创建gRPC健康检查服务
         // 用于监控服务健康状态，支持Kubernetes等容器编排工具的健康检查
@@ -116,7 +147,7 @@ impl ChatRpcService {
         let logging_interceptor = LoggingInterceptor::new();
 
         // 创建聊天RPC服务实例并包装为gRPC服务
-        let chat_rpc = Self::new(producer, config.kafka.topic.clone());
+        let chat_rpc = Self::new(producer, config.kafka.topic.clone(), msg_storage, cache);
         let service = ChatServiceServer::with_interceptor(chat_rpc, logging_interceptor);
         
         info!(
@@ -132,6 +163,8 @@ impl ChatRpcService {
             .serve(config.rpc.chat.rpc_server_url().parse().unwrap())
             .await
             .unwrap();
+        
+        Ok(())
     }
 
     /// 确保Kafka主题存在
@@ -237,30 +270,754 @@ impl ChatService for ChatRpcService {
         let payload = serde_json::to_string(&msg).unwrap();
         
         // 创建Kafka消息记录
-        // 不指定分区键，让Kafka自动选择分区
-        let record: FutureRecord<String, String> = FutureRecord::to(&self.topic).payload(&payload);
+        let record: FutureRecord<'_, (), String> = FutureRecord::to(&self.topic).payload(&payload);
 
-        info!("正在将消息发送到Kafka主题 '{}': 消息ID={}", self.topic, msg.server_id);
-        
-        // 异步发送消息到Kafka并处理结果
-        let err = match self.kafka.send(record, Duration::from_secs(0)).await {
-            Ok((partition, offset)) => {
-                info!("消息发送成功: 分区={}, 偏移量={}", partition, offset);
-                String::new()  // 无错误
+        // 发送消息到Kafka
+        match self.kafka.send(record, Duration::from_secs(10)).await {
+            Ok(_) => {
+                debug!("消息已成功发送到Kafka: {}", msg.server_id);
+                
+                // 返回成功响应
+                let response = MsgResponse {
+                    local_id: msg.local_id,
+                    server_id: msg.server_id,
+                    send_time: msg.send_time,
+                    err: String::new(),
+                };
+                
+                Ok(tonic::Response::new(response))
             }
-            Err((err, _original_msg)) => {
-                error!("消息发送到Kafka失败: {:?}", err);
-                err.to_string()
+            Err((kafka_error, _)) => {
+                error!("发送消息到Kafka失败: {}", kafka_error);
+                
+                // 返回错误响应
+                let response = MsgResponse {
+                    local_id: msg.local_id,
+                    server_id: msg.server_id,
+                    send_time: msg.send_time,
+                    err: format!("发送失败: {}", kafka_error),
+                };
+                
+                Ok(tonic::Response::new(response))
+            }
+        }
+    }
+
+    /// 标记消息已读
+    async fn mark_messages_as_read(
+        &self,
+        request: tonic::Request<MarkMessagesAsReadRequest>,
+    ) -> Result<tonic::Response<MarkMessagesAsReadResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("标记消息已读请求: user_id={}, msg_seqs={:?}", req.user_id, req.msg_seqs);
+
+        if req.msg_seqs.is_empty() {
+            return Ok(tonic::Response::new(MarkMessagesAsReadResponse {
+                success: false,
+                read_count: 0,
+                error: "消息序列号列表不能为空".to_string(),
+            }));
+        }
+
+        // 调用消息存储服务标记消息已读
+        match self.msg_storage.msg_read(&req.user_id, &req.msg_seqs).await {
+            Ok(()) => {
+                debug!("成功标记 {} 条消息为已读", req.msg_seqs.len());
+                Ok(tonic::Response::new(MarkMessagesAsReadResponse {
+                    success: true,
+                    read_count: req.msg_seqs.len() as i32,
+                    error: String::new(),
+                }))
+            }
+            Err(e) => {
+                error!("标记消息已读失败: {}", e);
+                Ok(tonic::Response::new(MarkMessagesAsReadResponse {
+                    success: false,
+                    read_count: 0,
+                    error: format!("标记消息已读失败: {}", e),
+                }))
+            }
+        }
+    }
+
+    /// 获取消息历史
+    async fn get_message_history(
+        &self,
+        request: tonic::Request<GetMessageHistoryRequest>,
+    ) -> Result<tonic::Response<GetMessageHistoryResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("获取消息历史请求: user_id={}, conversation_id={}, page={}, page_size={}", 
+               req.user_id, req.conversation_id, req.page, req.page_size);
+
+        // 验证参数
+        if req.page < 1 {
+            return Ok(tonic::Response::new(GetMessageHistoryResponse {
+                messages: vec![],
+                has_more: false,
+                next_seq: 0,
+                conversation_id: req.conversation_id,
+                current_page: req.page,
+                page_size: req.page_size,
+                error: "页码必须大于0".to_string(),
+            }));
+        }
+
+        if req.page_size < 1 || req.page_size > 100 {
+            return Ok(tonic::Response::new(GetMessageHistoryResponse {
+                messages: vec![],
+                has_more: false,
+                next_seq: 0,
+                conversation_id: req.conversation_id,
+                current_page: req.page,
+                page_size: req.page_size,
+                error: "每页数量必须在1-100之间".to_string(),
+            }));
+        }
+
+        // 获取用户当前序列号
+        let (rec_seq, send_seq) = match self.cache.get_cur_seq(&req.user_id).await {
+            Ok(seqs) => seqs,
+            Err(e) => {
+                error!("获取用户序列号失败: {}", e);
+                return Ok(tonic::Response::new(GetMessageHistoryResponse {
+                    messages: vec![],
+                    has_more: false,
+                    next_seq: 0,
+                    conversation_id: req.conversation_id,
+                    current_page: req.page,
+                    page_size: req.page_size,
+                    error: "获取用户序列号失败".to_string(),
+                }));
             }
         };
 
-        // 构造并返回消息响应
-        // 包含本地ID（客户端生成）、服务器ID、发送时间和错误信息
-        Ok(tonic::Response::new(MsgResponse {
-            local_id: msg.local_id,    // 客户端生成的本地消息ID
-            server_id: msg.server_id,  // 服务器生成的全局唯一ID
-            send_time: msg.send_time,  // 服务器处理时间戳
-            err,                       // 错误信息（空字符串表示成功）
+        // 计算查询范围
+        let end_seq = if req.before_seq > 0 { req.before_seq } else { rec_seq };
+        let start_seq = std::cmp::max(0, end_seq - req.page_size as i64);
+        
+        // 对于发送序列号，也使用相同的逻辑
+        let send_end_seq = if req.before_seq > 0 { req.before_seq } else { send_seq };
+        let send_start_seq = std::cmp::max(0, send_end_seq - req.page_size as i64);
+
+        // 从MongoDB获取消息历史
+        match self.msg_storage.get_msgs(&req.user_id, send_start_seq, send_end_seq, start_seq, end_seq).await {
+            Ok(messages) => {
+                let has_more = messages.len() as i32 == req.page_size;
+                let next_seq = if has_more && !messages.is_empty() {
+                    // 获取最后一条消息的序列号作为下次查询的起点
+                    messages.last().map(|msg| msg.seq).unwrap_or(0)
+                } else {
+                    0
+                };
+
+                Ok(tonic::Response::new(GetMessageHistoryResponse {
+                    messages,
+                    has_more,
+                    next_seq,
+                    conversation_id: req.conversation_id,
+                    current_page: req.page,
+                    page_size: req.page_size,
+                    error: String::new(),
+                }))
+            }
+            Err(e) => {
+                error!("获取消息历史失败: {}", e);
+                Ok(tonic::Response::new(GetMessageHistoryResponse {
+                    messages: vec![],
+                    has_more: false,
+                    next_seq: 0,
+                    conversation_id: req.conversation_id,
+                    current_page: req.page,
+                    page_size: req.page_size,
+                    error: format!("获取消息历史失败: {}", e),
+                }))
+            }
+        }
+    }
+
+    /// 获取会话列表
+    async fn get_conversations(
+        &self,
+        request: tonic::Request<GetConversationsRequest>,
+    ) -> Result<tonic::Response<GetConversationsResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("获取会话列表请求，用户ID: {}", req.user_id);
+
+        // 获取用户当前序列号
+        let (rec_seq, send_seq) = match self.cache.get_cur_seq(&req.user_id).await {
+            Ok(seqs) => seqs,
+            Err(e) => {
+                error!("获取用户序列号失败: {}", e);
+                return Ok(tonic::Response::new(GetConversationsResponse {
+                    conversations: vec![],
+                    total: 0,
+                    error: "获取用户序列号失败".to_string(),
+                }));
+            }
+        };
+
+        // 获取最近的消息来构建会话列表
+        // 这里我们获取最近100条消息，然后按会话分组
+        let recent_count = 100i64;
+        let rec_start = std::cmp::max(0, rec_seq - recent_count);
+        let send_start = std::cmp::max(0, send_seq - recent_count);
+
+        match self.msg_storage.get_msgs(&req.user_id, send_start, send_seq, rec_start, rec_seq).await {
+            Ok(messages) => {
+                // 按会话ID分组消息，构建会话列表
+                let mut conversations = std::collections::HashMap::new();
+                
+                for msg in messages {
+                    // 确定会话ID：对于单聊，会话ID是对方的用户ID；对于群聊，会话ID是群组ID
+                    let conversation_id = if msg.msg_type == MsgType::GroupMsg as i32 {
+                        msg.group_id.clone()
+                    } else {
+                        // 单聊消息：如果是发送的消息，会话ID是接收者ID；如果是接收的消息，会话ID是发送者ID
+                        if msg.send_id == req.user_id {
+                            msg.receiver_id.clone()
+                        } else {
+                            msg.send_id.clone()
+                        }
+                    };
+
+                    if conversation_id.is_empty() {
+                        continue;
+                    }
+
+                    // 更新会话信息（保留最新的消息）
+                    let conversation_entry = conversations.entry(conversation_id.clone()).or_insert_with(|| {
+                        Conversation {
+                            conversation_id: conversation_id.clone(),
+                            conversation_type: if msg.msg_type == MsgType::GroupMsg as i32 { "group".to_string() } else { "single".to_string() },
+                            last_message: Some(msg.clone()),
+                            unread_count: 0,
+                            last_active_time: msg.send_time,
+                        }
+                    });
+
+                    // 更新为最新消息（基于发送时间）
+                    if msg.send_time > conversation_entry.last_active_time {
+                        conversation_entry.last_message = Some(msg.clone());
+                        conversation_entry.last_active_time = msg.send_time;
+                    }
+
+                    // 计算未读消息数（只计算接收到的未读消息）
+                    if msg.receiver_id == req.user_id && !msg.is_read {
+                        conversation_entry.unread_count += 1;
+                    }
+                }
+
+                // 转换为数组并按最后活跃时间排序
+                let mut conversation_list: Vec<Conversation> = conversations.into_values().collect();
+                conversation_list.sort_by(|a, b| b.last_active_time.cmp(&a.last_active_time)); // 降序排列，最新的在前面
+
+                Ok(tonic::Response::new(GetConversationsResponse {
+                    conversations: conversation_list.clone(),
+                    total: conversation_list.len() as i32,
+                    error: String::new(),
+                }))
+            }
+            Err(e) => {
+                error!("获取会话列表失败: {}", e);
+                Ok(tonic::Response::new(GetConversationsResponse {
+                    conversations: vec![],
+                    total: 0,
+                    error: format!("获取会话列表失败: {}", e),
+                }))
+            }
+        }
+    }
+
+    /// 撤回消息
+    async fn revoke_message(
+        &self,
+        request: tonic::Request<RevokeMessageRequest>,
+    ) -> Result<tonic::Response<RevokeMessageResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("撤回消息请求: user_id={}, message_id={}", req.user_id, req.message_id);
+
+        // 验证参数
+        if req.user_id.is_empty() || req.message_id.is_empty() {
+            return Ok(tonic::Response::new(RevokeMessageResponse {
+                success: false,
+                error: "用户ID和消息ID不能为空".to_string(),
+                revoke_time: 0,
+            }));
+        }
+
+        // 首先检查消息是否存在以及撤回时间限制
+        match self.msg_storage.get_message(&req.message_id).await {
+            Ok(Some(msg)) => {
+                // 验证消息是否属于当前用户
+                if msg.send_id != req.user_id {
+                    return Ok(tonic::Response::new(RevokeMessageResponse {
+                        success: false,
+                        error: "只能撤回自己发送的消息".to_string(),
+                        revoke_time: 0,
+                    }));
+                }
+
+                // 验证消息是否已经被撤回
+                if msg.is_revoked {
+                    return Ok(tonic::Response::new(RevokeMessageResponse {
+                        success: false,
+                        error: "消息已经被撤回".to_string(),
+                        revoke_time: msg.revoke_time,
+                    }));
+                }
+
+                // 验证撤回时间限制（2分钟内）
+                let now = chrono::Utc::now().timestamp_millis();
+                let time_limit = 2 * 60 * 1000; // 2分钟
+                if now - msg.send_time > time_limit {
+                    return Ok(tonic::Response::new(RevokeMessageResponse {
+                        success: false,
+                        error: "消息发送超过2分钟，无法撤回".to_string(),
+                        revoke_time: 0,
+                    }));
+                }
+
+                // 执行撤回操作
+                match self.msg_storage.revoke_message(&req.user_id, &req.message_id).await {
+                    Ok(()) => {
+                        debug!("消息撤回成功: {}", req.message_id);
+                        
+                        // TODO: 发送撤回通知给相关用户
+                        // 这里可以发送一条撤回通知消息到Kafka，让其他用户知道消息被撤回了
+                        
+                        Ok(tonic::Response::new(RevokeMessageResponse {
+                            success: true,
+                            error: String::new(),
+                            revoke_time: now,
+                        }))
+                    }
+                    Err(e) => {
+                        error!("撤回消息失败: {}", e);
+                        Ok(tonic::Response::new(RevokeMessageResponse {
+                            success: false,
+                            error: format!("撤回消息失败: {}", e),
+                            revoke_time: 0,
+                        }))
+                    }
+                }
+            }
+            Ok(None) => {
+                Ok(tonic::Response::new(RevokeMessageResponse {
+                    success: false,
+                    error: "消息不存在".to_string(),
+                    revoke_time: 0,
+                }))
+            }
+            Err(e) => {
+                error!("查询消息失败: {}", e);
+                Ok(tonic::Response::new(RevokeMessageResponse {
+                    success: false,
+                    error: "查询消息失败".to_string(),
+                    revoke_time: 0,
+                }))
+            }
+        }
+    }
+
+    /// 删除消息
+    async fn delete_messages(
+        &self,
+        request: tonic::Request<DeleteMessagesRequest>,
+    ) -> Result<tonic::Response<DeleteMessagesResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("删除消息请求: user_id={}, message_ids={:?}, message_seqs={:?}", 
+               req.user_id, req.message_ids, req.message_seqs);
+
+        // 验证参数
+        if req.user_id.is_empty() {
+            return Ok(tonic::Response::new(DeleteMessagesResponse {
+                success: false,
+                deleted_count: 0,
+                error: "用户ID不能为空".to_string(),
+            }));
+        }
+
+        if req.message_ids.is_empty() && req.message_seqs.is_empty() {
+            return Ok(tonic::Response::new(DeleteMessagesResponse {
+                success: false,
+                deleted_count: 0,
+                error: "必须提供消息ID或消息序列号".to_string(),
+            }));
+        }
+
+        let mut total_deleted = 0i32;
+
+        // 按消息ID删除
+        if !req.message_ids.is_empty() {
+            match self.msg_storage.delete_messages_by_ids(&req.user_id, &req.message_ids).await {
+                Ok(count) => {
+                    total_deleted += count;
+                    debug!("按消息ID删除了 {} 条消息", count);
+                }
+                Err(e) => {
+                    error!("按消息ID删除消息失败: {}", e);
+                    return Ok(tonic::Response::new(DeleteMessagesResponse {
+                        success: false,
+                        deleted_count: 0,
+                        error: format!("删除消息失败: {}", e),
+                    }));
+                }
+            }
+        }
+
+        // 按消息序列号删除
+        if !req.message_seqs.is_empty() {
+            let seqs_len = req.message_seqs.len();
+            match self.msg_storage.delete_messages(&req.user_id, req.message_seqs).await {
+                Ok(()) => {
+                    // delete_messages方法不返回删除数量，我们假设全部删除成功
+                    total_deleted += seqs_len as i32;
+                    debug!("按序列号删除了 {} 条消息", seqs_len);
+                }
+                Err(e) => {
+                    error!("按序列号删除消息失败: {}", e);
+                    return Ok(tonic::Response::new(DeleteMessagesResponse {
+                        success: false,
+                        deleted_count: total_deleted,
+                        error: format!("删除消息失败: {}", e),
+                    }));
+                }
+            }
+        }
+
+        Ok(tonic::Response::new(DeleteMessagesResponse {
+            success: true,
+            deleted_count: total_deleted,
+            error: String::new(),
         }))
+    }
+
+    /// 转发消息
+    async fn forward_message(
+        &self,
+        request: tonic::Request<ForwardMessageRequest>,
+    ) -> Result<tonic::Response<ForwardMessageResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("转发消息请求: user_id={}, original_message_id={}, targets={:?}/{:?}", 
+               req.user_id, req.original_message_id, req.target_user_ids, req.target_group_ids);
+
+        // 验证参数
+        if req.user_id.is_empty() || req.original_message_id.is_empty() {
+            return Ok(tonic::Response::new(ForwardMessageResponse {
+                success: false,
+                forwarded_message_ids: vec![],
+                forward_count: 0,
+                error: "用户ID和原始消息ID不能为空".to_string(),
+            }));
+        }
+
+        if req.target_user_ids.is_empty() && req.target_group_ids.is_empty() {
+            return Ok(tonic::Response::new(ForwardMessageResponse {
+                success: false,
+                forwarded_message_ids: vec![],
+                forward_count: 0,
+                error: "必须指定转发目标".to_string(),
+            }));
+        }
+
+        // 获取原始消息
+        let original_msg = match self.msg_storage.get_message(&req.original_message_id).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
+                return Ok(tonic::Response::new(ForwardMessageResponse {
+                    success: false,
+                    forwarded_message_ids: vec![],
+                    forward_count: 0,
+                    error: "原始消息不存在".to_string(),
+                }));
+            }
+            Err(e) => {
+                error!("获取原始消息失败: {}", e);
+                return Ok(tonic::Response::new(ForwardMessageResponse {
+                    success: false,
+                    forwarded_message_ids: vec![],
+                    forward_count: 0,
+                    error: "获取原始消息失败".to_string(),
+                }));
+            }
+        };
+
+        let mut forwarded_message_ids = Vec::new();
+        let mut success_count = 0;
+
+        // 转发给单聊用户
+        for target_user_id in &req.target_user_ids {
+            let mut forward_msg = Msg {
+                send_id: req.user_id.clone(),
+                receiver_id: target_user_id.clone(),
+                local_id: format!("forward_{}", nanoid::nanoid!()),
+                server_id: nanoid::nanoid!(),
+                create_time: chrono::Utc::now().timestamp_millis(),
+                send_time: chrono::Utc::now().timestamp_millis(),
+                seq: 0,
+                send_seq: 0,
+                msg_type: MsgType::SingleMsg as i32,
+                content_type: original_msg.content_type,
+                content: original_msg.content.clone(),
+                is_read: false,
+                group_id: String::new(),
+                platform: original_msg.platform,
+                avatar: String::new(),
+                nickname: String::new(),
+                related_msg_id: None,
+                is_revoked: false,
+                revoke_time: 0,
+                revoked_by: String::new(),
+                forward_comment: req.forward_comment.clone(),
+                is_forwarded: true,
+                is_reply: false,
+            };
+
+            // 发送转发消息到Kafka
+            let payload = serde_json::to_string(&forward_msg).unwrap();
+            let record: rdkafka::producer::FutureRecord<'_, (), String> = rdkafka::producer::FutureRecord::to(&self.topic).payload(&payload);
+
+            match self.kafka.send(record, std::time::Duration::from_secs(10)).await {
+                Ok(_) => {
+                    forwarded_message_ids.push(forward_msg.server_id.clone());
+                    success_count += 1;
+                    debug!("转发消息成功: {} -> {}", req.original_message_id, forward_msg.server_id);
+                }
+                Err((kafka_error, _)) => {
+                    error!("转发消息到Kafka失败: {}", kafka_error);
+                }
+            }
+        }
+
+        // 转发给群组
+        for target_group_id in &req.target_group_ids {
+            let mut forward_msg = Msg {
+                send_id: req.user_id.clone(),
+                receiver_id: target_group_id.clone(),
+                local_id: format!("forward_{}", nanoid::nanoid!()),
+                server_id: nanoid::nanoid!(),
+                create_time: chrono::Utc::now().timestamp_millis(),
+                send_time: chrono::Utc::now().timestamp_millis(),
+                seq: 0,
+                send_seq: 0,
+                msg_type: MsgType::GroupMsg as i32,
+                content_type: original_msg.content_type,
+                content: original_msg.content.clone(),
+                is_read: false,
+                group_id: target_group_id.clone(),
+                platform: original_msg.platform,
+                avatar: String::new(),
+                nickname: String::new(),
+                related_msg_id: None,
+                is_revoked: false,
+                revoke_time: 0,
+                revoked_by: String::new(),
+                forward_comment: req.forward_comment.clone(),
+                is_forwarded: true,
+                is_reply: false,
+            };
+
+            // 发送转发消息到Kafka
+            let payload = serde_json::to_string(&forward_msg).unwrap();
+            let record: rdkafka::producer::FutureRecord<'_, (), String> = rdkafka::producer::FutureRecord::to(&self.topic).payload(&payload);
+
+            match self.kafka.send(record, std::time::Duration::from_secs(10)).await {
+                Ok(_) => {
+                    forwarded_message_ids.push(forward_msg.server_id.clone());
+                    success_count += 1;
+                    debug!("转发群组消息成功: {} -> {}", req.original_message_id, forward_msg.server_id);
+                }
+                Err((kafka_error, _)) => {
+                    error!("转发群组消息到Kafka失败: {}", kafka_error);
+                }
+            }
+        }
+
+        Ok(tonic::Response::new(ForwardMessageResponse {
+            success: success_count > 0,
+            forwarded_message_ids,
+            forward_count: success_count,
+            error: if success_count == 0 { "所有转发都失败了".to_string() } else { String::new() },
+        }))
+    }
+
+    /// 回复消息
+    async fn reply_message(
+        &self,
+        request: tonic::Request<ReplyMessageRequest>,
+    ) -> Result<tonic::Response<ReplyMessageResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("回复消息请求: user_id={}, original_message_id={}, reply_content={}", 
+               req.user_id, req.original_message_id, req.reply_content);
+
+        // 验证参数
+        if req.user_id.is_empty() || req.original_message_id.is_empty() {
+            return Ok(tonic::Response::new(ReplyMessageResponse {
+                success: false,
+                reply_message_id: String::new(),
+                send_time: 0,
+                error: "用户ID和原始消息ID不能为空".to_string(),
+            }));
+        }
+
+        if req.reply_content.trim().is_empty() {
+            return Ok(tonic::Response::new(ReplyMessageResponse {
+                success: false,
+                reply_message_id: String::new(),
+                send_time: 0,
+                error: "回复内容不能为空".to_string(),
+            }));
+        }
+
+        if req.reply_content.len() > 2048 {
+            return Ok(tonic::Response::new(ReplyMessageResponse {
+                success: false,
+                reply_message_id: String::new(),
+                send_time: 0,
+                error: "回复内容不能超过2048字符".to_string(),
+            }));
+        }
+
+        // 获取原始消息以确定回复目标
+        let original_msg = match self.msg_storage.get_message(&req.original_message_id).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
+                return Ok(tonic::Response::new(ReplyMessageResponse {
+                    success: false,
+                    reply_message_id: String::new(),
+                    send_time: 0,
+                    error: "原始消息不存在".to_string(),
+                }));
+            }
+            Err(e) => {
+                error!("获取原始消息失败: {}", e);
+                return Ok(tonic::Response::new(ReplyMessageResponse {
+                    success: false,
+                    reply_message_id: String::new(),
+                    send_time: 0,
+                    error: "获取原始消息失败".to_string(),
+                }));
+            }
+        };
+
+        // 确定回复目标和消息类型
+        let (receiver_id, msg_type, group_id) = if !original_msg.group_id.is_empty() {
+            // 群聊回复
+            (original_msg.group_id.clone(), MsgType::GroupMsg as i32, original_msg.group_id.clone())
+        } else {
+            // 单聊回复：如果原消息是别人发给我的，回复给发送者；如果是我发给别人的，回复给接收者
+            let target_id = if original_msg.send_id == req.user_id {
+                original_msg.receiver_id.clone()
+            } else {
+                original_msg.send_id.clone()
+            };
+            (target_id, MsgType::SingleMsg as i32, String::new())
+        };
+
+        // 如果提供了conversation_id，使用它来覆盖自动推断的接收者
+        let final_receiver_id = req.conversation_id.unwrap_or(receiver_id);
+
+        // 构建回复消息
+        let reply_msg = Msg {
+            send_id: req.user_id.clone(),
+            receiver_id: final_receiver_id,
+            local_id: format!("reply_{}", nanoid::nanoid!()),
+            server_id: nanoid::nanoid!(),
+            create_time: chrono::Utc::now().timestamp_millis(),
+            send_time: chrono::Utc::now().timestamp_millis(),
+            seq: 0,
+            send_seq: 0,
+            msg_type,
+            content_type: req.content_type,
+            content: req.reply_content.into_bytes(),
+            is_read: false,
+            group_id,
+            platform: 0, // 默认平台
+            avatar: String::new(),
+            nickname: String::new(),
+            related_msg_id: Some(req.original_message_id.clone()),
+            is_revoked: false,
+            revoke_time: 0,
+            revoked_by: String::new(),
+            forward_comment: None,
+            is_forwarded: false,
+            is_reply: true,
+        };
+
+        // 发送回复消息到Kafka
+        let payload = serde_json::to_string(&reply_msg).unwrap();
+        let record: rdkafka::producer::FutureRecord<'_, (), String> = rdkafka::producer::FutureRecord::to(&self.topic).payload(&payload);
+
+        match self.kafka.send(record, std::time::Duration::from_secs(10)).await {
+            Ok(_) => {
+                debug!("回复消息成功: {} -> {}", req.original_message_id, reply_msg.server_id);
+                Ok(tonic::Response::new(ReplyMessageResponse {
+                    success: true,
+                    reply_message_id: reply_msg.server_id,
+                    send_time: reply_msg.send_time,
+                    error: String::new(),
+                }))
+            }
+            Err((kafka_error, _)) => {
+                error!("回复消息到Kafka失败: {}", kafka_error);
+                Ok(tonic::Response::new(ReplyMessageResponse {
+                    success: false,
+                    reply_message_id: String::new(),
+                    send_time: 0,
+                    error: format!("发送回复消息失败: {}", kafka_error),
+                }))
+            }
+        }
+    }
+}
+
+impl ChatRpcService {
+    /// 拉取离线消息
+    /// 
+    /// 获取用户从上次登录到现在的所有未读消息。
+    /// 这个接口在用户登录时调用，用于同步离线期间的消息。
+    /// 
+    /// # 参数
+    /// * `request` - 包含用户ID和上次登录时间的请求
+    /// 
+    /// # 返回值
+    /// * `Ok(Response<GetMessageHistoryResponse>)` - 离线消息列表
+    /// * `Err(Status)` - 获取失败的错误状态
+    pub async fn pull_offline_messages(
+        &self,
+        request: tonic::Request<GetMessageHistoryRequest>,
+    ) -> Result<tonic::Response<GetMessageHistoryResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("拉取离线消息请求: user_id={}, last_login_time={}", 
+               req.user_id, req.before_seq);
+
+        // 从MongoDB获取离线消息
+        match self.msg_storage.pull_offline_messages(&req.user_id, req.before_seq).await {
+            Ok(messages) => {
+                debug!("成功获取 {} 条离线消息", messages.len());
+                let message_count = messages.len();
+                Ok(tonic::Response::new(GetMessageHistoryResponse {
+                    messages,
+                    has_more: false,  // 离线消息一次性全部返回
+                    next_seq: 0,      // 不需要分页
+                    conversation_id: req.conversation_id,
+                    current_page: 1,
+                    page_size: message_count as i32,
+                    error: String::new(),
+                }))
+            }
+            Err(e) => {
+                error!("获取离线消息失败: {}", e);
+                Ok(tonic::Response::new(GetMessageHistoryResponse {
+                    messages: vec![],
+                    has_more: false,
+                    next_seq: 0,
+                    conversation_id: req.conversation_id,
+                    current_page: 1,
+                    page_size: 0,
+                    error: format!("获取离线消息失败: {}", e),
+                }))
+            }
+        }
     }
 }

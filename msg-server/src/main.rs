@@ -65,7 +65,9 @@ async fn main() -> anyhow::Result<()> {
     // 启动生产者服务（ChatRpcService）
     // 该服务通过gRPC对外提供消息发送接口
     let producer_task = tokio::spawn(async move {
-        ChatRpcService::start(&config_clone).await;
+        if let Err(e) = ChatRpcService::start(&config_clone).await {
+            tracing::error!("生产者服务启动失败: {:?}", e);
+        }
     });
     
     // 启动消费者服务

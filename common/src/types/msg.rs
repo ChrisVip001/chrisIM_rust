@@ -38,9 +38,19 @@ impl TryFrom<Document> for Msg {
             platform: value.get_i32("platform").unwrap_or_default(),
             avatar: value.get_str("avatar").unwrap_or_default().to_string(),
             nickname: value.get_str("nickname").unwrap_or_default().to_string(),
-            related_msg_id: value
-                .get_str("related_msg_id")
-                .map_or(None, |v| Some(v.to_string())),
+            related_msg_id: {
+                let related = value.get_str("related_msg_id").unwrap_or_default();
+                if related.is_empty() { None } else { Some(related.to_string()) }
+            },
+            is_revoked: value.get_bool("is_revoked").unwrap_or_default(),
+            revoke_time: value.get_i64("revoke_time").unwrap_or_default(),
+            revoked_by: value.get_str("revoked_by").unwrap_or_default().to_string(),
+            forward_comment: {
+                let comment = value.get_str("forward_comment").unwrap_or_default();
+                if comment.is_empty() { None } else { Some(comment.to_string()) }
+            },
+            is_forwarded: value.get_bool("is_forwarded").unwrap_or_default(),
+            is_reply: value.get_bool("is_reply").unwrap_or_default(),
         })
     }
 }
