@@ -134,7 +134,7 @@ impl MemberSettingsRepository {
 
             // 构建更新SQL，只更新有值的字段
             let mut query_builder = sqlx::QueryBuilder::new(
-                "UPDATE group_member_settings SET updated_at = "
+                "UPDATE group_member_settings SET updated_at = $1"
             );
             
             query_builder.push_bind(now_naive);
