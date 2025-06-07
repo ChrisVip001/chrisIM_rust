@@ -586,7 +586,7 @@ impl GroupServiceHandler {
             "nickname": member.nickname,
             "avatarUrl": member.avatar_url,
             "role": member.role,
-            "is_muted":member.is_muted,
+            "isMuted":member.is_muted,
             "roleText": role_text,
             "joinedAt": timestamp_to_datetime_string(&member.joined_at),
         })
