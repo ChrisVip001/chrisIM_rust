@@ -159,12 +159,31 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
         img.put_pixel(x, y, color);
     }
 
-    // 加载多种字体文件
+    // 加载字体文件
     let font_data = include_bytes!("../assets/Roboto-Regular.ttf");
     let font = Font::try_from_bytes(font_data).expect("加载字体失败");
 
+    // 动态计算字体大小
+    let max_font_size = (height as f32) * 0.6; // 最大字体高度为图片高度的 60%
+    let char_count = text_code.chars().count(); // 验证码字符数
+    let available_width_per_char = (width as f32) / (char_count as f32); // 每个字符可用的宽度
+    let approx_font_size = available_width_per_char.min(max_font_size); // 字体大小取最小值
+    let final_font_size = approx_font_size.clamp(10.0, max_font_size); // 最终字体大小
+
+    // 使用动态计算的字体大小
+    let scale = Scale::uniform(final_font_size);
+
+    // 计算字符间距和起始位置
+    let total_text_width = char_count as f32 * final_font_size; // 总文本宽度（估算）
+    let remaining_space = width as f32 - total_text_width; // 剩余空间
+    let spacing = if char_count > 1 {
+        remaining_space / (char_count - 1) as f32 // 平均分配剩余空间作为间距
+    } else {
+        0.0
+    };
+
     // 在图片上绘制文本
-    let mut x_offset = rng.gen_range(10..=20); // 初始X轴偏移
+    let mut x_offset = (remaining_space / 2.0).max(0.0); // 起始偏移量（居中对齐）
     for c in text_code.chars() {
         // 随机字体颜色
         let color = Rgba([
@@ -174,23 +193,19 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
             255,                         // 完全不透明
         ]);
 
-        // 随机字体大小和旋转角度
-        let scale = Scale::uniform(rng.gen_range(*font_size - 5.0..=*font_size + 5.0));
-        let angle = rng.gen_range(-20..=20) as f32;
-
         // 绘制单个字符
         draw_text_mut(
             &mut img,
             color,
-            x_offset,
+            x_offset as u32,
             rng.gen_range(10..=30), // 随机Y轴偏移
             scale,
             &font,
             &c.to_string(),
         );
 
-        // 更新X轴偏移
-        x_offset += rng.gen_range(20..=35); // 随机字符间距
+        // 更新X轴偏移，确保字符不会超出边界
+        x_offset += final_font_size + spacing;
     }
 
     // 添加简单装饰线条
