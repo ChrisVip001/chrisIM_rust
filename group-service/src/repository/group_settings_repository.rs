@@ -108,15 +108,12 @@ impl GroupSettingsRepository {
             .fetch_one(&self.pool)
             .await?;
 
-            // 构建更新SQL，只更新有值的字段
-            let mut query_builder = sqlx::QueryBuilder::new(
-                "UPDATE group_settings SET updated_at = $1"
-            );
-            
-            query_builder.push_bind(now_naive);
-            
+            let mut query_builder = sqlx::QueryBuilder::new("UPDATE group_member_settings SET ");
             let mut separated = query_builder.separated(", ");
-            
+
+            separated.push("updated_at = ");
+            separated.push_bind(now_naive);
+
             if let Some(allow) = allow_member_friendship {
                 separated.push("allow_member_friendship = ");
                 separated.push_bind(if allow { 1 } else { 0 });
