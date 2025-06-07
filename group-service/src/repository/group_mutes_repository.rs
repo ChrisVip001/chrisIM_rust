@@ -211,4 +211,40 @@ impl GroupMutesRepository {
 
         Ok(result.rows_affected())
     }
+
+    // 获取群组中所有被禁言的成员的状态（仅返回当前有效的禁言）
+    pub async fn get_active_mutes_by_group_id(&self, group_id: String) -> Result<std::collections::HashMap<String, GroupMuteEntry>> {
+        let now = Utc::now().naive_utc();
+        
+        let results = sqlx::query!(
+            r#"
+            SELECT id, group_id, user_id, creator_id, reason, mute_until, is_permanent, created_at, updated_at
+            FROM group_mutes
+            WHERE group_id = $1 AND (is_permanent = 1 OR (mute_until IS NOT NULL AND mute_until > $2))
+            "#,
+            group_id,
+            now
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut mute_map = std::collections::HashMap::new();
+        for row in results {
+            let entry = GroupMuteEntry {
+                id: row.id,
+                group_id: row.group_id,
+                user_id: row.user_id.clone(),
+                creator_id: row.creator_id,
+                reason: row.reason,
+                mute_until: row.mute_until.map(|dt| Utc.from_utc_datetime(&dt)),
+                is_permanent: row.is_permanent != 0,
+                created_at: Utc.from_utc_datetime(&row.created_at),
+                updated_at: Utc.from_utc_datetime(&row.updated_at),
+            };
+            
+            mute_map.insert(row.user_id, entry);
+        }
+
+        Ok(mute_map)
+    }
 } 

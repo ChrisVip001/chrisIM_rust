@@ -11,8 +11,8 @@ use common::grpc_client::base::get_rpc_client;
 use common::proto::friend::friend_service_client::FriendServiceClient;
 use common::proto::group::group_service_server::GroupService;
 use common::proto::group::{
-    AddMemberRequest, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse,
-    CheckMembershipRequest, CheckMembershipResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest,
+    AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse,
+    CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest,
     CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse,
     GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest,
     GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest,
@@ -25,7 +25,6 @@ use common::proto::group::{
     RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse,
     UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest,
     UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest,
-    AddMemberResponse,
 };
 use common::proto::user::user_service_client::UserServiceClient;
 use common::service_discovery::LbWithServiceDiscovery;
@@ -120,6 +119,30 @@ impl GroupServiceImpl {
                 error!("创建成员默认设置失败: {}", e);
                 // 返回成功而不是错误，避免因设置失败而中断主流程
                 Ok(())
+            }
+        }
+    }
+    
+    // 检查用户禁言状态
+    async fn check_user_mute_status(&self, group_id: &str, user_id: &str) -> Result<Option<common::proto::group::MuteEntry>, Status> {
+        match self.mutes_repository.get_mute_status(group_id.to_string(), user_id.to_string()).await {
+            Ok(mute_entry) => {
+                if let Some(entry) = mute_entry {
+                    // 检查禁言是否有效
+                    if entry.is_active() {
+                        Ok(Some(entry.to_proto()))
+                    } else {
+                        // 如果禁言已过期，返回None
+                        Ok(None)
+                    }
+                } else {
+                    // 用户未被禁言
+                    Ok(None)
+                }
+            }
+            Err(e) => {
+                error!("检查用户禁言状态失败: {}", e);
+                Err(Status::internal("检查用户禁言状态失败"))
             }
         }
     }
@@ -528,15 +551,36 @@ impl GroupService for GroupServiceImpl {
         request: Request<GetMembersRequest>,
     ) -> Result<Response<GetMembersResponse>, Status> {
         let req = request.into_inner();
-        let group_id = req.group_id;
+        let group_id = req.group_id.clone();
         
         // 解析可选参数
         let page = if req.page > 0 { Some(req.page) } else { None };
         let page_size = if req.page_size > 0 { Some(req.page_size) } else { None };
 
-        match self.member_repository.get_members(group_id, page, page_size).await {
+        match self.member_repository.get_members(group_id.clone(), page, page_size).await {
             Ok((members, total)) => {
-                let proto_members = members.into_iter().map(|m| m.to_proto()).collect();
+                // 转换成员列表为 proto 对象
+                let mut proto_members = Vec::with_capacity(members.len());
+                
+                // 批量获取群组中所有被禁言的成员状态
+                let mute_map = self.mutes_repository.get_active_mutes_by_group_id(group_id.clone()).await.unwrap_or_else(|e| {
+                    error!("批量获取群组禁言状态失败: {}", e);
+                    std::collections::HashMap::new() // 出错时使用空映射继续处理
+                });
+                
+                for member in members {
+                    // 先创建基本的成员对象
+                    let mut proto_member = member.to_proto();
+                    
+                    // 检查该成员是否在禁言映射中
+                    if let Some(mute_entry) = mute_map.get(&member.user_id) {
+                        // 设置禁言状态和详细信息
+                        proto_member.is_muted = true;
+                        proto_member.mute_info = Some(mute_entry.to_proto());
+                    }
+                    
+                    proto_members.push(proto_member);
+                }
 
                 Ok(Response::new(GetMembersResponse {
                     members: proto_members,
@@ -1155,5 +1199,42 @@ impl GroupService for GroupServiceImpl {
     ) -> Result<Response<GroupQrcodeResponse>, Status> {
         // 由于尚未实现QRCode相关功能，返回未实现错误
         Err(Status::unimplemented("获取群二维码功能尚未实现"))
+    }
+
+    // 检查用户禁言状态
+    async fn check_user_mute_status(
+        &self,
+        request: Request<CheckUserMuteStatusRequest>,
+    ) -> Result<Response<CheckUserMuteStatusResponse>, Status> {
+        let req = request.into_inner();
+        let group_id = req.group_id;
+        let user_id = req.user_id;
+
+        // 先检查用户是否是群组成员
+        match self.member_repository.check_membership(group_id.clone(), user_id.clone()).await {
+            Ok((is_member, _)) => {
+                if !is_member {
+                    return Err(Status::not_found("用户不是群组成员"));
+                }
+            }
+            Err(e) => {
+                error!("检查成员资格失败: {}", e);
+                return Err(Status::internal("检查成员资格失败"));
+            }
+        }
+
+        // 查询用户禁言状态
+        match self.check_user_mute_status(&group_id, &user_id).await {
+            Ok(mute_entry_opt) => {
+                Ok(Response::new(CheckUserMuteStatusResponse {
+                    is_muted: mute_entry_opt.is_some(),
+                    mute_info: mute_entry_opt,
+                }))
+            }
+            Err(e) => {
+                error!("检查用户禁言状态失败: {}", e);
+                Err(Status::internal("检查用户禁言状态失败"))
+            }
+        }
     }
 }

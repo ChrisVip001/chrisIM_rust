@@ -207,7 +207,7 @@ impl GroupServiceHandler {
             (&Method::GET, "getMembers") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
                 let page = get_i64_param(&body, "page", 1) as i32;
-                let page_size = get_i64_param(&body, "pageSize", 20) as i32;
+                let page_size = get_i64_param(&body, "pageSize", 500) as i32;
 
                 let response = self.client.get_members_with_params(
                     &group_id,
@@ -586,6 +586,7 @@ impl GroupServiceHandler {
             "nickname": member.nickname,
             "avatarUrl": member.avatar_url,
             "role": member.role,
+            "is_muted":member.is_muted,
             "roleText": role_text,
             "joinedAt": timestamp_to_datetime_string(&member.joined_at),
         })
