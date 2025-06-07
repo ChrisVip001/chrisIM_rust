@@ -104,111 +104,76 @@ impl MemberSettingsRepository {
         recall_notification: Option<bool>,
         show_nickname: Option<bool>,
     ) -> Result<MemberSettings> {
-        let now = Utc::now();
-        let now_naive = now.naive_utc();
 
-        // 检查是否已存在设置
-        let exists = sqlx::query_scalar!(
+        let now_utc = Utc::now();
+        let now = now_utc.naive_utc();
+
+        let result = sqlx::query!(
             r#"
-            SELECT EXISTS(SELECT 1 FROM group_member_settings WHERE group_id = $1 AND user_id = $2) as "exists!"
+            UPDATE group_member_settings SET
+            mute_notifications = COALESCE($3, mute_notifications),
+            nickname_in_group = COALESCE($4, nickname_in_group),
+            remark = COALESCE($5, remark),
+            is_top = COALESCE($6, is_top),
+            recall_notification = COALESCE($7, recall_notification),
+            show_nickname = COALESCE($8, show_nickname),
+                updated_at = $9
+            WHERE group_id = $1 and user_id = $2
+            RETURNING  group_id, user_id, mute_notifications, nickname_in_group, updated_at, remark, is_top, recall_notification, show_nickname
             "#,
             group_id,
-            user_id
+            user_id,
+            mute_notifications.map(|v| v as i32),
+            nickname_in_group,
+            remark,
+            is_top.map(|v| v as i32),
+            recall_notification.map(|v| v as i32),
+            show_nickname.map(|v| v as i32),
+            now
         )
-        .fetch_one(&self.pool)
-        .await?;
-
-        if exists {
-            // 获取现有设置
-            let current = sqlx::query!(
-                r#"
-                SELECT id, mute_notifications, nickname_in_group, remark, is_top, recall_notification, show_nickname
-                FROM group_member_settings
-                WHERE group_id = $1 AND user_id = $2
-                "#,
-                group_id,
-                user_id
-            )
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await?;
 
-            // 构建更新SQL，只更新有值的字段
-            let mut query_builder = sqlx::QueryBuilder::new(
-                "UPDATE group_member_settings SET"
-            );
-            let mut separated = query_builder.separated(", ");
-
-            separated.push("updated_at = ");
-            separated.push_bind(now_naive);
-
-
-            if let Some(mute) = mute_notifications {
-                separated.push("mute_notifications = ");
-                separated.push_bind(if mute { 1 } else { 0 });
-            }
-            
-            if let Some(nickname) = &nickname_in_group {
-                separated.push("nickname_in_group = ");
-                separated.push_bind(nickname);
-            }
-            
-            if let Some(rem) = &remark {
-                separated.push("remark = ");
-                separated.push_bind(rem);
-            }
-            
-            if let Some(top) = is_top {
-                separated.push("is_top = ");
-                separated.push_bind(if top { 1 } else { 0 });
-            }
-            
-            if let Some(recall) = recall_notification {
-                separated.push("recall_notification = ");
-                separated.push_bind(if recall { 1 } else { 0 });
-            }
-            
-            if let Some(show) = show_nickname {
-                separated.push("show_nickname = ");
-                separated.push_bind(if show { 1 } else { 0 });
-            }
-            
-            query_builder.push(" WHERE group_id = ");
-            query_builder.push_bind(&group_id);
-            query_builder.push(" AND user_id = ");
-            query_builder.push_bind(&user_id);
-            
-            query_builder.build().execute(&self.pool).await?;
-
-            Ok(MemberSettings {
-                id: current.id,
-                group_id,
-                user_id,
-                mute_notifications: mute_notifications.unwrap_or(current.mute_notifications != 0),
-                nickname_in_group: nickname_in_group.unwrap_or(current.nickname_in_group.unwrap_or_default()),
-                remark: remark.unwrap_or(current.remark.unwrap_or_default()),
-                is_top: is_top.unwrap_or(current.is_top != 0),
-                recall_notification: recall_notification.unwrap_or(current.recall_notification != 0),
-                show_nickname: show_nickname.unwrap_or(current.show_nickname != 0),
-                created_at: now, // 简化处理，使用当前时间
-                updated_at: now,
-            })
-        } else {
-            // 创建新设置
-            let settings = MemberSettings {
+        match result {
+            Some(row) => Ok(MemberSettings {
                 id: Uuid::new_v4().to_string(),
-                group_id,
-                user_id,
-                mute_notifications: mute_notifications.unwrap_or(false),
-                nickname_in_group: nickname_in_group.unwrap_or_default(),
-                remark: remark.unwrap_or_default(),
-                is_top: is_top.unwrap_or(false),
-                recall_notification: recall_notification.unwrap_or(false),
-                show_nickname: show_nickname.unwrap_or(true),
-                created_at: now,
-                updated_at: now,
-            };
+                group_id: row.group_id,
+                user_id: row.user_id,
+                remark: row.remark.unwrap_or_default(),
+                is_top: row.is_top != 0,
+                recall_notification: row.recall_notification != 0,
+                show_nickname: row.show_nickname != 0,
+                mute_notifications: row.mute_notifications != 0,
+                updated_at: Utc.from_utc_datetime(&row.updated_at),
+                nickname_in_group: row.nickname_in_group.unwrap_or_default(),
+                created_at: now_utc
+            }),
+            None => {
+                // 如果找不到设置，则创建默认设置并更新
+                let mut default_settings = MemberSettings::new(group_id.clone(),  user_id.clone());
 
-            self.create_member_settings(settings).await
+                // 应用提供的更新
+                if let Some(val) = mute_notifications {
+                    default_settings.mute_notifications = val;
+                }
+                if let Some(val) = nickname_in_group {
+                    default_settings.nickname_in_group = val;
+                }
+                if let Some(val) = remark {
+                    default_settings.remark = val;
+                }
+                if let Some(val) = is_top {
+                    default_settings.is_top = val;
+                }
+                if let Some(val) = recall_notification {
+                    default_settings.recall_notification = val;
+                }
+                if let Some(val) = show_nickname {
+                    default_settings.show_nickname = val;
+                }
+                self.create_member_settings(default_settings).await
+            }
         }
     }
+
 } 

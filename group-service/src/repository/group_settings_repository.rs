@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::model::group_settings::GroupSettings;
 
@@ -82,98 +83,72 @@ impl GroupSettingsRepository {
         notify_member_join: Option<bool>,
         all_member_muted: Option<bool>,
     ) -> Result<GroupSettings> {
-        let now = Utc::now();
-        let now_naive = now.naive_utc();
+        let now_utc = Utc::now();
+        let now = now_utc.naive_utc();
 
-        // 先检查是否已存在设置
-        let exists = sqlx::query_scalar!(
+        let result = sqlx::query!(
             r#"
-            SELECT EXISTS(SELECT 1 FROM group_settings WHERE group_id = $1) as "exists!"
+            UPDATE group_settings SET
+                allow_member_friendship = COALESCE($2, allow_member_friendship),
+                join_approval_required = COALESCE($3, join_approval_required),
+                only_admin_can_invite = COALESCE($4, only_admin_can_invite),
+                only_admin_can_modify = COALESCE($5, only_admin_can_modify),
+                notify_member_join = COALESCE($6, notify_member_join),
+                all_member_muted = COALESCE($7, all_member_muted),
+                updated_at = $8
+            WHERE group_id = $1
+            RETURNING  group_id, allow_member_friendship, join_approval_required,
+                     only_admin_can_invite, only_admin_can_modify, updated_at, notify_member_join, all_member_muted
             "#,
-            group_id
+            group_id,
+            allow_member_friendship.map(|v| v as i32),
+            join_approval_required.map(|v| v as i32),
+            only_admin_can_invite.map(|v| v as i32),
+            only_admin_can_modify.map(|v| v as i32),
+            notify_member_join.map(|v| v as i32),
+            all_member_muted.map(|v| v as i32),
+            now
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
-        if exists {
-            // 获取现有设置
-            let current = sqlx::query!(
-                r#"
-                SELECT allow_member_friendship, join_approval_required, only_admin_can_invite, only_admin_can_modify,notify_member_join,all_member_muted
-                FROM group_settings
-                WHERE group_id = $1
-                "#,
-                group_id
-            )
-            .fetch_one(&self.pool)
-            .await?;
-
-            let mut query_builder = sqlx::QueryBuilder::new("UPDATE group_member_settings SET ");
-            let mut separated = query_builder.separated(", ");
-
-            separated.push("updated_at = ");
-            separated.push_bind(now_naive);
-
-            if let Some(allow) = allow_member_friendship {
-                separated.push("allow_member_friendship = ");
-                separated.push_bind(if allow { 1 } else { 0 });
+        match result {
+            Some(row) => Ok(GroupSettings {
+                group_id: row.group_id,
+                allow_member_friendship: row.allow_member_friendship != 0,
+                join_approval_required: row.join_approval_required != 0,
+                only_admin_can_invite: row.only_admin_can_invite != 0,
+                only_admin_can_modify: row.only_admin_can_modify != 0,
+                notify_member_join: row.notify_member_join != 0,
+                all_member_muted: row.all_member_muted != 0,
+                updated_at: Utc.from_utc_datetime(&row.updated_at),
+            }),
+            None => {
+                // 如果找不到设置，则创建默认设置并更新
+                let mut default_settings = GroupSettings::new(group_id.clone());
+                
+                // 应用提供的更新
+                if let Some(val) = allow_member_friendship {
+                    default_settings.allow_member_friendship = val;
+                }
+                if let Some(val) = join_approval_required {
+                    default_settings.join_approval_required = val;
+                }
+                if let Some(val) = only_admin_can_invite {
+                    default_settings.only_admin_can_invite = val;
+                }
+                if let Some(val) = only_admin_can_modify {
+                    default_settings.only_admin_can_modify = val;
+                }
+                if let Some(val) = notify_member_join {
+                    default_settings.notify_member_join = val;
+                }
+                if let Some(val) = all_member_muted {
+                    default_settings.all_member_muted = val;
+                }
+                
+                self.create_group_settings(default_settings).await
             }
-            
-            if let Some(approval) = join_approval_required {
-                separated.push("join_approval_required = ");
-                separated.push_bind(if approval { 1 } else { 0 });
-            }
-            
-            if let Some(admin_invite) = only_admin_can_invite {
-                separated.push("only_admin_can_invite = ");
-                separated.push_bind(if admin_invite { 1 } else { 0 });
-            }
-            
-            if let Some(admin_modify) = only_admin_can_modify {
-                separated.push("only_admin_can_modify = ");
-                separated.push_bind(if admin_modify { 1 } else { 0 });
-            }
-            
-            if let Some(notify) = notify_member_join {
-                separated.push("notify_member_join = ");
-                separated.push_bind(if notify { 1 } else { 0 });
-            }
-            
-            if let Some(muted) = all_member_muted {
-                separated.push("all_member_muted = ");
-                separated.push_bind(if muted { 1 } else { 0 });
-            }
-            
-            query_builder.push(" WHERE group_id = ");
-            query_builder.push_bind(&group_id);
-            
-            query_builder.build().execute(&self.pool).await?;
-
-            Ok(GroupSettings {
-                group_id,
-                allow_member_friendship: allow_member_friendship.unwrap_or(current.allow_member_friendship != 0),
-                join_approval_required: join_approval_required.unwrap_or(current.join_approval_required != 0),
-                only_admin_can_invite: only_admin_can_invite.unwrap_or(current.only_admin_can_invite != 0),
-                only_admin_can_modify: only_admin_can_modify.unwrap_or(current.only_admin_can_modify != 0),
-                notify_member_join: notify_member_join.unwrap_or(current.notify_member_join != 0),
-                all_member_muted: all_member_muted.unwrap_or(current.all_member_muted != 0),
-                updated_at: now,
-            })
-        } else {
-            // 创建新设置，使用默认值或传入的值
-            let default = GroupSettings::new(group_id.clone());
-            let settings = GroupSettings {
-                group_id,
-                allow_member_friendship: allow_member_friendship.unwrap_or(default.allow_member_friendship),
-                join_approval_required: join_approval_required.unwrap_or(default.join_approval_required),
-                only_admin_can_invite: only_admin_can_invite.unwrap_or(default.only_admin_can_invite),
-                only_admin_can_modify: only_admin_can_modify.unwrap_or(default.only_admin_can_modify),
-                notify_member_join: notify_member_join.unwrap_or(default.notify_member_join),
-                all_member_muted: all_member_muted.unwrap_or(default.all_member_muted),
-                updated_at: now,
-            };
-
-            self.create_group_settings(settings).await
         }
     }
 } 

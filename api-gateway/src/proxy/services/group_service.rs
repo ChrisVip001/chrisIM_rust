@@ -633,6 +633,8 @@ impl GroupServiceHandler {
             "joinApprovalRequired": settings.join_approval_required,
             "onlyAdminCanInvite": settings.only_admin_can_invite,
             "onlyAdminCanModify": settings.only_admin_can_modify,
+            "notifyMemberJoin": settings.notify_member_join,
+            "allMemberMuted": settings.all_member_muted,
         })
     }
 
@@ -670,7 +672,7 @@ impl GroupServiceHandler {
     /// 将成员设置转换为JSON
     fn convert_member_settings_to_json(&self, settings: &proto::group::MemberSettings) -> Value {
         json!({
-            "id": settings.id,
+            // "id": settings.id,
             "groupId": settings.group_id,
             "userId": settings.user_id,
             "muteNotifications": settings.mute_notifications,
@@ -679,7 +681,11 @@ impl GroupServiceHandler {
             "isTop": settings.is_top,
             "recallNotification": settings.recall_notification,
             "showNickname": settings.show_nickname,
-            "createdAt": timestamp_to_datetime_string(&settings.created_at),
+            "remark": settings.remark,
+            "isTop": settings.is_top,
+            "recallNotification": settings.recall_notification,
+            "showNickname": settings.show_nickname,
+            // "createdAt": timestamp_to_datetime_string(&settings.created_at),
             "updatedAt": timestamp_to_datetime_string(&settings.updated_at),
         })
     }
