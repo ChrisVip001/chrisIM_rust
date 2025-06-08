@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tracing::{error, debug};
 use chrono::{DateTime, TimeZone, Utc};
 use std::time::{Duration as StdDuration, SystemTime};
-
+use common::proto::group::MemberSettings;
 use super::common::{
     success_response, extract_string_param, get_optional_string, 
     get_i64_param, timestamp_to_datetime_string, get_user_id_from_jwt,
@@ -82,8 +82,9 @@ impl GroupServiceHandler {
 
                 let response = self.client.get_group(&group_id).await?;
                 let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
-
-                Ok(success_response(self.convert_group_to_json(&group), StatusCode::OK))
+                let settings_response = self.client.get_member_settings(&group_id, &current_user_id).await?;
+                let member_settings = settings_response.settings.ok_or_else(|| anyhow::anyhow!("群组成员设置数据为空"))?;
+                Ok(success_response(self.convert_group_and_setting_to_json(&group,  &member_settings), StatusCode::OK))
             }
 
             // 更新群组信息
@@ -568,6 +569,22 @@ impl GroupServiceHandler {
             "updatedAt": timestamp_to_datetime_string(&group.updated_at),
         })
     }
+
+    /// 将群组消息转换为JSON
+    fn convert_group_and_setting_to_json(&self, group: &proto::group::Group, member_settings: &proto::group::MemberSettings) -> Value {
+        json!({
+            "id": group.id,
+            "name": group.name,
+            "description": group.description,
+            "avatarUrl": group.avatar_url,
+            "ownerId": group.owner_id,
+            "memberCount": group.member_count,
+            "createdAt": timestamp_to_datetime_string(&group.created_at),
+            "updatedAt": timestamp_to_datetime_string(&group.updated_at),
+            "remark":member_settings.remark,
+        })
+    }
+
 
     /// 将群组成员消息转换为JSON
     fn convert_member_to_json(&self, member: &proto::group::Member) -> Value {
