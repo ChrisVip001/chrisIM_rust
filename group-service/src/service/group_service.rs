@@ -688,7 +688,7 @@ impl GroupService for GroupServiceImpl {
         match self
             .group_repository
             .search_user_groups(
-                user_id, 
+                user_id.clone(),
                 keyword.as_deref(), 
                 page, 
                 page_size
