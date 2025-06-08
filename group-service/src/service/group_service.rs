@@ -605,29 +605,7 @@ impl GroupService for GroupServiceImpl {
         let user_id = req.user_id;
 
         match self.group_repository.get_user_groups(user_id.clone()).await {
-            Ok(mut groups) => {
-                // 收集所有群组ID
-                let group_ids: Vec<String> = groups.iter().map(|g| g.id.clone()).collect();
-                
-                // 批量获取用户在这些群组的设置信息
-                let settings_map = self.member_settings_repository.batch_get_member_settings(&user_id, &group_ids).await.unwrap_or_else(|e| {
-                    error!("批量获取群组设置失败: {}", e);
-                    // 获取失败时使用空映射，不影响主流程
-                    std::collections::HashMap::new()
-                });
-                
-                // 将群备注添加到群组信息中
-                for group in &mut groups {
-                    // 从设置映射中获取群备注
-                    let remark = match settings_map.get(&group.id) {
-                        Some(settings) => settings.remark.clone(),
-                        None => String::new(),
-                    };
-                    
-                    // 设置群备注
-                    group.remark = remark;
-                }
-                
+            Ok(groups) => {
                 let proto_groups = groups.into_iter().map(|g| g.to_proto()).collect();
 
                 Ok(Response::new(GetUserGroupsResponse {
@@ -696,31 +674,8 @@ impl GroupService for GroupServiceImpl {
             .await
         {
             Ok((groups, total)) => {
-                // 收集所有群组ID
-                let group_ids: Vec<String> = groups.iter().map(|g| g.id.clone()).collect();
-                
-                // 批量获取用户在这些群组的设置信息
-                let settings_map = self.member_settings_repository.batch_get_member_settings(&user_id, &group_ids).await.unwrap_or_else(|e| {
-                    error!("批量获取群组设置失败: {}", e);
-                    // 获取失败时使用空映射，不影响主流程
-                    std::collections::HashMap::new()
-                });
-                
-                // 将群备注添加到群组信息中
-                let mut updated_groups = Vec::with_capacity(groups.len());
-                for mut group in groups {
-                    // 从设置映射中获取群备注
-                    let remark = match settings_map.get(&group.id) {
-                        Some(settings) => settings.remark.clone(),
-                        None => String::new(),
-                    };
-                    
-                    // 设置群备注
-                    group.remark = remark;
-                    updated_groups.push(group);
-                }
-                
-                let proto_groups = updated_groups.into_iter().map(|g| g.to_proto()).collect();
+                // 将群组信息转换为proto对象
+                let proto_groups = groups.into_iter().map(|g| g.to_proto()).collect();
 
                 Ok(Response::new(SearchUserGroupsResponse {
                     groups: proto_groups,
