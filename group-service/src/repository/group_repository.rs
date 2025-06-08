@@ -169,9 +169,11 @@ impl GroupRepository {
                 g.avatar_url,
                 m.role,
                 m.joined_at,
+                ms.remark,
                 (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
             FROM groups g
             JOIN group_members m ON g.id = m.group_id
+            LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id
             WHERE m.user_id = $1
             "#,
             user_id
@@ -188,7 +190,7 @@ impl GroupRepository {
                 member_count: g.member_count.unwrap_or(0) as i32,
                 role: g.role.parse::<i32>().unwrap_or(0),
                 joined_at: Utc.from_utc_datetime(&g.joined_at),
-                remark: String::new(), // 群备注默认为空，将在service层填充
+                remark: g.remark.unwrap_or_default(), // 直接使用查询结果中的remark
             })
             .collect();
 
@@ -217,7 +219,7 @@ impl GroupRepository {
         
         // 根据是否有关键字构建不同的查询
         if let Some(kw) = keyword {
-            // 有关键字时的查询
+            // 有关键字时的查询，现在包括群备注的搜索
             let groups = sqlx::query!(
                 r#"
                 SELECT 
@@ -226,11 +228,13 @@ impl GroupRepository {
                     g.avatar_url,
                     m.role,
                     m.joined_at,
+                    ms.remark,
                     (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
                 FROM groups g
                 JOIN group_members m ON g.id = m.group_id
+                LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id
                 WHERE m.user_id = $1
-                AND (g.name ILIKE $2 OR g.description ILIKE $2)
+                AND (g.name ILIKE $2 OR g.description ILIKE $2 OR ms.remark ILIKE $2)
                 ORDER BY g.name
                 LIMIT $3 OFFSET $4
                 "#,
@@ -251,18 +255,19 @@ impl GroupRepository {
                     member_count: g.member_count.unwrap_or(0) as i32,
                     role: g.role.parse::<i32>().unwrap_or(0),
                     joined_at: Utc.from_utc_datetime(&g.joined_at),
-                    remark: String::new(), // 群备注默认为空，将在service层填充
+                    remark: g.remark.unwrap_or_default(), // 直接使用查询结果中的remark
                 });
             }
 
-            // 获取总数
+            // 获取总数，查询同样包括备注
             total = sqlx::query!(
                 r#"
                 SELECT COUNT(*) as count
                 FROM groups g
                 JOIN group_members m ON g.id = m.group_id
+                LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id
                 WHERE m.user_id = $1
-                AND (g.name ILIKE $2 OR g.description ILIKE $2)
+                AND (g.name ILIKE $2 OR g.description ILIKE $2 OR ms.remark ILIKE $2)
                 "#,
                 user_id,
                 format!("%{}%", kw)
@@ -281,9 +286,11 @@ impl GroupRepository {
                     g.avatar_url,
                     m.role,
                     m.joined_at,
+                    ms.remark,
                     (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
                 FROM groups g
                 JOIN group_members m ON g.id = m.group_id
+                LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id
                 WHERE m.user_id = $1
                 ORDER BY g.name
                 LIMIT $2 OFFSET $3
@@ -304,7 +311,7 @@ impl GroupRepository {
                     member_count: g.member_count.unwrap_or(0) as i32,
                     role: g.role.parse::<i32>().unwrap_or(0),
                     joined_at: Utc.from_utc_datetime(&g.joined_at),
-                    remark: String::new(), // 群备注默认为空，将在service层填充
+                    remark: g.remark.unwrap_or_default(), // 直接使用查询结果中的remark
                 });
             }
 
