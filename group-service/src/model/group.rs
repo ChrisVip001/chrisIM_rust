@@ -53,6 +53,7 @@ pub struct UserGroup {
     pub member_count: i32,
     pub role: i32,
     pub joined_at: DateTime<Utc>,
+    pub remark: String,
 }
 
 impl UserGroup {
@@ -66,6 +67,7 @@ impl UserGroup {
             member_count: self.member_count,
             role: self.role,
             joined_at: Some(prost_types::Timestamp::from(joined_system_time)),
+            remark: self.remark.clone(),
         }
     }
 }

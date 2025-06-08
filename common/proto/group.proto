@@ -242,6 +242,7 @@ message UserGroup {
   int32 member_count = 4;
   MemberRole role = 5;
   google.protobuf.Timestamp joined_at = 6;
+  string remark = 7;  // 群备注
 }
 
 // 成员角色

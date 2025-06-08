@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
+use std::collections::HashMap;
 
 use crate::model::member_settings::MemberSettings;
 
@@ -63,6 +64,51 @@ impl MemberSettingsRepository {
             let default_settings = MemberSettings::new(group_id.clone(), user_id.clone());
             self.create_member_settings(default_settings).await
         }
+    }
+
+    // 批量获取用户的群组成员设置
+    pub async fn batch_get_member_settings(
+        &self,
+        user_id: &str,
+        group_ids: &[String],
+    ) -> Result<HashMap<String, MemberSettings>> {
+        if group_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // 使用IN查询获取多个群组的设置
+        let rows = sqlx::query!(
+            r#"
+            SELECT id, group_id, user_id, mute_notifications, nickname_in_group, updated_at, remark, is_top, recall_notification, show_nickname
+            FROM group_member_settings
+            WHERE user_id = $1 AND group_id = ANY($2)
+            "#,
+            user_id,
+            &group_ids
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        // 将结果转换为HashMap
+        let mut settings_map = HashMap::new();
+        for row in rows {
+            let settings = MemberSettings {
+                id: row.id,
+                group_id: row.group_id.clone(),
+                user_id: row.user_id,
+                remark: row.remark.unwrap_or_default(),
+                is_top: row.is_top != 0,
+                recall_notification: row.recall_notification != 0,
+                show_nickname: row.show_nickname != 0,
+                mute_notifications: row.mute_notifications != 0,
+                nickname_in_group: row.nickname_in_group.unwrap_or_default(),
+                created_at: Utc::now(), // 简化处理，使用当前时间
+                updated_at: Utc.from_utc_datetime(&row.updated_at),
+            };
+            settings_map.insert(row.group_id, settings);
+        }
+
+        Ok(settings_map)
     }
 
     // 创建成员设置
@@ -175,5 +221,4 @@ impl MemberSettingsRepository {
             }
         }
     }
-
 } 

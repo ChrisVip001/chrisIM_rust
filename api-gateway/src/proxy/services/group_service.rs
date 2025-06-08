@@ -609,6 +609,7 @@ impl GroupServiceHandler {
             "role": user_group.role,
             "roleText": role_text,
             "joinedAt": timestamp_to_datetime_string(&user_group.joined_at),
+            "remark": user_group.remark,
         })
     }
 
