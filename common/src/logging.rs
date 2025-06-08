@@ -362,19 +362,18 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
             }
         }
     }
-    
-    // 只有在控制台输出时才记录这些日志（文件输出已经写入stderr）
-    if log_output == LogOutput::Console {
-        info!("日志系统从配置初始化成功，全局级别: {}", config.log.level);
-        info!("SQLx日志级别: {}", config.log.sqlx_level());
-        info!("日志格式: {:?}, 输出位置: {:?}", log_format, log_output);
-        
-        if let Some(components) = &config.log.components {
-            for (component, level) in components {
-                info!("组件 {} 日志级别: {}", component, level);
-            }
+
+    info!("日志系统从配置初始化成功，全局级别: {}", config.log.level);
+    info!("SQLx日志级别: {}", config.log.sqlx_level());
+    info!("日志格式: {:?}, 输出位置: {:?}", log_format, log_output);
+    info!("获取配置路径: {}", std::env::var("CONFIG_PATH").unwrap_or_else(|_| "本地".to_string()));
+
+    if let Some(components) = &config.log.components {
+        for (component, level) in components {
+            info!("组件 {} 日志级别: {}", component, level);
         }
     }
+    
     
     Ok(())
 }
