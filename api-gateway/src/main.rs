@@ -33,6 +33,8 @@ async fn main() -> anyhow::Result<()> {
     // 加载配置
     let config_path = std::env::var("CONFIG_PATH")
         .unwrap_or_else(|_| "./config/config.yaml".to_string());
+
+    info!("获取配置路径: {}", std::env::var("CONFIG_PATH").unwrap_or_else(|_| "本地".to_string()));
     
     let app_config = AppConfig::from_file(Some(&config_path))?;
     ConfigLoader::set_global(app_config);
