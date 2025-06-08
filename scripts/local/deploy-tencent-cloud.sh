@@ -812,7 +812,9 @@ SyslogIdentifier=rustim-$service
 # 环境变量
 Environment=RUST_LOG=info
 Environment=RUST_BACKTRACE=1
-Environment=CONFIG_PATH=$CONFIG_DIR/config.yaml
+Environment=CONFIG_PATH=$CONFIG_DIR/config-prod.yaml
+Environment=LOG_DIR=$LOG_DIR
+Environment=ENVIRONMENT=$ENVIRONMENT
 EnvironmentFile=$CONFIG_DIR/.env
 
 # 安全设置

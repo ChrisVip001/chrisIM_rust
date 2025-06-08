@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         info!("链路追踪功能已启用，追踪数据将发送到: {}", config.telemetry.endpoint);
     } else {
         // 只初始化日志系统
-        common::logging::init_from_config(&config)?;
+        common::logging::init_from_config(&config, "group-service")?;
         info!("链路追踪功能未启用，仅初始化日志系统");
     }
 

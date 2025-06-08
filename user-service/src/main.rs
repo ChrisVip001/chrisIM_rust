@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
         );
     } else {
         // 只初始化日志系统
-        common::logging::init_from_config(&config)?;
+        common::logging::init_from_config(&config, "user-service")?;
         info!("链路追踪功能未启用，仅初始化日志系统");
     }
 

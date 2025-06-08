@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
         common::logging::init_telemetry(&config, "api-gateway")?;
         info!("链路追踪已启用: {}", config.telemetry.endpoint);
     } else {
-        common::logging::init_from_config(&config)?;
+        common::logging::init_from_config(&config, "api-gateway")?;
         info!("仅启用日志系统");
     }
 

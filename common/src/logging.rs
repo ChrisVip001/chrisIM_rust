@@ -1,8 +1,11 @@
 use anyhow::Result;
 use tracing::{info, Level};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{fmt, EnvFilter,fmt::time::FormatTime,fmt::format::Writer};
 use std::env;
-
+use std::path::Path;
+use std::fs::{self, File};
+use std::io::Write;
+use chrono::Local;
 // 新增导入，用于链路追踪
 #[cfg(feature = "telemetry")]
 use opentelemetry::global;
@@ -12,6 +15,16 @@ use opentelemetry::sdk::propagation::TraceContextPropagator;
 use opentelemetry_otlp::WithExportConfig;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+
+// 日志输出时间格式
+struct LocalTimer;
+
+impl FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", Local::now().format("%Y-%m-%d %H:%M:%S%.3f"))
+    }
+}
 
 // 日志输出格式类型
 #[derive(Debug, Clone, Copy)]
@@ -27,6 +40,24 @@ impl LogFormat {
         match s.to_lowercase().as_str() {
             "json" => LogFormat::Json,
             _ => LogFormat::Plain,
+        }
+    }
+}
+
+// 日志输出位置类型
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LogOutput {
+    // 控制台输出
+    Console,
+    // 文件输出
+    File,
+}
+
+impl LogOutput {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "file" => LogOutput::File,
+            _ => LogOutput::Console,
         }
     }
 }
@@ -70,6 +101,7 @@ pub fn init_with_sqlx_level(sqlx_level: &str) -> Result<()> {
     // 初始化日志订阅器
     fmt()
         .with_env_filter(env_filter)
+        .with_timer(LocalTimer)
         .with_ansi(true) // 支持ANSI颜色
         .with_thread_names(true) // 显示线程名称
         .init();
@@ -101,6 +133,7 @@ pub fn init_with_custom_filter(directives: &[(&str, &str)]) -> Result<()> {
     // 初始化日志订阅器
     fmt()
         .with_env_filter(env_filter)
+        .with_timer(LocalTimer)
         .with_ansi(true)
         .with_thread_names(true)
         .init();
@@ -111,6 +144,45 @@ pub fn init_with_custom_filter(directives: &[(&str, &str)]) -> Result<()> {
     }
     
     Ok(())
+}
+
+/// 确保日志目录存在
+fn ensure_log_dir(dir_path: &str) -> Result<()> {
+    let path = Path::new(dir_path);
+    if !path.exists() {
+        fs::create_dir_all(path)?;
+    }
+    Ok(())
+}
+
+/// 获取日志文件路径
+fn get_log_file_path(service_name: &str) -> String {
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    
+    // 首先尝试从环境变量获取日志目录
+    let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| {
+        // 检查是否在生产环境
+        if let Ok(env) = std::env::var("ENVIRONMENT") {
+            if env == "production" || env == "staging" {
+                // 生产环境使用绝对路径
+                "/var/log/rustim".to_string()
+            } else {
+                // 开发环境使用相对路径
+                "logs".to_string()
+            }
+        } else {
+            // 默认使用相对路径
+            "logs".to_string()
+        }
+    });
+    
+    // 确保日志目录存在
+    if let Err(e) = ensure_log_dir(&log_dir) {
+        eprintln!("创建日志目录失败: {}", e);
+    }
+    
+    // 文件格式：logs/服务名-日期.log
+    format!("{}/{}-{}.log", log_dir, service_name, date)
 }
 
 /// 从配置初始化日志系统
@@ -128,12 +200,12 @@ pub fn init_with_custom_filter(directives: &[(&str, &str)]) -> Result<()> {
 /// 
 /// fn main() -> anyhow::Result<()> {
 ///     let config = AppConfig::new()?;
-///     logging::init_from_config(&config)?;
+///     logging::init_from_config(&config,"service")?;
 ///     tracing::info!("日志系统从配置初始化成功");
 ///     Ok(())
 /// }
 /// ```
-pub fn init_from_config(config: &crate::config::AppConfig) -> Result<()> {
+pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) -> Result<()> {
     // 构建过滤器部分
     let mut filter_parts = vec![config.log.level.clone()];
     
@@ -168,33 +240,139 @@ pub fn init_from_config(config: &crate::config::AppConfig) -> Result<()> {
         LogFormat::Plain
     };
     
-    // 根据配置的输出格式选择日志输出方式
-    match log_format {
-        LogFormat::Plain => {
+    // 确定日志输出位置
+    let log_output = LogOutput::from_str(&config.log.output);
+
+    
+    // 根据配置的输出格式和位置选择日志输出方式
+    match (log_format, log_output) {
+        (LogFormat::Plain, LogOutput::Console) => {
             fmt()
                 .with_env_filter(env_filter)
+                .with_timer(LocalTimer)
                 .with_ansi(true)
                 .with_thread_names(true)
                 .init();
         }
-        LogFormat::Json => {
+        (LogFormat::Json, LogOutput::Console) => {
             fmt()
                 .with_env_filter(env_filter)
+                .with_timer(LocalTimer)
                 .json()
                 .with_current_span(true)
                 .with_span_list(true)
                 .with_thread_names(true)
                 .init();
         }
+        (LogFormat::Plain, LogOutput::File) => {
+            // 获取日志文件路径
+            let log_file_path = get_log_file_path(&service_name);
+            
+            // 尝试打开文件，如果失败则回退到控制台
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file_path) 
+            {
+                Ok(file) => {
+                    // 创建控制台输出层
+                    let console_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .with_ansi(true) // 控制台使用ANSI颜色
+                        .with_thread_names(true);
+                    
+                    // 创建文件输出层
+                    let file_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .with_ansi(false) // 文件中不使用ANSI颜色
+                        .with_thread_names(true)
+                        .with_writer(file);
+                    
+                    // 注册两个输出层
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(console_layer)
+                        .with(file_layer)
+                        .init();
+                    
+                    // 日志初始化信息同时显示在控制台
+                    info!("日志系统初始化成功，同时输出到控制台和文件: {}", log_file_path);
+                }
+                Err(e) => {
+                    // 无法打开日志文件，回退到控制台
+                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
+                    fmt()
+                        .with_env_filter(env_filter)
+                        .with_timer(LocalTimer)
+                        .with_ansi(true)
+                        .with_thread_names(true)
+                        .init();
+                }
+            }
+        }
+        (LogFormat::Json, LogOutput::File) => {
+            // 获取日志文件路径
+            let log_file_path = get_log_file_path(&service_name);
+            
+            // 尝试打开文件，如果失败则回退到控制台
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file_path) 
+            {
+                Ok(file) => {
+                    // 创建控制台输出层 (使用普通格式，更易读)
+                    let console_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_thread_names(true);
+                    
+                    // 创建JSON文件输出层
+                    let json_file_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_thread_names(true)
+                        .with_writer(file);
+                    
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(console_layer)
+                        .with(json_file_layer)
+                        .init();
+                    
+                    // 日志初始化信息同时显示在控制台
+                    info!("日志系统初始化成功，同时输出到控制台(普通格式)和文件(JSON格式): {}", log_file_path);
+                }
+                Err(e) => {
+                    // 无法打开日志文件，回退到控制台
+                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
+                    fmt()
+                        .with_env_filter(env_filter)
+                        .with_timer(LocalTimer)
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_thread_names(true)
+                        .init();
+                }
+            }
+        }
     }
     
-    info!("日志系统从配置初始化成功，全局级别: {}", config.log.level);
-    info!("SQLx日志级别: {}", config.log.sqlx_level());
-    info!("日志格式: {:?}", log_format);
-    
-    if let Some(components) = &config.log.components {
-        for (component, level) in components {
-            info!("组件 {} 日志级别: {}", component, level);
+    // 只有在控制台输出时才记录这些日志（文件输出已经写入stderr）
+    if log_output == LogOutput::Console {
+        info!("日志系统从配置初始化成功，全局级别: {}", config.log.level);
+        info!("SQLx日志级别: {}", config.log.sqlx_level());
+        info!("日志格式: {:?}, 输出位置: {:?}", log_format, log_output);
+        
+        if let Some(components) = &config.log.components {
+            for (component, level) in components {
+                info!("组件 {} 日志级别: {}", component, level);
+            }
         }
     }
     
@@ -235,7 +413,7 @@ pub fn init_auto() -> Result<()> {
     
     // 如果没有环境变量，尝试从配置文件加载
     match crate::config::AppConfig::new() {
-        Ok(config) => init_from_config(&config),
+        Ok(config) => init_from_config(&config,"service_name"),
         Err(_) => {
             // 如果配置加载失败，使用默认设置
             info!("无法加载配置文件，使用默认日志设置");
@@ -305,14 +483,19 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
         LogFormat::Plain
     };
     
+    // 确定日志输出位置
+    let log_output = LogOutput::from_str(&config.log.output);
+
+
+    
     // 创建OpenTelemetry层
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     
-    // 根据配置的输出格式选择日志输出方式并包含OpenTelemetry层
-    match log_format {
-        LogFormat::Plain => {
-            // 使用普通文本格式 + OpenTelemetry
+    // 根据配置的输出格式和位置选择日志输出方式并包含OpenTelemetry层
+    match (log_format, log_output) {
+        (LogFormat::Plain, LogOutput::Console) => {
             let fmt_layer = fmt::layer()
+                .with_timer(LocalTimer)
                 .with_ansi(true)
                 .with_thread_names(true);
             
@@ -322,9 +505,9 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                 .with(telemetry)
                 .init();
         }
-        LogFormat::Json => {
-            // 使用JSON格式 + OpenTelemetry
+        (LogFormat::Json, LogOutput::Console) => {
             let json_layer = fmt::layer()
+                .with_timer(LocalTimer)
                 .json()
                 .with_current_span(true)
                 .with_span_list(true)
@@ -336,11 +519,116 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                 .with(telemetry)
                 .init();
         }
+        (LogFormat::Plain, LogOutput::File) => {
+            // 获取日志文件路径
+            let log_file_path = get_log_file_path(service_name);
+            
+            // 尝试打开文件，如果失败则回退到控制台
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file_path) 
+            {
+                Ok(file) => {
+                    // 创建控制台输出层
+                    let console_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .with_ansi(true)
+                        .with_thread_names(true);
+                    
+                    // 创建文件输出层
+                    let file_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .with_ansi(false)
+                        .with_thread_names(true)
+                        .with_writer(file);
+                    
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(console_layer)
+                        .with(file_layer)
+                        .with(telemetry)
+                        .init();
+                    
+                    // 日志初始化信息同时显示在控制台
+                    info!("日志系统初始化成功（带分布式链路追踪），同时输出到控制台和文件: {}", log_file_path);
+                    info!("链路追踪数据发送至: {}", jaeger_endpoint);
+                }
+                Err(e) => {
+                    // 无法打开日志文件，回退到控制台
+                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
+                    let fmt_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .with_ansi(true)
+                        .with_thread_names(true);
+                    
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(fmt_layer)
+                        .with(telemetry)
+                        .init();
+                }
+            }
+        }
+        (LogFormat::Json, LogOutput::File) => {
+            // 获取日志文件路径
+            let log_file_path = get_log_file_path(service_name);
+            
+            // 尝试打开文件，如果失败则回退到控制台
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file_path) 
+            {
+                Ok(file) => {
+                    // 创建控制台输出层 (使用普通格式，更易读)
+                    let console_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_thread_names(true);
+                    
+                    // 创建JSON文件输出层
+                    let json_file_layer = fmt::layer()
+                        .with_timer(LocalTimer)
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_thread_names(true)
+                        .with_writer(file);
+                    
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(console_layer)
+                        .with(json_file_layer)
+                        .with(telemetry)
+                        .init();
+                    
+                    // 日志初始化信息同时显示在控制台
+                    info!("日志系统初始化成功（带分布式链路追踪），同时输出到控制台(普通格式)和文件(JSON格式): {}", log_file_path);
+                    info!("链路追踪数据发送至: {}", jaeger_endpoint);
+                }
+                Err(e) => {
+                    // 无法打开日志文件，回退到控制台
+                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
+                    let json_layer = fmt::layer()
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_thread_names(true);
+                    
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(json_layer)
+                        .with(telemetry)
+                        .init();
+                }
+            }
+        }
     }
     
-    info!("日志系统初始化成功（带分布式链路追踪），服务名称: {}", service_name);
-    info!("链路追踪数据发送至: {}", jaeger_endpoint);
-    info!("日志格式: {:?}", log_format);
+    // 无需特殊条件判断，日志信息已经在各个分支中处理
     
     Ok(())
 }
@@ -354,7 +642,7 @@ pub fn shutdown_telemetry() {
 #[cfg(not(feature = "telemetry"))]
 pub fn init_telemetry(_config: &crate::config::AppConfig, service_name: &str) -> Result<()> {
     info!("分布式链路追踪未启用 (缺少 'telemetry' 特性)，服务: {}", service_name);
-    init_from_config(_config)
+    init_from_config(_config,service_name)
 }
 
 #[cfg(not(feature = "telemetry"))]
