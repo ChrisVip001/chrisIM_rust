@@ -188,6 +188,7 @@ impl GroupRepository {
                 member_count: g.member_count.unwrap_or(0) as i32,
                 role: g.role.parse::<i32>().unwrap_or(0),
                 joined_at: Utc.from_utc_datetime(&g.joined_at),
+                remark: String::new(), // 群备注默认为空，将在service层填充
             })
             .collect();
 
@@ -250,6 +251,7 @@ impl GroupRepository {
                     member_count: g.member_count.unwrap_or(0) as i32,
                     role: g.role.parse::<i32>().unwrap_or(0),
                     joined_at: Utc.from_utc_datetime(&g.joined_at),
+                    remark: String::new(), // 群备注默认为空，将在service层填充
                 });
             }
 
@@ -302,6 +304,7 @@ impl GroupRepository {
                     member_count: g.member_count.unwrap_or(0) as i32,
                     role: g.role.parse::<i32>().unwrap_or(0),
                     joined_at: Utc.from_utc_datetime(&g.joined_at),
+                    remark: String::new(), // 群备注默认为空，将在service层填充
                 });
             }
 

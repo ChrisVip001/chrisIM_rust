@@ -148,6 +148,7 @@ impl CommonServiceHandler {
                 2 => "OWNER",
                 _ => "UNKNOWN"
             },
+            "remark": group.remark,
             // "joinTime": timestamp_to_datetime_string(&group.join_time),
             // "lastActiveTime": timestamp_to_datetime_string(&group.last_active_time),
             // "unreadCount": group.unread_count,
