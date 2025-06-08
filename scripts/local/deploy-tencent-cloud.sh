@@ -6,6 +6,7 @@
 # 
 # 更新日志：
 # 2025-05-25: 添加 CONFIG_PATH 环境变量，确保服务能正确读取 config.yaml 配置文件
+# 2025-06-09: 修改服务配置文件改为config-prod.yaml，确保服务能正确读取 config-prod.yaml 配置文件
 
 set -e
 
@@ -768,13 +769,13 @@ configure_services() {
     sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR"
     sudo chmod 640 "$CONFIG_DIR/.env"
     
-    # 确保config.yaml有正确的权限
-    if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
-        log_info "设置 config.yaml 权限..."
-        sudo chmod 644 "$CONFIG_DIR/config.yaml"
-        sudo chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config.yaml"
+    # 确保config-prod.yaml有正确的权限
+    if [[ -f "$CONFIG_DIR/config-prod.yaml" ]]; then
+        log_info "设置 config-prod.yaml 权限..."
+        sudo chmod 644 "$CONFIG_DIR/config-prod.yaml"
+        sudo chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/config-prod.yaml"
     else
-        log_error "配置文件 config.yaml 不存在"
+        log_error "配置文件 config-prod.yaml 不存在"
     fi
     
     log_success "服务配置完成"
@@ -881,10 +882,10 @@ enable_and_start_services() {
     fi
     
     # 确认配置文件存在
-    if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
-        log_info "配置文件已准备: $CONFIG_DIR/config.yaml"
+    if [[ -f "$CONFIG_DIR/config-prod.yaml" ]]; then
+        log_info "配置文件已准备: $CONFIG_DIR/config-prod.yaml"
     else
-        log_error "配置文件不存在: $CONFIG_DIR/config.yaml"
+        log_error "配置文件不存在: $CONFIG_DIR/config-prod.yaml"
         log_warning "服务可能无法正常启动，请确保配置文件存在"
     fi
     
