@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::proto::message::GroupMemSeq;
+use common::proto::message::{GroupMemSeq, PlatformType};
 use serde::{Deserialize, Serialize};
 
 use common::config::AppConfig;
@@ -87,16 +87,8 @@ pub trait Cache: Sync + Send + Debug {
 
     /// 用户注册后删除注册验证码
     async fn del_register_code(&self, email: &str) -> Result<(), Error>;
-
-    /// 用户登录
-    async fn user_login(&self, user_id: &str) -> Result<(), Error>;
-
-    /// 用户登出
-    async fn user_logout(&self, user_id: &str) -> Result<(), Error>;
-
-    /// 在线用户计数
-    async fn online_count(&self) -> Result<i64, Error>;
-
+    
+    
     /// 用户平台登录
     /// 
     /// 将用户在指定平台标记为在线状态
@@ -104,7 +96,7 @@ pub trait Cache: Sync + Send + Debug {
     /// # 参数
     /// * `user_id` - 用户ID
     /// * `platform` - 平台类型
-    async fn user_platform_login(&self, user_id: &str, platform: &str) -> Result<(), Error>;
+    async fn user_platform_login(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
     /// 用户平台登出
     /// 
@@ -113,91 +105,7 @@ pub trait Cache: Sync + Send + Debug {
     /// # 参数
     /// * `user_id` - 用户ID
     /// * `platform` - 平台类型
-    async fn user_platform_logout(&self, user_id: &str, platform: &str) -> Result<(), Error>;
-
-    /// 获取用户在线平台列表
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// 
-    /// # 返回值
-    /// * `Vec<String>` - 用户在线的平台列表
-    async fn get_user_online_platforms(&self, user_id: &str) -> Result<Vec<String>, Error>;
-
-    /// 检查用户是否在任何平台在线
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// 
-    /// # 返回值
-    /// * `bool` - 如果用户在任何平台在线则返回true
-    async fn is_user_online_any_platform(&self, user_id: &str) -> Result<bool, Error>;
-
-    /// 获取用户在线平台数量
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// 
-    /// # 返回值
-    /// * `i64` - 用户在线的平台数量
-    async fn get_user_platform_count(&self, user_id: &str) -> Result<i64, Error>;
-
-    /// 存储访问令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// * `token` - 访问令牌
-    /// * `expiry_seconds` - 过期时间（秒）
-    async fn save_access_token(&self, user_id: &str, token: &str, expiry_seconds: u64) -> Result<(), Error>;
-
-    /// 存储刷新令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// * `token` - 刷新令牌
-    /// * `expiry_seconds` - 过期时间（秒）
-    async fn save_refresh_token(&self, user_id: &str, token: &str, expiry_seconds: u64) -> Result<(), Error>;
-
-    /// 获取用户的访问令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// 
-    /// # 返回值
-    /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
-    async fn get_access_token(&self, user_id: &str) -> Result<Option<String>, Error>;
-
-    /// 获取用户的刷新令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// 
-    /// # 返回值
-    /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
-    async fn get_refresh_token(&self, user_id: &str) -> Result<Option<String>, Error>;
-
-    /// 删除用户的访问令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    async fn delete_access_token(&self, user_id: &str) -> Result<(), Error>;
-
-    /// 删除用户的刷新令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    async fn delete_refresh_token(&self, user_id: &str) -> Result<(), Error>;
-
-    /// 检查令牌是否存在且有效
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// * `token` - 要检查的令牌
-    /// * `token_type` - 令牌类型（"access" 或 "refresh"）
-    /// 
-    /// # 返回值
-    /// * `bool` - 如果令牌存在且匹配则返回true
-    async fn verify_token_exists(&self, user_id: &str, token: &str, token_type: &str) -> Result<bool, Error>;
+    async fn user_platform_logout(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
     /// 存储指定平台的访问令牌
     /// 
@@ -206,7 +114,7 @@ pub trait Cache: Sync + Send + Debug {
     /// * `token` - 访问令牌
     /// * `platform` - 平台类型
     /// * `expiry_seconds` - 过期时间（秒）
-    async fn save_access_token_for_platform(&self, user_id: &str, token: &str, platform: &str, expiry_seconds: u64) -> Result<(), Error>;
+    async fn save_access_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error>;
 
     /// 存储指定平台的刷新令牌
     /// 
@@ -215,7 +123,7 @@ pub trait Cache: Sync + Send + Debug {
     /// * `token` - 刷新令牌
     /// * `platform` - 平台类型
     /// * `expiry_seconds` - 过期时间（秒）
-    async fn save_refresh_token_for_platform(&self, user_id: &str, token: &str, platform: &str, expiry_seconds: u64) -> Result<(), Error>;
+    async fn save_refresh_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error>;
 
     /// 获取指定平台的访问令牌
     /// 
@@ -225,7 +133,7 @@ pub trait Cache: Sync + Send + Debug {
     /// 
     /// # 返回值
     /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
-    async fn get_access_token_for_platform(&self, user_id: &str, platform: &str) -> Result<Option<String>, Error>;
+    async fn get_access_token_for_platform(&self, user_id: &str, platform: i32) -> Result<Option<String>, Error>;
 
     /// 获取指定平台的刷新令牌
     /// 
@@ -235,63 +143,21 @@ pub trait Cache: Sync + Send + Debug {
     /// 
     /// # 返回值
     /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
-    async fn get_refresh_token_for_platform(&self, user_id: &str, platform: &str) -> Result<Option<String>, Error>;
+    async fn get_refresh_token_for_platform(&self, user_id: &str, platform: i32) -> Result<Option<String>, Error>;
 
     /// 删除指定平台的访问令牌
     /// 
     /// # 参数
     /// * `user_id` - 用户ID
     /// * `platform` - 平台类型
-    async fn delete_access_token_for_platform(&self, user_id: &str, platform: &str) -> Result<(), Error>;
+    async fn delete_access_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
     /// 删除指定平台的刷新令牌
     /// 
     /// # 参数
     /// * `user_id` - 用户ID
     /// * `platform` - 平台类型
-    async fn delete_refresh_token_for_platform(&self, user_id: &str, platform: &str) -> Result<(), Error>;
-
-    /// 检查用户是否还有任何平台的令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// 
-    /// # 返回值
-    /// * `bool` - 如果用户还有任何令牌则返回true
-    async fn check_user_has_any_tokens(&self, user_id: &str) -> Result<bool, Error>;
-
-    /// 删除用户在所有平台的令牌
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    async fn delete_all_user_tokens(&self, user_id: &str) -> Result<(), Error>;
-
-    /// 获取用户在所有平台的登录信息
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// 
-    /// # 返回值
-    /// * `Vec<String>` - 用户已登录的平台列表
-    async fn get_user_login_platforms(&self, user_id: &str) -> Result<Vec<String>, Error>;
-
-    /// 批量检查用户在线状态
-    /// 
-    /// # 参数
-    /// * `user_ids` - 用户ID列表
-    /// 
-    /// # 返回值
-    /// * `Vec<(String, bool)>` - 用户ID和对应的在线状态列表
-    async fn batch_check_users_online(&self, user_ids: &[String]) -> Result<Vec<(String, bool)>, Error>;
-
-    /// 批量获取用户在线平台信息
-    /// 
-    /// # 参数
-    /// * `user_ids` - 用户ID列表
-    /// 
-    /// # 返回值
-    /// * `Vec<(String, Vec<String>)>` - 用户ID和对应的在线平台列表
-    async fn batch_get_users_online_platforms(&self, user_ids: &[String]) -> Result<Vec<(String, Vec<String>)>, Error>;
+    async fn delete_refresh_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
     /// 批量获取用户完整在线状态信息
     /// 

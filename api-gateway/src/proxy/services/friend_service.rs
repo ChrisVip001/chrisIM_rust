@@ -6,9 +6,9 @@ use common::grpc_client::FriendServiceGrpcClient;
 use common::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
-use super::common::{success_response,error_response, extract_string_param, timestamp_to_datetime_string,
+use common::auth::Claims;
+use super::common::{success_response, error_response, extract_string_param, timestamp_to_datetime_string,
                     get_i64_param, get_optional_string, get_user_id_from_jwt};
-use crate::auth::jwt::UserInfo;
 
 /// 好友服务处理器
 #[derive(Clone)]
@@ -28,7 +28,7 @@ impl FriendServiceHandler {
         method: &Method,
         path: &str,
         body: Value,
-        jwt_user_info: Option<UserInfo>,
+        jwt_user_info: Option<Claims>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理好友服务请求: {} {}", method, path);
 

@@ -9,12 +9,12 @@ use tracing::{error, debug};
 use chrono::{DateTime, TimeZone, Utc};
 use std::time::{Duration as StdDuration, SystemTime};
 use common::proto::group::MemberSettings;
+use common::auth::Claims;
 use super::common::{
     success_response, extract_string_param, get_optional_string, 
     get_i64_param, timestamp_to_datetime_string, get_user_id_from_jwt,
     get_bool_param,get_option_bool_param,
 };
-use crate::auth::jwt::UserInfo;
 
 /// 群组服务处理器
 #[derive(Clone)]
@@ -34,7 +34,7 @@ impl GroupServiceHandler {
         method: &Method,
         path: &str,
         body: Value,
-        jwt_user_info: Option<UserInfo>,
+        jwt_user_info: Option<Claims>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理群组服务请求: {} {}", method, path);
 

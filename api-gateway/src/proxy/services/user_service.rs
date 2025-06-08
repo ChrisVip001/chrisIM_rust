@@ -6,11 +6,11 @@ use common::grpc_client::UserServiceGrpcClient;
 use common::{proto, Error};
 use serde_json::{json, Value};
 use tracing::{error, debug, info};
+use common::auth::Claims;
 use common::proto::user::{CaptchaImageRequest, VerifyPasswordRequest};
 use common::utils::verify_image_code;
 use crate::proxy::services::common::get_user_id_from_jwt;
 use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
-use crate::auth::jwt::UserInfo;
 
 /// 用户服务处理器
 #[derive(Clone)]
@@ -30,7 +30,7 @@ impl UserServiceHandler {
         method: &Method,
         path: &str,
         body: Value,
-        jwt_user_info: Option<UserInfo>,
+        jwt_user_info: Option<Claims>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理用户服务请求: {} {}", method, path);
         

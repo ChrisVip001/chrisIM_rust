@@ -8,11 +8,11 @@ use mongodb::{
 };
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::StreamExt;
-use tracing::log::{debug, warn};
+use tracing::log::{error};
 
 use common::config::AppConfig;
 use common::error::Error;
-use common::proto::message::{GroupMemSeq, Msg, MsgType, PlatformType};
+use common::proto::message::{GroupMemSeq, Msg, MsgType};
 
 use crate::message::{MsgRecBoxCleaner, MsgRecBoxRepo};
 use crate::mongodb::utils::to_doc;
@@ -53,10 +53,8 @@ impl MsgBox {
             .options(IndexOptions::builder().unique(false).build())
             .build();
         
-        if let Err(e) = mb.create_index(index_model, None).await {
-            warn!("创建 [receiver_id, seq] 索引失败: {}", e);
-        } else {
-            debug!("为消息接收箱创建 [receiver_id, seq] 索引");
+        if let Err(e) = mb.create_index(index_model).await {
+            error!("创建索引失败: {}", e);
         }
 
         // 创建 send_id 和 send_seq 的复合索引
@@ -65,10 +63,20 @@ impl MsgBox {
             .options(IndexOptions::builder().unique(false).build())
             .build();
         
-        if let Err(e) = mb.create_index(index_model, None).await {
-            warn!("创建 [send_id, send_seq] 索引失败: {}", e);
-        } else {
-            debug!("为消息接收箱创建 [send_id, send_seq] 索引");
+        if let Err(e) = mb.create_index(index_model).await {
+            error!("创建复合索引失败: {}", e);
+        }
+
+        // 创建复合索引
+        let index_model = IndexModel::builder()
+            .keys(doc! {
+                "group_id": 1,
+                "send_time": -1
+            })
+            .build();
+
+        if let Err(e) = mb.create_index(index_model).await {
+            error!("创建复合索引失败: {}", e);
         }
 
         Ok(Self { mb })
@@ -77,10 +85,9 @@ impl MsgBox {
 
 #[async_trait]
 impl MsgRecBoxRepo for MsgBox {
-    /// 保存单条消息到接收箱
+    /// 保存单条消息
     async fn save_message(&self, message: &Msg) -> Result<(), Error> {
-        self.mb.insert_one(to_doc(message)?, None).await?;
-
+        self.mb.insert_one(to_doc(message)?).await?;
         Ok(())
     }
 
@@ -107,34 +114,64 @@ impl MsgRecBoxRepo for MsgBox {
 
             messages.push(to_doc(&message)?);
         }
-        self.mb.insert_many(messages, None).await?;
+        self.mb.insert_many(messages).await?;
         Ok(())
     }
 
-    /// 根据消息ID删除单条消息
+    /// 删除单条消息
     async fn delete_message(&self, message_id: &str) -> Result<(), Error> {
         let query = doc! {"server_id": message_id};
-        self.mb.delete_one(query, None).await?;
+        self.mb.delete_one(query).await?;
         Ok(())
     }
 
     /// 根据用户ID和消息序列号批量删除消息
     async fn delete_messages(&self, user_id: &str, msg_seq: Vec<i64>) -> Result<(), Error> {
         let query = doc! {"receiver_id": user_id, "seq": {"$in": msg_seq}};
-        self.mb.delete_many(query, None).await?;
+        self.mb.delete_many(query).await?;
+        Ok(())
+    }
 
+    /// 撤回消息
+    /// 将指定消息标记为已撤回状态，并设置撤回时间和撤回者
+    async fn revoke_message(&self, message_id: &str, user_id: &str) -> Result<(), Error> {
+        let now = chrono::Utc::now().timestamp_millis();
+        
+        // 查询条件：消息ID匹配且发送者是当前用户
+        let query = doc! {
+            "server_id": message_id,
+            "send_id": user_id
+        };
+        
+        // 更新字段：标记为已撤回，设置撤回时间和撤回者
+        let update = doc! {
+            "$set": {
+                "is_revoked": true,
+                "revoke_time": now,
+                "revoked_by": user_id
+            }
+        };
+        
+        let result = self.mb.update_many(query, update).await?;
+        
+        // 检查是否有消息被更新
+        if result.modified_count == 0 {
+            return Err(Error::NotFound("消息不存在或无权撤回".to_string()));
+        }
+        
         Ok(())
     }
 
     /// 根据消息ID获取单条消息
     async fn get_message(&self, message_id: &str) -> Result<Option<Msg>, Error> {
-        let doc = self
+        let result = self
             .mb
-            .find_one(doc! {"server_id": message_id}, None)
+            .find_one(doc! {"server_id": message_id})
             .await?;
-        match doc {
-            None => Ok(None),
+
+        match result {
             Some(doc) => Ok(Some(Msg::try_from(doc)?)),
+            None => Ok(None),
         }
     }
 
@@ -155,25 +192,39 @@ impl MsgRecBoxRepo for MsgBox {
         };
 
         // 按序列号排序
-        let option = FindOptions::builder().sort(Some(doc! {"seq": 1})).build();
+        let option = FindOptions::builder().sort(doc! {"seq": 1}).build();
 
         // 执行查询
-        let mut cursor = self.mb.find(query, Some(option)).await?;
+        let mut cursor = self.mb.find(query).with_options(option).await?;
+
         let (tx, rx) = mpsc::channel(100);
-        while let Some(result) = cursor.next().await {
-            match result {
-                Ok(doc) => {
-                    if tx.send(Ok(Msg::try_from(doc)?)).await.is_err() {
-                        break;
+
+        tokio::spawn(async move {
+            while let Some(result) = cursor.next().await {
+                match result {
+                    Ok(doc) => {
+                        match Msg::try_from(doc) {
+                            Ok(msg) => {
+                                if tx.send(Ok(msg)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                if tx.send(Err(e.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
                     }
-                }
-                Err(e) => {
-                    if tx.send(Err(e.into())).await.is_err() {
-                        break;
+                    Err(e) => {
+                        if tx.send(Err(e.into())).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
-        }
+        });
+
         Ok(rx)
     }
 
@@ -189,10 +240,10 @@ impl MsgRecBoxRepo for MsgBox {
         };
 
         // 按序列号排序
-        let option = FindOptions::builder().sort(Some(doc! {"seq": 1})).build();
+        let option = FindOptions::builder().sort(doc! {"seq": 1}).build();
 
         // 执行查询
-        let mut cursor = self.mb.find(query, Some(option)).await?;
+        let mut cursor = self.mb.find(query).with_options(option).await?;
         let mut messages = Vec::with_capacity((end - start) as usize);
         while let Some(result) = cursor.next().await {
             let msg = Msg::try_from(result?)?;
@@ -249,7 +300,7 @@ impl MsgRecBoxRepo for MsgBox {
 
         let len = send_end - send_start + (rec_end - rec_start);
         // 执行聚合查询
-        let mut cursor = self.mb.aggregate(pipeline, None).await?;
+        let mut cursor = self.mb.aggregate(pipeline).await?;
 
         let mut messages = Vec::with_capacity((len) as usize);
         while let Some(result) = cursor.next().await {
@@ -271,40 +322,10 @@ impl MsgRecBoxRepo for MsgBox {
         }
         let query = doc! {"receiver_id":{"$eq":user_id},"seq":{"$in":msg_seq}};
         let update = doc! {"$set":{"is_read":true}};
-        self.mb.update_many(query, update, None).await?;
+        self.mb.update_many(query, update).await?;
         Ok(())
     }
-    
-    /// 撤回消息
-    /// 将指定消息标记为已撤回状态，并设置撤回时间和撤回者
-    async fn revoke_message(&self, message_id: &str, user_id: &str) -> Result<(), Error> {
-        let now = chrono::Utc::now().timestamp_millis();
-        
-        // 查询条件：消息ID匹配且发送者是当前用户
-        let query = doc! {
-            "server_id": message_id,
-            "send_id": user_id
-        };
-        
-        // 更新字段：标记为已撤回，设置撤回时间和撤回者
-        let update = doc! {
-            "$set": {
-                "is_revoked": true,
-                "revoke_time": now,
-                "revoked_by": user_id
-            }
-        };
-        
-        let result = self.mb.update_many(query, update, None).await?;
-        
-        // 检查是否有消息被更新
-        if result.modified_count == 0 {
-            return Err(Error::NotFound("消息不存在或无权撤回".to_string()));
-        }
-        
-        Ok(())
-    }
-    
+
     /// 根据消息ID删除消息（支持批量）
     async fn delete_messages_by_ids(&self, user_id: &str, message_ids: &[String]) -> Result<i32, Error> {
         if message_ids.is_empty() {
@@ -317,7 +338,7 @@ impl MsgRecBoxRepo for MsgBox {
             "receiver_id": user_id
         };
         
-        let result = self.mb.delete_many(query, None).await?;
+        let result = self.mb.delete_many(query).await?;
         Ok(result.deleted_count as i32)
     }
 
@@ -351,7 +372,7 @@ impl MsgRecBoxRepo for MsgBox {
             .build();
 
         // 执行查询
-        let mut cursor = self.mb.find(filter, options).await?;
+        let mut cursor = self.mb.find(filter).with_options(options).await?;
         
         // 收集结果
         let mut messages = Vec::new();
@@ -384,7 +405,6 @@ impl MsgRecBoxCleaner for MsgBox {
                             "send_time": { "$lt": cutoff_time },
                             "msg_type": { "$nin": types.clone()}
                         },
-                        None,
                     )
                     .await;
 
@@ -447,7 +467,7 @@ mod tests {
         let msg = get_test_msg(msg_id.to_string());
         // save it into mongodb
         msg_box.save_message(&msg).await.unwrap();
-        let msg = msg_box.get_message(msg_id).await.unwrap();
+        let msg = msg_box.get_message_by_id(msg_id).await.unwrap();
         assert!(msg.is_some());
         assert_eq!(msg.unwrap().server_id, msg_id);
     }
@@ -463,7 +483,7 @@ mod tests {
         // delete it
         msg_box.delete_message(msg_id).await.unwrap();
 
-        let msg = msg_box.get_message(msg_id).await.unwrap();
+        let msg = msg_box.get_message_by_id(msg_id).await.unwrap();
         assert!(msg.is_none());
     }
 
@@ -514,17 +534,17 @@ mod tests {
 
         // delete it
         msg_box
-            .delete_messages("111", msg_seq.clone())
+            .delete_messages(msg_id.clone())
             .await
             .unwrap();
 
-        let msg = msg_box.get_message(&msg_id[0]).await.unwrap();
+        let msg = msg_box.get_message_by_id(&msg_id[0]).await.unwrap();
         assert!(msg.is_none());
 
-        let msg = msg_box.get_message(&msg_id[1]).await.unwrap();
+        let msg = msg_box.get_message_by_id(&msg_id[1]).await.unwrap();
         assert!(msg.is_none());
 
-        let msg = msg_box.get_message(&msg_id[2]).await.unwrap();
+        let msg = msg_box.get_message_by_id(&msg_id[2]).await.unwrap();
         assert!(msg.is_none());
     }
 }

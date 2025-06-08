@@ -74,7 +74,7 @@ impl Drop for MongoDbTester {
         thread::spawn(move || {
             Runtime::new().unwrap().block_on(async move {
                 let client = mongodb::Client::with_uri_str(server_url).await.unwrap();
-                if let Err(e) = client.database(&dbname).drop(None).await {
+                if let Err(e) = client.database(&dbname).drop().await {
                     println!("drop database error: {}", e);
                 }
                 println!("drop trait over{}", dbname);

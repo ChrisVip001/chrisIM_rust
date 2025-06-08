@@ -75,8 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .field_attribute(".messages.MsgRead", "#[serde(default)]");
         }
 
-        config.compile(
-            // 指定要编译的proto文件路径
+        config.compile_protos(
             &[format!("proto/{}", proto_file)],
             // 指定proto文件的搜索路径，用于解析import语句
             // 当proto文件中有import其他proto文件时，编译器会在这些路径中查找

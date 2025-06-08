@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
+use tonic::transport::channel::Change as TonicChange;
 // 导入密码散列相关依赖
 use crate::grpc_client::client_factory::ClientFactory;
 use async_trait::async_trait;
@@ -16,7 +17,6 @@ use crate::service_discovery::{DynamicServiceDiscovery, LbWithServiceDiscovery, 
 
 // 重新导出服务注册中心模块
 pub use crate::service_register_center::{service_register_center, typos, ServiceRegister};
-
 
 /// 服务解析器，用于从服务注册中心获取服务信息
 pub struct ServiceResolver {
@@ -58,16 +58,39 @@ impl ServiceResolver {
 ///
 /// 简化版的获取通道函数，使用应用配置和服务名称
 pub async fn get_chan(config: &AppConfig, name: String) -> Result<LbWithServiceDiscovery, Error> {
-    let (channel, sender) = Channel::balance_channel(1024);
+    let (channel, tonic_sender) = Channel::balance_channel(1024);
+
+    // 创建一个 tower::discover::Change 的转换器
+    let (tower_sender, mut tower_receiver) = tokio::sync::mpsc::channel::<tower::discover::Change<SocketAddr, Endpoint>>(1024);
+    
+    // 启动一个任务来转换 tower::discover::Change 到 tonic Change
+    let tonic_sender_clone = tonic_sender.clone();
+    tokio::spawn(async move {
+        while let Some(change) = tower_receiver.recv().await {
+            // 使用正确的 tonic Change 类型
+            let tonic_change = match change {
+                tower::discover::Change::Insert(key, value) => {
+                    TonicChange::Insert(key, value)
+                }
+                tower::discover::Change::Remove(key) => {
+                    TonicChange::Remove(key)
+                }
+            };
+            
+            if let Err(_) = tonic_sender_clone.send(tonic_change).await {
+                break;
+            }
+        }
+    });
 
     // 创建 ServiceResolver
     let service_resolver = ServiceResolver::new(service_register_center(config), name.clone());
 
-    // 创建 DynamicServiceDiscovery
+    // 创建 DynamicServiceDiscovery，使用 tower_sender
     let mut discovery = DynamicServiceDiscovery::new(
         service_resolver,
         Duration::from_secs(30),
-        sender,
+        tower_sender,
         config.service_center.protocol.clone(),
     );
 

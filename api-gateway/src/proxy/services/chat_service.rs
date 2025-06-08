@@ -1,8 +1,4 @@
-use super::common::{
-    error_response, extract_string_param, get_i64_param, get_optional_string, get_user_id_from_jwt,
-    success_response,
-};
-use crate::auth::jwt::UserInfo;
+use super::common::{error_response, extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
 use axum::{
     body::Body,
     http::{Method, Response, StatusCode},
@@ -17,6 +13,7 @@ use common::proto::message::{
 use common::service_discovery::LbWithServiceDiscovery;
 use serde_json::{json, Value};
 use tracing::{debug, error};
+use common::auth::Claims;
 
 /// 聊天服务处理器
 #[derive(Clone)]
@@ -36,22 +33,25 @@ impl ChatServiceHandler {
         method: &Method,
         path: &str,
         body: Value,
-        jwt_user_info: Option<UserInfo>,
+        jwt_user_info: Option<Claims>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理聊天服务请求: {} {}", method, path);
 
         // 从JWT中获取用户ID
         let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+        
+        // 从JWT中获取当前登录平台
+        let current_platform = get_platform_from_jwt(jwt_user_info.as_ref())?;
 
         // 从路径提取方法名 - 格式: /api/chat/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
 
         match (method, method_name) {
             // 发送单聊消息
-            (&Method::POST, "send") => self.send_message(&current_user_id, body).await,
+            (&Method::POST, "send") => self.send_message(&current_user_id, body, current_platform).await,
 
             // 发送群聊消息
-            (&Method::POST, "sendGroup") => self.send_group_message(&current_user_id, body).await,
+            (&Method::POST, "sendGroup") => self.send_group_message(&current_user_id, body, current_platform).await,
 
             // 标记消息已读
             (&Method::POST, "read") | (&Method::POST, "markAsRead") => {
@@ -98,6 +98,7 @@ impl ChatServiceHandler {
         &mut self,
         sender_id: &str,
         body: Value,
+        platform: i32,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("发送单聊消息请求: {}", body);
 
@@ -108,8 +109,6 @@ impl ChatServiceHandler {
         // 提取可选参数
         let content_type_str = get_optional_string(&body, "contentType", Some("content_type"))
             .unwrap_or_else(|| "Text".to_string());
-        let platform_str = get_optional_string(&body, "platform", Some("platform"))
-            .unwrap_or_else(|| "Desktop".to_string());
         let local_id = get_optional_string(&body, "localId", Some("local_id"))
             .unwrap_or_else(|| format!("local_{}", Utc::now().timestamp_millis()));
         let related_msg_id = get_optional_string(&body, "relatedMsgId", Some("related_msg_id"));
@@ -140,14 +139,10 @@ impl ChatServiceHandler {
             "Audio" => ContentType::Audio as i32,
             "Video" => ContentType::Video as i32,
             "File" => ContentType::File as i32,
-            _ => ContentType::Text as i32,
-        };
-
-        // 解析平台类型
-        let platform = match platform_str.as_str() {
-            "Desktop" => PlatformType::Desktop as i32,
-            "Mobile" => PlatformType::Mobile as i32,
-            _ => PlatformType::Desktop as i32,
+            "Emoji" => ContentType::Emoji as i32,
+            "VideoCall" => ContentType::VideoCall as i32,
+            "AudioCall" => ContentType::AudioCall as i32,
+            _ => ContentType::Default as i32,
         };
 
         // 构建消息对象
@@ -197,6 +192,7 @@ impl ChatServiceHandler {
         &mut self,
         sender_id: &str,
         body: Value,
+        platform: i32,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("发送群聊消息请求: {}", body);
 
@@ -207,8 +203,6 @@ impl ChatServiceHandler {
         // 提取可选参数
         let content_type_str = get_optional_string(&body, "contentType", Some("content_type"))
             .unwrap_or_else(|| "Text".to_string());
-        let platform_str = get_optional_string(&body, "platform", Some("platform"))
-            .unwrap_or_else(|| "Desktop".to_string());
         let local_id = get_optional_string(&body, "localId", Some("local_id"))
             .unwrap_or_else(|| format!("local_{}", Utc::now().timestamp_millis()));
         let related_msg_id = get_optional_string(&body, "relatedMsgId", Some("related_msg_id"));
@@ -233,13 +227,6 @@ impl ChatServiceHandler {
             "Video" => ContentType::Video as i32,
             "File" => ContentType::File as i32,
             _ => ContentType::Text as i32,
-        };
-
-        // 解析平台类型
-        let platform = match platform_str.as_str() {
-            "Desktop" => PlatformType::Desktop as i32,
-            "Mobile" => PlatformType::Mobile as i32,
-            _ => PlatformType::Desktop as i32,
         };
 
         // 构建群聊消息对象

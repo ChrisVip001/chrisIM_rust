@@ -9,7 +9,7 @@ use prost_types::Timestamp;
 use serde_json::{json, Value};
 use regex::Regex;
 use once_cell::sync::Lazy;
-use crate::auth::jwt::UserInfo;
+use common::auth::Claims;
 
 // 预编译正则表达式，匹配gRPC错误消息格式
 static GRPC_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -143,11 +143,18 @@ pub fn extract_i64_param(body: &Value, param_name: &str, alt_name: Option<&str>)
 }
 
 /// 从JWT用户信息中获取用户ID（字符串类型）
-pub fn get_user_id_from_jwt(jwt_user_info: Option<&UserInfo>) -> Result<String, anyhow::Error> {
+pub fn get_user_id_from_jwt(jwt_user_info: Option<&Claims>) -> Result<String, anyhow::Error> {
     Ok(jwt_user_info
         .ok_or_else(|| anyhow::anyhow!("用户未登录"))?
-        .user_id
+        .sub
         .to_string())
+}
+
+/// 从JWT用户信息中获取用户登录平台
+pub fn get_platform_from_jwt(jwt_user_info: Option<&Claims>) -> Result<i32, anyhow::Error> {
+    Ok(jwt_user_info
+        .ok_or_else(|| anyhow::anyhow!("用户未登录"))?
+        .platform)
 }
 
 /// 时间戳转换为RFC3339格式的字符串

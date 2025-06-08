@@ -1,4 +1,5 @@
-use crate::proto::message::{GetDbMessagesRequest, GetDbMsgRequest, GroupMemSeq, Msg, MsgResponse, MsgType, SaveGroupMsgRequest, SaveMessageRequest, SendMsgRequest, UserAndGroupId};
+use std::fmt;
+use crate::proto::message::{GetDbMessagesRequest, GetDbMsgRequest, GroupMemSeq, Msg, MsgResponse, MsgType, PlatformType, SaveGroupMsgRequest, SaveMessageRequest, SendMsgRequest, UserAndGroupId};
 use crate::Error;
 use mongodb::bson::Document;
 use tonic::Status;

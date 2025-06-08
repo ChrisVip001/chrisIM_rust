@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
     // 创建反射服务
     let reflection_service = ReflectionBuilder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
-        .build()?;
+        .build_v1()?;
 
     // 创建日志拦截器
     let logging_interceptor = LoggingInterceptor::new();

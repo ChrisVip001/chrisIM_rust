@@ -9,10 +9,9 @@ use common::config::ConfigLoader;
 use serde_json::json;
 use std::sync::Arc;
 use tracing::{debug, warn};
-
-use crate::auth::controller::PlatformType;
-use crate::auth::jwt;
+use common::auth::jwt;
 use crate::middleware::get_client_ip;
+use crate::proxy::services::common::error_response;
 
 /// 认证中间件
 pub async fn auth_middleware(
@@ -22,16 +21,7 @@ pub async fn auth_middleware(
 ) -> Response {
     let config = match ConfigLoader::get_global() {
         Some(config) => config,
-        None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "config_error",
-                    "message": "服务器配置错误"
-                })),
-            )
-                .into_response();
-        }
+        None => return error_response("获取配置错误！", StatusCode::SERVICE_UNAVAILABLE),
     };
 
     // 检查路径是否在白名单中
@@ -47,7 +37,7 @@ pub async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // 检查IP是否在黑名单中
+    // TODO 检查IP是否在黑名单中
     let client_ip = get_client_ip(&req);
 
     // 获取JWT配置
@@ -57,18 +47,7 @@ pub async fn auth_middleware(
     let token = match jwt::extract_token(&req, &jwt_config.header_name, &jwt_config.header_prefix) {
         Some(token) => token,
         None => {
-            warn!(
-                "JWT认证失败: 路径={}, IP={}, 原因=缺少认证令牌",
-                path, client_ip
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "unauthorized",
-                    "message": "缺少认证令牌"
-                })),
-            )
-                .into_response();
+            return error_response("缺少认证令牌", StatusCode::UNAUTHORIZED);
         }
     };
 
@@ -76,85 +55,34 @@ pub async fn auth_middleware(
     let user_info = match jwt::verify_token(&token, jwt_config) {
         Ok(user_info) => user_info,
         Err(e) => {
-            warn!("JWT认证失败: 路径={}, IP={}, 原因={}", path, client_ip, e);
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "unauthorized",
-                    "message": "无效的认证令牌"
-                })),
-            )
-                .into_response();
+            return error_response("令牌验证失败", StatusCode::UNAUTHORIZED)
         }
     };
 
     // 从JWT token中提取平台信息，而不是从请求头
-    let platform = user_info.extra
-        .get("platform")
-        .map(|platform_str| PlatformType::from(platform_str.as_str()))
-        .unwrap_or(PlatformType::Unknown);
-    let platform_str = platform.as_str();
-
-    debug!(
-        "认证中间件: 用户ID={}, 平台={}",
-        user_info.user_id, platform_str
-    );
+    let platform = user_info.platform;
 
     // 验证Redis中的token是否存在且匹配
-    let user_id_str = user_info.user_id.to_string();
     match cache_instance
-        .get_access_token_for_platform(&user_id_str, platform_str)
+        .get_access_token_for_platform(&user_info.sub, platform)
         .await
     {
         Ok(Some(stored_token)) => {
             if stored_token != token {
-                warn!(
-                    "Token校验失败: 用户ID={}, 平台={}, 路径={}, IP={}, 原因=Redis中的token与请求token不匹配",
-                    user_info.user_id, platform_str, path, client_ip
-                );
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "error": "token_mismatch",
-                        "message": "令牌已失效，请重新登录"
-                    })),
-                )
-                    .into_response();
+                return error_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
             }
         }
         Ok(None) => {
-            warn!(
-                "Token校验失败: 用户ID={}, 平台={}, 路径={}, IP={}, 原因=Redis中未找到有效token",
-                user_info.user_id, platform_str, path, client_ip
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "token_not_found",
-                    "message": "令牌已过期或已注销，请重新登录"
-                })),
-            )
-                .into_response();
+            return error_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
         }
-        Err(e) => {
-            warn!(
-                "Redis token校验错误: 用户ID={}, 平台={}, 路径={}, IP={}, 错误={}",
-                user_info.user_id, platform_str, path, client_ip, e
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "token_validation_error",
-                    "message": "令牌验证服务错误"
-                })),
-            )
-                .into_response();
+        Err(_) => {
+            return error_response("令牌验证服务错误", StatusCode::UNAUTHORIZED);
         }
     }
 
     debug!(
         "认证成功: 用户ID={}, 用户名={}, 平台={}, 路径={}",
-        user_info.user_id, user_info.username, platform_str, path
+        user_info.sub, user_info.username, platform, path
     );
 
     // 将用户信息和平台信息添加到请求扩展中

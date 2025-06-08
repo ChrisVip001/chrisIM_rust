@@ -8,7 +8,7 @@ common = { path = "../common", features = ["dynamic-config"]}
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true }
-tonic-health = "0.11.0"
+tonic-health = { workspace = true}
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -21,4 +21,4 @@ prost-types = { workspace = true }
 redis = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
-base64 = "0.21"
+base64 = {  workspace = true}

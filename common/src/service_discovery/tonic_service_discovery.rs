@@ -3,10 +3,8 @@ use std::net::SocketAddr;
 use std::task::{Context, Poll};
 
 use tokio::sync::mpsc;
-use tonic::body::BoxBody;
 use tonic::client::GrpcService;
 use tonic::transport::{Channel, Endpoint};
-use tower::discover::Change;
 use tracing::{error, warn};
 
 use crate::Error;
@@ -22,10 +20,10 @@ pub struct LbWithServiceDiscovery(pub Channel);
 /// 为自定义负载均衡器实现 tower 服务特征
 ///
 /// 这使得 LbWithServiceDiscovery 可以被用作 gRPC 客户端通道
-impl tower::Service<http::Request<BoxBody>> for LbWithServiceDiscovery {
-    type Response = http::Response<<Channel as GrpcService<BoxBody>>::ResponseBody>;
-    type Error = <Channel as GrpcService<BoxBody>>::Error;
-    type Future = <Channel as GrpcService<BoxBody>>::Future;
+impl tower::Service<http::Request<tonic::body::Body>> for LbWithServiceDiscovery {
+    type Response = http::Response<<Channel as GrpcService<tonic::body::Body>>::ResponseBody>;
+    type Error = <Channel as GrpcService<tonic::body::Body>>::Error;
+    type Future = <Channel as GrpcService<tonic::body::Body>>::Future;
 
     /// 检查服务是否准备好处理请求
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -33,7 +31,7 @@ impl tower::Service<http::Request<BoxBody>> for LbWithServiceDiscovery {
     }
 
     /// 处理请求
-    fn call(&mut self, request: http::Request<BoxBody>) -> Self::Future {
+    fn call(&mut self, request: http::Request<tonic::body::Body>) -> Self::Future {
         GrpcService::call(&mut self.0, request)
     }
 }
@@ -45,7 +43,7 @@ pub struct DynamicServiceDiscovery<Fetcher: ServiceFetcher> {
     // 当前已知的服务地址集合
     services: HashSet<SocketAddr>,
     // 用于发送服务变更通知的 mpsc 发送端
-    sender: mpsc::Sender<Change<SocketAddr, Endpoint>>,
+    sender: mpsc::Sender<tower::discover::Change<SocketAddr, Endpoint>>,
     // 服务发现的间隔时间
     dis_interval: tokio::time::Duration,
     // 服务获取器，用于从服务注册中心获取服务
@@ -65,7 +63,7 @@ impl<Fetcher: ServiceFetcher> DynamicServiceDiscovery<Fetcher> {
     pub fn new(
         service_center: Fetcher,
         dis_interval: tokio::time::Duration,
-        sender: mpsc::Sender<Change<SocketAddr, Endpoint>>,
+        sender: mpsc::Sender<tower::discover::Change<SocketAddr, Endpoint>>,
         schema: String,
     ) -> Self {
         Self {
@@ -99,17 +97,17 @@ impl<Fetcher: ServiceFetcher> DynamicServiceDiscovery<Fetcher> {
     async fn change_set(
         &self,
         endpoints: &HashSet<SocketAddr>,
-    ) -> Vec<Change<SocketAddr, Endpoint>> {
+    ) -> Vec<tower::discover::Change<SocketAddr, Endpoint>> {
         let mut changes = Vec::new();
         // 添加新增的服务
         for s in endpoints.difference(&self.services) {
             if let Some(endpoint) = self.build_endpoint(*s).await {
-                changes.push(Change::Insert(*s, endpoint));
+                changes.push(tower::discover::Change::Insert(*s, endpoint));
             }
         }
         // 移除不再存在的服务
         for s in self.services.difference(endpoints) {
-            changes.push(Change::Remove(*s));
+            changes.push(tower::discover::Change::Remove(*s));
         }
         changes
     }

@@ -2,7 +2,6 @@ use axum::http::Request;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Validation, Algorithm, Header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::Error;
 use crate::configs::auth_config::JwtConfig;
@@ -35,32 +34,17 @@ pub struct Claims {
     
     /// 租户ID
     /// 业务字段，用于多租户支持
-    pub tenant_id: i64,
+    pub tenant_id: String,
     
     /// 租户名称
     /// 业务字段，租户的显示名称
     pub tenant_name: String,
     
+    /// 登录平台
+    pub platform: i32,
+    
     /// 额外信息
     /// 业务字段，存储其他自定义信息
-    #[serde(default)]
-    pub extra: HashMap<String, String>,
-}
-
-/// 用户信息结构
-/// 
-/// 从 JWT token 中解析出的用户信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserInfo {
-    /// 用户ID
-    pub user_id: i64,
-    /// 用户名
-    pub username: String,
-    /// 租户ID
-    pub tenant_id: i64,
-    /// 租户名称
-    pub tenant_name: String,
-    /// 额外信息
     #[serde(default)]
     pub extra: HashMap<String, String>,
 }
@@ -78,15 +62,6 @@ pub struct UserInfo {
 /// # 返回值
 /// * `Some(String)` - 成功提取的 token
 /// * `None` - 未找到或格式不正确
-/// 
-/// # 示例
-/// ```rust
-/// use axum::http::Request;
-/// use common::auth::extract_token;
-/// 
-/// // 从 Authorization: Bearer <token> 中提取 token
-/// let token = extract_token(&request, "Authorization", "Bearer ");
-/// ```
 pub fn extract_token<B>(
     request: &Request<B>,
     header_name: &str,
@@ -115,12 +90,12 @@ pub fn extract_token<B>(
 /// * `jwt_config` - JWT 配置信息
 /// 
 /// # 返回值
-/// * `Ok(UserInfo)` - 验证成功，返回用户信息
+/// * `Ok(Claims)` - 验证成功，返回用户信息
 /// * `Err(Error)` - 验证失败
 pub fn verify_token(
     token: &str,
     jwt_config: &JwtConfig,
-) -> Result<UserInfo, Error> {
+) -> Result<Claims, Error> {
     // 设置验证参数
     let mut validation = Validation::new(Algorithm::HS256);
     
@@ -151,20 +126,7 @@ pub fn verify_token(
         return Err(Error::TokenExpired);
     }
 
-    // 构建用户信息
-    let user_info = UserInfo {
-        user_id: token_data
-            .claims
-            .sub
-            .parse::<i64>()
-            .map_err(|_| Error::InvalidToken)?,
-        username: token_data.claims.username,
-        tenant_id: token_data.claims.tenant_id,
-        tenant_name: token_data.claims.tenant_name,
-        extra: token_data.claims.extra,
-    };
-
-    Ok(user_info)
+    Ok(token_data.claims)
 }
 
 /// 简化的 token 验证函数
@@ -201,26 +163,12 @@ pub fn verify_token_simple(
 /// # 返回值
 /// * `Ok(String)` - 生成的 token
 /// * `Err(Error)` - 生成失败
-/// 
-/// # 示例
-/// ```rust
-/// use std::collections::HashMap;
-/// use common::auth::generate_token;
-/// 
-/// let token = generate_token(
-///     123,
-///     "john_doe",
-///     1,
-///     "default_tenant",
-///     HashMap::new(),
-///     &jwt_config
-/// )?;
-/// ```
 pub fn generate_token(
-    user_id: i64,
+    user_id: &str,
     username: &str,
-    tenant_id: i64,
+    tenant_id: String,
     tenant_name: &str,
+    platform: i32,
     extra: HashMap<String, String>,
     jwt_config: &JwtConfig,
 ) -> Result<String, Error> {
@@ -232,13 +180,14 @@ pub fn generate_token(
 
     // 创建统一的 Claims 结构
     let claims = Claims {
-        sub: user_id.to_string(),
+        sub: user_id.parse().unwrap(),
         iss: Some(jwt_config.issuer.clone()),
         exp: now + jwt_config.expiry_seconds,
         iat: now,
         username: username.to_string(),
         tenant_id,
         tenant_name: tenant_name.to_string(),
+        platform,
         extra,
     };
 
@@ -268,26 +217,12 @@ pub fn generate_token(
 /// # 返回值
 /// * `Ok(String)` - 生成的刷新 token
 /// * `Err(Error)` - 生成失败
-/// 
-/// # 示例
-/// ```rust
-/// use std::collections::HashMap;
-/// use common::auth::generate_refresh_token;
-/// 
-/// let refresh_token = generate_refresh_token(
-///     123,
-///     "john_doe",
-///     1,
-///     "default_tenant",
-///     HashMap::new(),
-///     &jwt_config
-/// )?;
-/// ```
 pub fn generate_refresh_token(
-    user_id: i64,
+    user_id: &str,
     username: &str,
-    tenant_id: i64,
+    tenant_id: String,
     tenant_name: &str,
+    platform: i32,
     extra: HashMap<String, String>,
     jwt_config: &JwtConfig,
 ) -> Result<String, Error> {
@@ -299,13 +234,14 @@ pub fn generate_refresh_token(
 
     // 创建统一的 Claims 结构 (刷新令牌使用更长的过期时间)
     let claims = Claims {
-        sub: user_id.to_string(),
+        sub: user_id.parse().unwrap(),
         iss: Some(jwt_config.issuer.clone()),
         exp: now + jwt_config.refresh_expiry_seconds,
         iat: now,
         username: username.to_string(),
         tenant_id,
         tenant_name: tenant_name.to_string(),
+        platform,
         extra,
     };
 
