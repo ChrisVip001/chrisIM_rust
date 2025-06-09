@@ -79,6 +79,19 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
     /// 根据用户ID和消息序列号更新消息已读状态
     async fn msg_read(&self, user_id: &str, msg_seq: &[i64]) -> Result<(), Error>;
 
+    /// 根据会话ID标记所有消息为已读
+    /// 将指定会话中的所有消息（或到指定时间戳的消息）标记为已读
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `conversation_id` - 会话ID（单聊时是对方用户ID，群聊时是群组ID）
+    /// * `up_to_time` - 标记到此时间戳之前的所有消息为已读（可选，None表示所有消息）
+    /// 
+    /// # 返回值
+    /// * `Ok(i32)` - 标记已读的消息数量
+    /// * `Err(Error)` - 标记失败的错误信息
+    async fn mark_conversation_read(&self, user_id: &str, conversation_id: &str, up_to_time: Option<i64>) -> Result<i32, Error>;
+
     /// 根据消息ID删除消息（支持批量）
     async fn delete_messages_by_ids(&self, user_id: &str, message_ids: &[String]) -> Result<i32, Error>;
 

@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use async_trait::async_trait;
+use futures::stream::TryStreamExt;
 use mongodb::options::{FindOptions, IndexOptions};
 use mongodb::{
     bson::{doc, Document},
@@ -326,6 +327,41 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(())
     }
 
+    /// 根据会话ID标记所有消息为已读
+    async fn mark_conversation_read(&self, user_id: &str, conversation_id: &str, up_to_time: Option<i64>) -> Result<i32, Error> {
+        // 构建查询条件
+        let mut query = doc! {
+            "receiver_id": user_id,
+            "is_read": false, // 只标记未读消息
+            "is_revoked": false, // 不标记已撤回的消息
+        };
+
+        // 根据消息类型确定会话匹配条件
+        // 对于群聊消息，group_id 等于 conversation_id
+        // 对于单聊消息，send_id 等于 conversation_id（对方的用户ID）
+        query.insert("$or", vec![
+            doc! {
+                "group_id": conversation_id,
+                "msg_type": MsgType::GroupMsg as i32
+            },
+            doc! {
+                "send_id": conversation_id,
+                "msg_type": MsgType::SingleMsg as i32
+            }
+        ]);
+
+        // 如果指定了时间范围，只标记该时间之前的消息
+        if let Some(time) = up_to_time {
+            query.insert("send_time", doc! {"$lte": time});
+        }
+
+        // 执行更新操作
+        let update = doc! {"$set": {"is_read": true}};
+        let result = self.mb.update_many(query, update).await?;
+        
+        Ok(result.modified_count as i32)
+    }
+
     /// 根据消息ID删除消息（支持批量）
     async fn delete_messages_by_ids(&self, user_id: &str, message_ids: &[String]) -> Result<i32, Error> {
         if message_ids.is_empty() {
@@ -376,7 +412,7 @@ impl MsgRecBoxRepo for MsgBox {
         
         // 收集结果
         let mut messages = Vec::new();
-        while let Some(doc) = cursor.try_next().await? {
+        while let Some(doc) = TryStreamExt::try_next(&mut cursor).await? {
             messages.push(Msg::try_from(doc)?);
         }
 
@@ -459,7 +495,6 @@ mod tests {
             }
         }
     }
-
     #[tokio::test]
     async fn mongodb_insert_and_get_works() {
         let msg_box = TestConfig::new().await;
@@ -467,7 +502,7 @@ mod tests {
         let msg = get_test_msg(msg_id.to_string());
         // save it into mongodb
         msg_box.save_message(&msg).await.unwrap();
-        let msg = msg_box.get_message_by_id(msg_id).await.unwrap();
+        let msg = msg_box.get_message(msg_id).await.unwrap();
         assert!(msg.is_some());
         assert_eq!(msg.unwrap().server_id, msg_id);
     }
@@ -483,7 +518,7 @@ mod tests {
         // delete it
         msg_box.delete_message(msg_id).await.unwrap();
 
-        let msg = msg_box.get_message_by_id(msg_id).await.unwrap();
+        let msg = msg_box.get_message(msg_id).await.unwrap();
         assert!(msg.is_none());
     }
 
@@ -534,17 +569,17 @@ mod tests {
 
         // delete it
         msg_box
-            .delete_messages(msg_id.clone())
+            .delete_messages("111", msg_seq.clone())
             .await
             .unwrap();
 
-        let msg = msg_box.get_message_by_id(&msg_id[0]).await.unwrap();
+        let msg = msg_box.get_message(&msg_id[0]).await.unwrap();
         assert!(msg.is_none());
 
-        let msg = msg_box.get_message_by_id(&msg_id[1]).await.unwrap();
+        let msg = msg_box.get_message(&msg_id[1]).await.unwrap();
         assert!(msg.is_none());
 
-        let msg = msg_box.get_message_by_id(&msg_id[2]).await.unwrap();
+        let msg = msg_box.get_message(&msg_id[2]).await.unwrap();
         assert!(msg.is_none());
     }
 }

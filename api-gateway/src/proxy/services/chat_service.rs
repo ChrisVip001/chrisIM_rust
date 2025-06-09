@@ -7,7 +7,7 @@ use chrono::Utc;
 use common::proto::message::chat_service_client::ChatServiceClient;
 use common::proto::message::{
     ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest,
-    GetMessageHistoryRequest, MarkMessagesAsReadRequest, Msg, MsgType, PlatformType,
+    GetMessageHistoryRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, PlatformType,
     ReplyMessageRequest, RevokeMessageRequest, SendMsgRequest,
 };
 use common::service_discovery::LbWithServiceDiscovery;
@@ -58,6 +58,11 @@ impl ChatServiceHandler {
                 self.mark_messages_as_read(&current_user_id, body).await
             }
 
+            // 标记会话已读
+            (&Method::POST, "markConversationAsRead") => {
+                self.mark_conversation_as_read(&current_user_id, body).await
+            }
+
             // 获取消息历史
             (&Method::GET, "history") => self.get_message_history(&current_user_id, body).await,
 
@@ -105,12 +110,10 @@ impl ChatServiceHandler {
         // 提取必需参数
         let receiver_id = extract_string_param(&body, "receiverId", Some("receiver_id"))?;
         let content = extract_string_param(&body, "content", Some("content"))?;
+        let local_id = extract_string_param(&body, "localId", Some("localId"))?;
+        let content_type_str = extract_string_param(&body, "contentType", Some("content_type"))?;
         
         // 提取可选参数
-        let content_type_str = get_optional_string(&body, "contentType", Some("content_type"))
-            .unwrap_or_else(|| "Text".to_string());
-        let local_id = get_optional_string(&body, "localId", Some("local_id"))
-            .unwrap_or_else(|| format!("local_{}", Utc::now().timestamp_millis()));
         let related_msg_id = get_optional_string(&body, "relatedMsgId", Some("related_msg_id"));
 
         // 验证参数
@@ -133,17 +136,9 @@ impl ChatServiceHandler {
         }
 
         // 解析内容类型
-        let content_type = match content_type_str.as_str() {
-            "Text" => ContentType::Text as i32,
-            "Image" => ContentType::Image as i32,
-            "Audio" => ContentType::Audio as i32,
-            "Video" => ContentType::Video as i32,
-            "File" => ContentType::File as i32,
-            "Emoji" => ContentType::Emoji as i32,
-            "VideoCall" => ContentType::VideoCall as i32,
-            "AudioCall" => ContentType::AudioCall as i32,
-            _ => ContentType::Default as i32,
-        };
+        let content_type = ContentType::from_str_name(&content_type_str)
+            .map(|ct| ct as i32)
+            .unwrap_or(ContentType::Text as i32);
 
         // 构建消息对象
         let msg = Msg {
@@ -181,7 +176,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("消息发送失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
                 ))
             }
         }
@@ -199,12 +194,10 @@ impl ChatServiceHandler {
         // 提取必需参数
         let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
         let content = extract_string_param(&body, "content", Some("content"))?;
+        let local_id = extract_string_param(&body, "localId", Some("localId"))?;
+        let content_type_str = extract_string_param(&body, "contentType", Some("content_type"))?;
 
         // 提取可选参数
-        let content_type_str = get_optional_string(&body, "contentType", Some("content_type"))
-            .unwrap_or_else(|| "Text".to_string());
-        let local_id = get_optional_string(&body, "localId", Some("local_id"))
-            .unwrap_or_else(|| format!("local_{}", Utc::now().timestamp_millis()));
         let related_msg_id = get_optional_string(&body, "relatedMsgId", Some("related_msg_id"));
 
         // 验证参数
@@ -220,14 +213,9 @@ impl ChatServiceHandler {
         }
 
         // 解析内容类型
-        let content_type = match content_type_str.as_str() {
-            "Text" => ContentType::Text as i32,
-            "Image" => ContentType::Image as i32,
-            "Audio" => ContentType::Audio as i32,
-            "Video" => ContentType::Video as i32,
-            "File" => ContentType::File as i32,
-            _ => ContentType::Text as i32,
-        };
+        let content_type = ContentType::from_str_name(&content_type_str)
+            .map(|ct| ct as i32)
+            .unwrap_or(ContentType::Text as i32);
 
         // 构建群聊消息对象
         let msg = Msg {
@@ -265,7 +253,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("群聊消息发送失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
                 ))
             }
         }
@@ -307,7 +295,46 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("标记消息已读失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                ))
+            }
+        }
+    }
+
+    /// 标记会话已读
+    async fn mark_conversation_as_read(
+        &mut self,
+        user_id: &str,
+        body: Value,
+    ) -> Result<Response<Body>, anyhow::Error> {
+        debug!("标记会话已读请求: {}", body);
+
+        // 提取参数
+        let conversation_id = extract_string_param(&body, "conversationId", Some("conversation_id"))?;
+        let up_to_time = body
+            .get("upToTime")
+            .or_else(|| body.get("up_to_time"))
+            .and_then(|v| v.as_i64());
+
+        // 验证参数
+        if conversation_id.is_empty() {
+            return Ok(error_response("会话ID不能为空", StatusCode::BAD_REQUEST));
+        }
+
+        // 调用msg-server的gRPC接口标记会话已读
+        let request = MarkConversationAsReadRequest {
+            user_id: user_id.to_string(),
+            conversation_id,
+            up_to_time,
+        };
+
+        match self.client.mark_conversation_as_read(request).await {
+            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Err(err) => {
+                error!("调用聊天服务失败: {}", err);
+                Ok(error_response(
+                    &format!("标记会话已读失败: {}", err),
+                    StatusCode::SERVICE_UNAVAILABLE,
                 ))
             }
         }
@@ -355,7 +382,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("获取消息历史失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
                 ))
             }
         }
@@ -380,7 +407,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("获取会话列表失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
                 ))
             }
         }
@@ -419,7 +446,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("撤回消息失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
                 ))
             }
         }
@@ -471,7 +498,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("删除消息失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE,
                 ))
             }
         }
@@ -529,7 +556,7 @@ impl ChatServiceHandler {
             Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
             Err(e) => {
                 error!("转发消息失败: {}", e);
-                Ok(error_response("转发消息失败", StatusCode::INTERNAL_SERVER_ERROR))
+                Ok(error_response("转发消息失败", StatusCode::SERVICE_UNAVAILABLE))
             }
         }
     }
@@ -566,14 +593,9 @@ impl ChatServiceHandler {
         }
 
         // 解析内容类型
-        let content_type = match content_type_str {
-            "Text" => ContentType::Text as i32,
-            "Image" => ContentType::Image as i32,
-            "Audio" => ContentType::Audio as i32,
-            "Video" => ContentType::Video as i32,
-            "File" => ContentType::File as i32,
-            _ => ContentType::Text as i32,
-        };
+        let content_type = ContentType::from_str_name(&content_type_str)
+            .map(|ct| ct as i32)
+            .unwrap_or(ContentType::Text as i32);
 
         // 构建gRPC请求
         let request = ReplyMessageRequest {
@@ -589,7 +611,7 @@ impl ChatServiceHandler {
             Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
             Err(e) => {
                 error!("回复消息失败: {}", e);
-                Ok(error_response("回复消息失败", StatusCode::INTERNAL_SERVER_ERROR))
+                Ok(error_response("回复消息失败", StatusCode::SERVICE_UNAVAILABLE))
             }
         }
     }

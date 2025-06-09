@@ -19,6 +19,7 @@ use common::proto::message::chat_service_server::{ChatService, ChatServiceServer
 use common::proto::message::{
     MsgResponse, MsgType, SendMsgRequest, Msg,
     MarkMessagesAsReadRequest, MarkMessagesAsReadResponse,
+    MarkConversationAsReadRequest,
     GetMessageHistoryRequest, GetMessageHistoryResponse,
     GetConversationsRequest, GetConversationsResponse,
     RevokeMessageRequest, RevokeMessageResponse,
@@ -262,11 +263,9 @@ impl ChatService for ChatRpcService {
         }
         
         // 设置消息的服务器发送时间戳（毫秒级）
-        // 这个时间戳是服务器接收到消息的准确时间
         msg.send_time = chrono::Utc::now().timestamp_millis();
 
         // 将消息对象序列化为JSON字符串
-        // JSON格式便于跨语言处理和调试
         let payload = serde_json::to_string(&msg).unwrap();
         
         // 创建Kafka消息记录
@@ -290,15 +289,8 @@ impl ChatService for ChatRpcService {
             Err((kafka_error, _)) => {
                 error!("发送消息到Kafka失败: {}", kafka_error);
                 
-                // 返回错误响应
-                let response = MsgResponse {
-                    local_id: msg.local_id,
-                    server_id: msg.server_id,
-                    send_time: msg.send_time,
-                    err: format!("发送失败: {}", kafka_error),
-                };
-                
-                Ok(tonic::Response::new(response))
+                // 返回gRPC错误状态
+                Err(tonic::Status::internal(format!("消息发送失败: {}", kafka_error)))
             }
         }
     }
@@ -312,11 +304,7 @@ impl ChatService for ChatRpcService {
         debug!("标记消息已读请求: user_id={}, msg_seqs={:?}", req.user_id, req.msg_seqs);
 
         if req.msg_seqs.is_empty() {
-            return Ok(tonic::Response::new(MarkMessagesAsReadResponse {
-                success: false,
-                read_count: 0,
-                error: "消息序列号列表不能为空".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("消息序列号列表不能为空"));
         }
 
         // 调用消息存储服务标记消息已读
@@ -331,11 +319,42 @@ impl ChatService for ChatRpcService {
             }
             Err(e) => {
                 error!("标记消息已读失败: {}", e);
+                Err(tonic::Status::internal(format!("标记消息已读失败: {}", e)))
+            }
+        }
+    }
+    
+    /// 标记会话已读
+    async fn mark_conversation_as_read(
+        &self,
+        request: tonic::Request<MarkConversationAsReadRequest>,
+    ) -> Result<tonic::Response<MarkMessagesAsReadResponse>, tonic::Status> {
+        let req = request.into_inner();
+        debug!("标记会话已读请求: user_id={}, conversation_id={}, up_to_time={:?}", 
+               req.user_id, req.conversation_id, req.up_to_time);
+
+        // 验证参数
+        if req.user_id.is_empty() {
+            return Err(tonic::Status::invalid_argument("用户ID不能为空"));
+        }
+
+        if req.conversation_id.is_empty() {
+            return Err(tonic::Status::invalid_argument("会话ID不能为空"));
+        }
+
+        // 调用消息存储服务标记会话已读
+        match self.msg_storage.mark_conversation_read(&req.user_id, &req.conversation_id, req.up_to_time).await {
+            Ok(count) => {
+                debug!("成功标记会话 {} 中 {} 条消息为已读", req.conversation_id, count);
                 Ok(tonic::Response::new(MarkMessagesAsReadResponse {
-                    success: false,
-                    read_count: 0,
-                    error: format!("标记消息已读失败: {}", e),
+                    success: true,
+                    read_count: count,
+                    error: String::new(),
                 }))
+            }
+            Err(e) => {
+                error!("标记会话已读失败: {}", e);
+                Err(tonic::Status::internal(format!("标记会话已读失败: {}", e)))
             }
         }
     }
@@ -351,27 +370,11 @@ impl ChatService for ChatRpcService {
 
         // 验证参数
         if req.page < 1 {
-            return Ok(tonic::Response::new(GetMessageHistoryResponse {
-                messages: vec![],
-                has_more: false,
-                next_seq: 0,
-                conversation_id: req.conversation_id,
-                current_page: req.page,
-                page_size: req.page_size,
-                error: "页码必须大于0".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("页码必须大于0"))
         }
 
         if req.page_size < 1 || req.page_size > 100 {
-            return Ok(tonic::Response::new(GetMessageHistoryResponse {
-                messages: vec![],
-                has_more: false,
-                next_seq: 0,
-                conversation_id: req.conversation_id,
-                current_page: req.page,
-                page_size: req.page_size,
-                error: "每页数量必须在1-100之间".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("每页数量必须在1-100之间"))
         }
 
         // 获取用户当前序列号
@@ -379,15 +382,7 @@ impl ChatService for ChatRpcService {
             Ok(seqs) => seqs,
             Err(e) => {
                 error!("获取用户序列号失败: {}", e);
-                return Ok(tonic::Response::new(GetMessageHistoryResponse {
-                    messages: vec![],
-                    has_more: false,
-                    next_seq: 0,
-                    conversation_id: req.conversation_id,
-                    current_page: req.page,
-                    page_size: req.page_size,
-                    error: "获取用户序列号失败".to_string(),
-                }));
+                return Err(tonic::Status::internal(format!("获取用户序列号失败:{}",  e)))
             }
         };
 
@@ -422,15 +417,7 @@ impl ChatService for ChatRpcService {
             }
             Err(e) => {
                 error!("获取消息历史失败: {}", e);
-                Ok(tonic::Response::new(GetMessageHistoryResponse {
-                    messages: vec![],
-                    has_more: false,
-                    next_seq: 0,
-                    conversation_id: req.conversation_id,
-                    current_page: req.page,
-                    page_size: req.page_size,
-                    error: format!("获取消息历史失败: {}", e),
-                }))
+                Err(tonic::Status::internal(format!("获取消息历史失败:{}",  e)))
             }
         }
     }
@@ -444,17 +431,7 @@ impl ChatService for ChatRpcService {
         debug!("获取会话列表请求，用户ID: {}", req.user_id);
 
         // 获取用户当前序列号
-        let (rec_seq, send_seq) = match self.cache.get_cur_seq(&req.user_id).await {
-            Ok(seqs) => seqs,
-            Err(e) => {
-                error!("获取用户序列号失败: {}", e);
-                return Ok(tonic::Response::new(GetConversationsResponse {
-                    conversations: vec![],
-                    total: 0,
-                    error: "获取用户序列号失败".to_string(),
-                }));
-            }
-        };
+        let (rec_seq, send_seq) = self.cache.get_cur_seq(&req.user_id).await?;
 
         // 获取最近的消息来构建会话列表
         // 这里我们获取最近100条消息，然后按会话分组
@@ -519,11 +496,7 @@ impl ChatService for ChatRpcService {
             }
             Err(e) => {
                 error!("获取会话列表失败: {}", e);
-                Ok(tonic::Response::new(GetConversationsResponse {
-                    conversations: vec![],
-                    total: 0,
-                    error: format!("获取会话列表失败: {}", e),
-                }))
+                Err(tonic::Status::internal(format!("获取会话列表失败:{}",  e)))
             }
         }
     }
@@ -538,11 +511,7 @@ impl ChatService for ChatRpcService {
 
         // 验证参数
         if req.user_id.is_empty() || req.message_id.is_empty() {
-            return Ok(tonic::Response::new(RevokeMessageResponse {
-                success: false,
-                error: "用户ID和消息ID不能为空".to_string(),
-                revoke_time: 0,
-            }));
+            return Err(tonic::Status::invalid_argument("用户ID和消息ID不能为空"))
         }
 
         // 首先检查消息是否存在以及撤回时间限制
@@ -550,31 +519,19 @@ impl ChatService for ChatRpcService {
             Ok(Some(msg)) => {
                 // 验证消息是否属于当前用户
                 if msg.send_id != req.user_id {
-                    return Ok(tonic::Response::new(RevokeMessageResponse {
-                        success: false,
-                        error: "只能撤回自己发送的消息".to_string(),
-                        revoke_time: 0,
-                    }));
+                    return Err(tonic::Status::internal("只能撤回自己发送的消息"))
                 }
 
                 // 验证消息是否已经被撤回
                 if msg.is_revoked {
-                    return Ok(tonic::Response::new(RevokeMessageResponse {
-                        success: false,
-                        error: "消息已经被撤回".to_string(),
-                        revoke_time: msg.revoke_time,
-                    }));
+                    return Err(tonic::Status::not_found("消息已经被撤回"))
                 }
 
                 // 验证撤回时间限制（2分钟内）
                 let now = chrono::Utc::now().timestamp_millis();
                 let time_limit = 2 * 60 * 1000; // 2分钟
                 if now - msg.send_time > time_limit {
-                    return Ok(tonic::Response::new(RevokeMessageResponse {
-                        success: false,
-                        error: "消息发送超过2分钟，无法撤回".to_string(),
-                        revoke_time: 0,
-                    }));
+                    return Err(tonic::Status::internal("消息发送超过2分钟，无法撤回"))
                 }
 
                 // 执行撤回操作
@@ -593,28 +550,16 @@ impl ChatService for ChatRpcService {
                     }
                     Err(e) => {
                         error!("撤回消息失败: {}", e);
-                        Ok(tonic::Response::new(RevokeMessageResponse {
-                            success: false,
-                            error: format!("撤回消息失败: {}", e),
-                            revoke_time: 0,
-                        }))
+                        Err(tonic::Status::internal(format!("撤回消息失败: {}", e)))
                     }
                 }
             }
             Ok(None) => {
-                Ok(tonic::Response::new(RevokeMessageResponse {
-                    success: false,
-                    error: "消息不存在".to_string(),
-                    revoke_time: 0,
-                }))
+                Err(tonic::Status::not_found("消息不存在"))
             }
             Err(e) => {
                 error!("查询消息失败: {}", e);
-                Ok(tonic::Response::new(RevokeMessageResponse {
-                    success: false,
-                    error: "查询消息失败".to_string(),
-                    revoke_time: 0,
-                }))
+                Err(tonic::Status::internal(format!("查询消息失败: {}", e)))
             }
         }
     }
@@ -630,19 +575,11 @@ impl ChatService for ChatRpcService {
 
         // 验证参数
         if req.user_id.is_empty() {
-            return Ok(tonic::Response::new(DeleteMessagesResponse {
-                success: false,
-                deleted_count: 0,
-                error: "用户ID不能为空".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("用户ID不能为空"))
         }
 
         if req.message_ids.is_empty() && req.message_seqs.is_empty() {
-            return Ok(tonic::Response::new(DeleteMessagesResponse {
-                success: false,
-                deleted_count: 0,
-                error: "必须提供消息ID或消息序列号".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("必须提供消息ID或消息序列号"))
         }
 
         let mut total_deleted = 0i32;
@@ -656,11 +593,7 @@ impl ChatService for ChatRpcService {
                 }
                 Err(e) => {
                     error!("按消息ID删除消息失败: {}", e);
-                    return Ok(tonic::Response::new(DeleteMessagesResponse {
-                        success: false,
-                        deleted_count: 0,
-                        error: format!("删除消息失败: {}", e),
-                    }));
+                    return Err(tonic::Status::internal(format!("删除消息失败: {}", e)))
                 }
             }
         }
@@ -676,11 +609,7 @@ impl ChatService for ChatRpcService {
                 }
                 Err(e) => {
                     error!("按序列号删除消息失败: {}", e);
-                    return Ok(tonic::Response::new(DeleteMessagesResponse {
-                        success: false,
-                        deleted_count: total_deleted,
-                        error: format!("删除消息失败: {}", e),
-                    }));
+                    return Err(tonic::Status::internal(format!("删除消息失败: {}", e)))
                 }
             }
         }
@@ -703,42 +632,22 @@ impl ChatService for ChatRpcService {
 
         // 验证参数
         if req.user_id.is_empty() || req.original_message_id.is_empty() {
-            return Ok(tonic::Response::new(ForwardMessageResponse {
-                success: false,
-                forwarded_message_ids: vec![],
-                forward_count: 0,
-                error: "用户ID和原始消息ID不能为空".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("用户ID和原始消息ID不能为空"))
         }
 
         if req.target_user_ids.is_empty() && req.target_group_ids.is_empty() {
-            return Ok(tonic::Response::new(ForwardMessageResponse {
-                success: false,
-                forwarded_message_ids: vec![],
-                forward_count: 0,
-                error: "必须指定转发目标".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("必须指定转发目标"))
         }
 
         // 获取原始消息
         let original_msg = match self.msg_storage.get_message(&req.original_message_id).await {
             Ok(Some(msg)) => msg,
             Ok(None) => {
-                return Ok(tonic::Response::new(ForwardMessageResponse {
-                    success: false,
-                    forwarded_message_ids: vec![],
-                    forward_count: 0,
-                    error: "原始消息不存在".to_string(),
-                }));
+                return Err(tonic::Status::not_found("原始消息不存在"))
             }
             Err(e) => {
                 error!("获取原始消息失败: {}", e);
-                return Ok(tonic::Response::new(ForwardMessageResponse {
-                    success: false,
-                    forwarded_message_ids: vec![],
-                    forward_count: 0,
-                    error: "获取原始消息失败".to_string(),
-                }));
+                return Err(tonic::Status::internal("获取原始消息失败"))
             }
         };
 
@@ -747,7 +656,7 @@ impl ChatService for ChatRpcService {
 
         // 转发给单聊用户
         for target_user_id in &req.target_user_ids {
-            let mut forward_msg = Msg {
+            let forward_msg = Msg {
                 send_id: req.user_id.clone(),
                 receiver_id: target_user_id.clone(),
                 local_id: format!("forward_{}", nanoid::nanoid!()),
@@ -775,9 +684,9 @@ impl ChatService for ChatRpcService {
 
             // 发送转发消息到Kafka
             let payload = serde_json::to_string(&forward_msg).unwrap();
-            let record: rdkafka::producer::FutureRecord<'_, (), String> = rdkafka::producer::FutureRecord::to(&self.topic).payload(&payload);
+            let record: FutureRecord<'_, (), String> = FutureRecord::to(&self.topic).payload(&payload);
 
-            match self.kafka.send(record, std::time::Duration::from_secs(10)).await {
+            match self.kafka.send(record, Duration::from_secs(10)).await {
                 Ok(_) => {
                     forwarded_message_ids.push(forward_msg.server_id.clone());
                     success_count += 1;
@@ -791,7 +700,7 @@ impl ChatService for ChatRpcService {
 
         // 转发给群组
         for target_group_id in &req.target_group_ids {
-            let mut forward_msg = Msg {
+            let forward_msg = Msg {
                 send_id: req.user_id.clone(),
                 receiver_id: target_group_id.clone(),
                 local_id: format!("forward_{}", nanoid::nanoid!()),
@@ -819,7 +728,7 @@ impl ChatService for ChatRpcService {
 
             // 发送转发消息到Kafka
             let payload = serde_json::to_string(&forward_msg).unwrap();
-            let record: rdkafka::producer::FutureRecord<'_, (), String> = rdkafka::producer::FutureRecord::to(&self.topic).payload(&payload);
+            let record: FutureRecord<'_, (), String> = FutureRecord::to(&self.topic).payload(&payload);
 
             match self.kafka.send(record, std::time::Duration::from_secs(10)).await {
                 Ok(_) => {
@@ -852,51 +761,26 @@ impl ChatService for ChatRpcService {
 
         // 验证参数
         if req.user_id.is_empty() || req.original_message_id.is_empty() {
-            return Ok(tonic::Response::new(ReplyMessageResponse {
-                success: false,
-                reply_message_id: String::new(),
-                send_time: 0,
-                error: "用户ID和原始消息ID不能为空".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("用户ID和原始消息ID不能为空"));
         }
 
         if req.reply_content.trim().is_empty() {
-            return Ok(tonic::Response::new(ReplyMessageResponse {
-                success: false,
-                reply_message_id: String::new(),
-                send_time: 0,
-                error: "回复内容不能为空".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("回复内容不能为空"));
         }
 
         if req.reply_content.len() > 2048 {
-            return Ok(tonic::Response::new(ReplyMessageResponse {
-                success: false,
-                reply_message_id: String::new(),
-                send_time: 0,
-                error: "回复内容不能超过2048字符".to_string(),
-            }));
+            return Err(tonic::Status::invalid_argument("回复内容不能超过2048字符"));
         }
 
         // 获取原始消息以确定回复目标
         let original_msg = match self.msg_storage.get_message(&req.original_message_id).await {
             Ok(Some(msg)) => msg,
             Ok(None) => {
-                return Ok(tonic::Response::new(ReplyMessageResponse {
-                    success: false,
-                    reply_message_id: String::new(),
-                    send_time: 0,
-                    error: "原始消息不存在".to_string(),
-                }));
+                return Err(tonic::Status::not_found("原始消息不存在"));
             }
             Err(e) => {
                 error!("获取原始消息失败: {}", e);
-                return Ok(tonic::Response::new(ReplyMessageResponse {
-                    success: false,
-                    reply_message_id: String::new(),
-                    send_time: 0,
-                    error: "获取原始消息失败".to_string(),
-                }));
+                return Err(tonic::Status::internal(format!("获取原始消息失败: {}", e)));
             }
         };
 
@@ -946,7 +830,7 @@ impl ChatService for ChatRpcService {
 
         // 发送回复消息到Kafka
         let payload = serde_json::to_string(&reply_msg).unwrap();
-        let record: rdkafka::producer::FutureRecord<'_, (), String> = rdkafka::producer::FutureRecord::to(&self.topic).payload(&payload);
+        let record: FutureRecord<'_, (), String> = FutureRecord::to(&self.topic).payload(&payload);
 
         match self.kafka.send(record, std::time::Duration::from_secs(10)).await {
             Ok(_) => {
@@ -960,12 +844,7 @@ impl ChatService for ChatRpcService {
             }
             Err((kafka_error, _)) => {
                 error!("回复消息到Kafka失败: {}", kafka_error);
-                Ok(tonic::Response::new(ReplyMessageResponse {
-                    success: false,
-                    reply_message_id: String::new(),
-                    send_time: 0,
-                    error: format!("发送回复消息失败: {}", kafka_error),
-                }))
+                Err(tonic::Status::internal(format!("发送回复消息失败: {}", kafka_error)))
             }
         }
     }
@@ -1008,15 +887,7 @@ impl ChatRpcService {
             }
             Err(e) => {
                 error!("获取离线消息失败: {}", e);
-                Ok(tonic::Response::new(GetMessageHistoryResponse {
-                    messages: vec![],
-                    has_more: false,
-                    next_seq: 0,
-                    conversation_id: req.conversation_id,
-                    current_page: 1,
-                    page_size: 0,
-                    error: format!("获取离线消息失败: {}", e),
-                }))
+                Err(tonic::Status::internal(format!("获取离线消息失败: {}", e)))
             }
         }
     }

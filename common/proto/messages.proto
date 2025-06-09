@@ -266,6 +266,9 @@ service ChatService {
   /// 标记消息已读
   rpc MarkMessagesAsRead(MarkMessagesAsReadRequest) returns (MarkMessagesAsReadResponse);
   
+  /// 标记会话已读
+  rpc MarkConversationAsRead(MarkConversationAsReadRequest) returns (MarkMessagesAsReadResponse);
+  
   /// 获取消息历史
   rpc GetMessageHistory(GetMessageHistoryRequest) returns (GetMessageHistoryResponse);
   
@@ -350,6 +353,13 @@ message MarkMessagesAsReadResponse {
   bool success = 1;       // 是否成功
   int32 read_count = 2;   // 标记已读的消息数量
   string error = 3;       // 错误信息（如果有）
+}
+
+/// 标记会话已读请求
+message MarkConversationAsReadRequest {
+  string user_id = 1;         // 用户ID
+  string conversation_id = 2; // 会话ID（单聊时是对方用户ID，群聊时是群组ID）
+  optional int64 up_to_time = 3; // 标记到此时间戳之前的所有消息为已读（可选，默认为当前时间）
 }
 
 /// 获取消息历史请求
