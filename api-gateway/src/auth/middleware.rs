@@ -47,7 +47,7 @@ pub async fn auth_middleware(
     let token = match jwt::extract_token(&req, &jwt_config.header_name, &jwt_config.header_prefix) {
         Some(token) => token,
         None => {
-            return error_response("缺少认证令牌", StatusCode::UNAUTHORIZED);
+            return error_response("缺少认证令牌", StatusCode::SERVICE_UNAVAILABLE);
         }
     };
 
@@ -55,7 +55,7 @@ pub async fn auth_middleware(
     let user_info = match jwt::verify_token(&token, jwt_config) {
         Ok(user_info) => user_info,
         Err(e) => {
-            return error_response("令牌验证失败", StatusCode::UNAUTHORIZED)
+            return error_response("令牌验证失败", StatusCode::SERVICE_UNAVAILABLE)
         }
     };
 
@@ -76,7 +76,7 @@ pub async fn auth_middleware(
             return error_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
         }
         Err(_) => {
-            return error_response("令牌验证服务错误", StatusCode::UNAUTHORIZED);
+            return error_response("令牌验证服务错误", StatusCode::SERVICE_UNAVAILABLE);
         }
     }
 
