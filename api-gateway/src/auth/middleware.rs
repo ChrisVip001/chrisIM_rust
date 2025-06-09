@@ -8,7 +8,7 @@ use axum::{
 use common::config::ConfigLoader;
 use serde_json::json;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::{debug, warn, error};
 use common::auth::jwt;
 use crate::middleware::get_client_ip;
 use crate::proxy::services::common::error_response;
@@ -47,6 +47,7 @@ pub async fn auth_middleware(
     let token = match jwt::extract_token(&req, &jwt_config.header_name, &jwt_config.header_prefix) {
         Some(token) => token,
         None => {
+            warn!("未找到认证令牌，请求路径: {}", path);
             return error_response("缺少认证令牌", StatusCode::SERVICE_UNAVAILABLE);
         }
     };
@@ -55,7 +56,7 @@ pub async fn auth_middleware(
     let user_info = match jwt::verify_token(&token, jwt_config) {
         Ok(user_info) => user_info,
         Err(e) => {
-            return error_response("令牌验证失败", StatusCode::SERVICE_UNAVAILABLE)
+            return error_response(&format!("令牌验证失败: {:?}", e), StatusCode::SERVICE_UNAVAILABLE)
         }
     };
 
@@ -75,8 +76,9 @@ pub async fn auth_middleware(
         Ok(None) => {
             return error_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
         }
-        Err(_) => {
-            return error_response("令牌验证服务错误", StatusCode::SERVICE_UNAVAILABLE);
+        Err(e) => {
+            error!("Redis查询失败: {:?}", e);
+            return error_response(&format!("令牌验证服务错误: {:?}", e), StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
 
