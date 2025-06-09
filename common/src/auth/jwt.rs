@@ -161,7 +161,7 @@ pub fn generate_token(
 
     // 创建统一的 Claims 结构
     let claims = Claims {
-        sub: user_id.parse().unwrap(),
+        sub: user_id.to_string(),
         iss: Some(jwt_config.issuer.clone()),
         exp: now + jwt_config.expiry_seconds,
         iat: now,
@@ -215,7 +215,7 @@ pub fn generate_refresh_token(
 
     // 创建统一的 Claims 结构 (刷新令牌使用更长的过期时间)
     let claims = Claims {
-        sub: user_id.parse().unwrap(),
+        sub: user_id.to_string(),
         iss: Some(jwt_config.issuer.clone()),
         exp: now + jwt_config.refresh_expiry_seconds,
         iat: now,
