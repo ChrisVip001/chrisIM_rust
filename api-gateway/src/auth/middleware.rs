@@ -21,7 +21,7 @@ pub async fn auth_middleware(
 ) -> Response {
     let config = match ConfigLoader::get_global() {
         Some(config) => config,
-        None => return error_response("获取配置错误！", StatusCode::SERVICE_UNAVAILABLE),
+        None => return error_response("获取配置错误！", StatusCode::INTERNAL_SERVER_ERROR),
     };
 
     // 检查路径是否在白名单中
@@ -48,7 +48,7 @@ pub async fn auth_middleware(
         Some(token) => token,
         None => {
             warn!("未找到认证令牌，请求路径: {}", path);
-            return error_response("缺少认证令牌", StatusCode::SERVICE_UNAVAILABLE);
+            return error_response("缺少认证令牌", StatusCode::UNAUTHORIZED);
         }
     };
 
@@ -56,7 +56,7 @@ pub async fn auth_middleware(
     let user_info = match jwt::verify_token(&token, jwt_config) {
         Ok(user_info) => user_info,
         Err(e) => {
-            return error_response(&format!("令牌验证失败: {:?}", e), StatusCode::SERVICE_UNAVAILABLE)
+            return error_response(&format!("令牌验证失败: {:?}", e), StatusCode::UNAUTHORIZED)
         }
     };
 

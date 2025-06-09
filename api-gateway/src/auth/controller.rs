@@ -15,7 +15,7 @@ use common::utils::verify_image_code;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// 错误wrapper，实现IntoResponse trait
 pub struct AppError(anyhow::Error);
@@ -322,12 +322,20 @@ pub async fn refresh_token(
     let platform = extract_platform_info(&headers);
 
     // 读取JWT配置
-    let config = ConfigLoader::get_global().expect("Failed to get global config");
+    let config = match ConfigLoader::get_global() {
+        Some(config) => config,
+        None => return Ok(error_response("获取配置错误！", StatusCode::INTERNAL_SERVER_ERROR))
+    };
 
     let jwt_config = &config.gateway.auth.jwt;
 
     // 验证刷新令牌
-    let user_info = jwt::verify_token(&refresh_req.refresh_token, jwt_config)?;
+    let user_info = match jwt::verify_token(&refresh_req.refresh_token, jwt_config) {
+        Ok(user_info) => user_info,
+        Err(e) => {
+            return Ok(error_response(&format!("令牌验证失败: {:?}", e), StatusCode::INTERNAL_SERVER_ERROR))
+        }
+    };
 
     // 验证Redis中的刷新令牌是否存在且匹配
     match cache_instance
@@ -338,18 +346,18 @@ pub async fn refresh_token(
             if stored_token != refresh_req.refresh_token {
                 return Ok(error_response(
                     "令牌已过期或已注销，请重新登录",
-                    StatusCode::UNAUTHORIZED,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ));
             }
         }
         Ok(None) => {
             return Ok(error_response(
                 "令牌已过期或已注销，请重新登录",
-                StatusCode::UNAUTHORIZED,
+                StatusCode::INTERNAL_SERVER_ERROR,
             ));
         }
         Err(_) => {
-            return Ok(error_response("令牌验证服务错误", StatusCode::UNAUTHORIZED));
+            return Ok(error_response("令牌验证服务错误", StatusCode::INTERNAL_SERVER_ERROR));
         }
     }
     // 构建额外信息
