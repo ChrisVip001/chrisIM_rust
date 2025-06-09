@@ -108,9 +108,22 @@ fn extract_platform_info(headers: &HeaderMap) -> PlatformType {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("unknown");
 
-    let platform = match PlatformType::from_str_name(system_type) { 
-        Ok(platform) => platform,
-        Err(_) => PlatformType::Unknown,
+    // 优雅地处理各种平台标识
+    let platform = match system_type.to_lowercase().as_str() {
+        "mobile" | "android" | "ios" => {
+            // 进一步区分移动平台
+            match system_type.to_lowercase().as_str() {
+                "android" => PlatformType::Android,
+                "ios" => PlatformType::Ios,
+                _ => PlatformType::Mobile,
+            }
+        }
+        "web" | "browser" | "h5" => PlatformType::Web,
+        "pc" | "desktop" | "windows" | "macos" | "linux" => PlatformType::Pc,
+        _ => {
+            // 尝试使用protobuf的原生解析
+            PlatformType::from_str_name(system_type).unwrap_or(PlatformType::Unknown)
+        }
     };
 
     debug!(

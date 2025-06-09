@@ -134,32 +134,44 @@ impl Manager {
     /// * `id` - 发送者用户ID
     /// * `msg` - 要发送的消息
     async fn send_to_self(&self, id: &str, msg: &Msg) {
-        if let Some(client) = self.hub.get(id) {
-            // 向发送者的另一个平台客户端发送消息
-            // 如果当前是移动端发送，则向桌面端发送；反之亦然
-            let platform = if msg.platform == PlatformType::Mobile as i32 {
-                PlatformType::Desktop
-            } else {
-                PlatformType::Mobile
-            };
-            
-            if let Some(sender) = client.get(&platform) {
-                // 创建适合JSON序列化的消息副本
-                let json_msg = self.prepare_message_for_json(msg);
-                
-                // 序列化消息为JSON
-                let content = match serde_json::to_string(&json_msg) {
-                    Ok(res) => res,
-                    Err(e) => {
-                        error!("消息JSON序列化失败: {}", e);
-                        return;
-                    }
-                };
-                
-                // 发送JSON文本到另一个平台
-                if let Err(e) = sender.send_text(content).await {
-                    error!("向发送者其他平台发送消息失败: {}", e)
+        if let Some(clients) = self.hub.get(id) {
+            // 获取当前发送消息的平台类型
+            let current_platform = PlatformType::try_from(msg.platform).unwrap_or(PlatformType::Unknown);
+
+            // 创建适合JSON序列化的消息副本
+            let json_msg = self.prepare_message_for_json(msg);
+
+            // 序列化消息为JSON
+            let content = match serde_json::to_string(&json_msg) {
+                Ok(res) => res,
+                Err(e) => {
+                    error!("消息JSON序列化失败: {}", e);
+                    return;
                 }
+            };
+
+            // 向发送者的所有其他平台发送消息副本
+            let mut sent_count = 0;
+            for platform_entry in clients.iter() {
+                let platform_type = platform_entry.key();
+                let client = platform_entry.value();
+
+                // 跳过当前发送消息的平台，避免重复发送
+                if *platform_type == current_platform {
+                    continue;
+                }
+
+                // 向其他平台发送消息副本
+                if let Err(e) = client.send_text(content.clone()).await {
+                    error!("向发送者平台 {:?} 发送消息副本失败: {}", platform_type, e);
+                } else {
+                    sent_count += 1;
+                    debug!("已向发送者平台 {:?} 发送消息副本", platform_type);
+                }
+            }
+
+            if sent_count > 0 {
+                debug!("成功向发送者的 {} 个其他平台发送消息副本", sent_count);
             }
         }
     }
