@@ -3,6 +3,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Validation, Algorit
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::log::{error, info};
 use crate::error::Error;
 use crate::configs::auth_config::JwtConfig;
 
@@ -96,6 +97,7 @@ pub fn verify_token(
     token: &str,
     jwt_config: &JwtConfig,
 ) -> Result<Claims, Error> {
+    info!("Token = {}", token);
     // 设置验证参数
     let mut validation = Validation::new(Algorithm::HS256);
     
@@ -109,11 +111,13 @@ pub fn verify_token(
         token,
         &DecodingKey::from_secret(jwt_config.secret.as_bytes()),
         &validation,
-    )
-    .map_err(|e| match e.kind() {
-        jsonwebtoken::errors::ErrorKind::ExpiredSignature => Error::TokenExpired,
-        jsonwebtoken::errors::ErrorKind::InvalidIssuer => Error::InvalidIssuer,
-        _ => Error::InvalidToken,
+    ).map_err(|e| {
+        error!("JWT decode error: {:?}", e);
+        match e.kind() {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => Error::TokenExpired,
+            jsonwebtoken::errors::ErrorKind::InvalidIssuer => Error::InvalidIssuer,
+            _ => Error::InvalidToken,
+        }
     })?;
 
     // 额外的过期时间检查（双重保险）
