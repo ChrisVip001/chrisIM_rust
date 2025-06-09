@@ -105,7 +105,7 @@ gateway:
       verify_issuer: false
       allowed_issuers: []
       header_name: "Authorization"
-      header_prefix: "Bearer "
+      header_prefix: "Bearer"
     # IP白名单
     ip_blacklist:
       - "192.168.1.9"

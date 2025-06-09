@@ -54,6 +54,7 @@ pub struct Claims {
 /// 
 /// 从 HTTP 请求头中提取 JWT token，支持自定义头名称和前缀。
 /// 通常用于从 Authorization 头中提取 Bearer token。
+/// 注意：会自动去除token的前导和尾随空格
 /// 
 /// # 参数
 /// * `request` - HTTP 请求对象
@@ -74,7 +75,7 @@ pub fn extract_token<B>(
         .and_then(|value| value.to_str().ok())
         .and_then(|auth_header| {
             if auth_header.starts_with(header_prefix) {
-                Some(auth_header[header_prefix.len()..].to_string())
+                Some(auth_header[header_prefix.len()..].trim().to_string())
             } else {
                 None
             }
