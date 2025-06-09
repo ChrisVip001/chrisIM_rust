@@ -50,11 +50,6 @@ async fn main() -> anyhow::Result<()> {
     }
     
     info!("正在启动WebSocket网关服务...");
-    info!("服务功能说明:");
-    info!("  1. WebSocket服务器: 处理客户端连接，支持多平台同时在线");
-    info!("  2. gRPC服务器: 接收msg-server的消息推送请求");
-    info!("  3. 连接管理: 自动心跳检测、JWT认证、连接状态管理");
-    info!("  4. 消息路由: 智能分发单聊和群聊消息");
     
     // 启动WebSocket服务器
     // 这会同时启动WebSocket服务器和gRPC服务器

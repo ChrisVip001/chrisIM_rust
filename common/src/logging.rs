@@ -62,6 +62,45 @@ impl LogOutput {
     }
 }
 
+/// 设置自定义panic处理器，在程序panic时记录详细的错误信息
+/// 包括panic消息、文件位置、调用堆栈等关键信息
+pub fn setup_panic_hook() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = if let Some(location) = panic_info.location() {
+            format!("文件: {}, 行号: {}, 列号: {}", 
+                location.file(), 
+                location.line(), 
+                location.column()
+            )
+        } else {
+            "位置未知".to_string()
+        };
+        
+        let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            format!("Panic消息: {}", s)
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            format!("Panic消息: {}", s)
+        } else {
+            "Panic消息: 未知错误类型".to_string()
+        };
+        
+        // 使用tracing记录panic信息
+        tracing::error!(
+            location = location,
+            message = message,
+            thread = ?std::thread::current().name().unwrap_or("未知线程"),
+            "程序发生严重错误(Panic)，即将退出"
+        );
+        
+        // 同时输出到stderr，确保在日志系统失效时也能看到错误
+        eprintln!("💥 程序发生严重错误！");
+        eprintln!("📍 {}", location);
+        eprintln!("💬 {}", message);
+        eprintln!("🧵 线程: {}", std::thread::current().name().unwrap_or("未知线程"));
+        eprintln!("💡 请检查上述文件和行号以定位问题");
+    }));
+}
+
 /// 初始化日志系统
 /// 
 /// # 参数
@@ -86,11 +125,14 @@ impl LogOutput {
 /// }
 /// ```
 pub fn init() -> Result<()> {
+    setup_panic_hook();
     init_with_sqlx_level("debug")
 }
 
 /// 使用指定的SQLx日志级别初始化日志系统
 pub fn init_with_sqlx_level(sqlx_level: &str) -> Result<()> {
+    setup_panic_hook();
+    
     // 创建过滤器字符串，直接设置sqlx级别
     let filter_string = format!("info,sqlx={}", sqlx_level);
     
@@ -98,12 +140,15 @@ pub fn init_with_sqlx_level(sqlx_level: &str) -> Result<()> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(filter_string));
     
-    // 初始化日志订阅器
+    // 初始化日志订阅器，启用更详细的代码位置信息
     fmt()
         .with_env_filter(env_filter)
         .with_timer(LocalTimer)
         .with_ansi(true) // 支持ANSI颜色
         .with_thread_names(true) // 显示线程名称
+        .with_target(true) // 显示目标模块路径
+        .with_file(true) // 显示文件名
+        .with_line_number(true) // 显示行号
         .init();
     
     info!("日志系统初始化成功，SQLx日志级别: {}", sqlx_level);
@@ -117,6 +162,8 @@ pub fn init_with_level(_level: Level, sqlx_level: &str) -> Result<()> {
 
 /// 自定义多组件日志级别，支持更复杂的日志配置
 pub fn init_with_custom_filter(directives: &[(&str, &str)]) -> Result<()> {
+    setup_panic_hook();
+    
     // 构建过滤器字符串
     let mut filter_parts = vec!["info".to_string()];  // 默认全局级别
     
@@ -130,12 +177,15 @@ pub fn init_with_custom_filter(directives: &[(&str, &str)]) -> Result<()> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(filter_string));
     
-    // 初始化日志订阅器
+    // 初始化日志订阅器，启用详细的位置信息
     fmt()
         .with_env_filter(env_filter)
         .with_timer(LocalTimer)
         .with_ansi(true)
         .with_thread_names(true)
+        .with_target(true) // 显示目标模块路径
+        .with_file(true) // 显示文件名
+        .with_line_number(true) // 显示行号
         .init();
     
     info!("日志系统初始化成功，使用自定义过滤器");
@@ -206,6 +256,8 @@ fn get_log_file_path(service_name: &str) -> String {
 /// }
 /// ```
 pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) -> Result<()> {
+    setup_panic_hook();
+    
     // 构建过滤器部分
     let mut filter_parts = vec![config.log.level.clone()];
     
@@ -252,6 +304,9 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                 .with_timer(LocalTimer)
                 .with_ansi(true)
                 .with_thread_names(true)
+                .with_target(true) // 显示目标模块路径
+                .with_file(true) // 显示文件名  
+                .with_line_number(true) // 显示行号
                 .init();
         }
         (LogFormat::Json, LogOutput::Console) => {
@@ -262,6 +317,9 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                 .with_current_span(true)
                 .with_span_list(true)
                 .with_thread_names(true)
+                .with_target(true) // 显示目标模块路径
+                .with_file(true) // 显示文件名
+                .with_line_number(true) // 显示行号
                 .init();
         }
         (LogFormat::Plain, LogOutput::File) => {
@@ -279,13 +337,19 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                     let console_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .with_ansi(true) // 控制台使用ANSI颜色
-                        .with_thread_names(true);
+                        .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true); // 显示行号
                     
                     // 创建文件输出层
                     let file_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .with_ansi(false) // 文件中不使用ANSI颜色
                         .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true) // 显示行号
                         .with_writer(file);
                     
                     // 注册两个输出层
@@ -306,6 +370,9 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                         .with_timer(LocalTimer)
                         .with_ansi(true)
                         .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true) // 显示行号
                         .init();
                 }
             }
@@ -321,13 +388,16 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                 .open(&log_file_path) 
             {
                 Ok(file) => {
-                    // 创建控制台输出层 (使用普通格式，更易读)
+                    // 创建控制台输出层 (使用JSON格式)
                     let console_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .json()
                         .with_current_span(true)
                         .with_span_list(true)
-                        .with_thread_names(true);
+                        .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true); // 显示行号
                     
                     // 创建JSON文件输出层
                     let json_file_layer = fmt::layer()
@@ -336,6 +406,9 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                         .with_current_span(true)
                         .with_span_list(true)
                         .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true) // 显示行号
                         .with_writer(file);
                     
                     tracing_subscriber::registry()
@@ -345,18 +418,24 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                         .init();
                     
                     // 日志初始化信息同时显示在控制台
-                    info!("日志系统初始化成功，同时输出到控制台(普通格式)和文件(JSON格式): {}", log_file_path);
+                    info!("日志系统初始化成功，同时输出到控制台(JSON格式)和文件(JSON格式): {}", log_file_path);
                 }
                 Err(e) => {
                     // 无法打开日志文件，回退到控制台
                     eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
-                    fmt()
-                        .with_env_filter(env_filter)
+                    let json_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .json()
                         .with_current_span(true)
                         .with_span_list(true)
                         .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true); // 显示行号
+                    
+                    tracing_subscriber::registry()
+                        .with(env_filter)
+                        .with(json_layer)
                         .init();
                 }
             }
@@ -405,6 +484,8 @@ fn check_env_component_overrides(mut env_filter: EnvFilter) -> EnvFilter {
 /// # 返回值
 /// * `Result<()>` - 成功或失败的结果
 pub fn init_auto() -> Result<()> {
+    setup_panic_hook();
+    
     // 首先检查环境变量 RUST_LOG
     if let Ok(_env_filter) = std::env::var("RUST_LOG") {
         return init_with_custom_filter(&[("sqlx", "debug")]);
@@ -431,6 +512,8 @@ pub fn init_auto() -> Result<()> {
 /// * `Result<()>` - 成功或失败的结果
 #[cfg(feature = "telemetry")]
 pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> Result<()> {
+    setup_panic_hook();
+    
     // 设置全局传播器为TraceContext
     global::set_text_map_propagator(TraceContextPropagator::new());
     
@@ -496,7 +579,10 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
             let fmt_layer = fmt::layer()
                 .with_timer(LocalTimer)
                 .with_ansi(true)
-                .with_thread_names(true);
+                .with_thread_names(true)
+                .with_target(true) // 显示目标模块路径
+                .with_file(true) // 显示文件名
+                .with_line_number(true); // 显示行号
             
             tracing_subscriber::registry()
                 .with(env_filter)
@@ -510,7 +596,10 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                 .json()
                 .with_current_span(true)
                 .with_span_list(true)
-                .with_thread_names(true);
+                .with_thread_names(true)
+                .with_target(true) // 显示目标模块路径
+                .with_file(true) // 显示文件名
+                .with_line_number(true); // 显示行号
             
             tracing_subscriber::registry()
                 .with(env_filter)
@@ -533,13 +622,19 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                     let console_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .with_ansi(true)
-                        .with_thread_names(true);
+                        .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true); // 显示行号
                     
                     // 创建文件输出层
                     let file_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .with_ansi(false)
                         .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true) // 显示行号
                         .with_writer(file);
                     
                     tracing_subscriber::registry()
@@ -559,7 +654,10 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                     let fmt_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .with_ansi(true)
-                        .with_thread_names(true);
+                        .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true); // 显示行号
                     
                     tracing_subscriber::registry()
                         .with(env_filter)
@@ -580,13 +678,16 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                 .open(&log_file_path) 
             {
                 Ok(file) => {
-                    // 创建控制台输出层 (使用普通格式，更易读)
+                    // 创建控制台输出层 (使用JSON格式)
                     let console_layer = fmt::layer()
                         .with_timer(LocalTimer)
                         .json()
                         .with_current_span(true)
                         .with_span_list(true)
-                        .with_thread_names(true);
+                        .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true); // 显示行号
                     
                     // 创建JSON文件输出层
                     let json_file_layer = fmt::layer()
@@ -595,6 +696,9 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                         .with_current_span(true)
                         .with_span_list(true)
                         .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true) // 显示行号
                         .with_writer(file);
                     
                     tracing_subscriber::registry()
@@ -605,17 +709,21 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                         .init();
                     
                     // 日志初始化信息同时显示在控制台
-                    info!("日志系统初始化成功（带分布式链路追踪），同时输出到控制台(普通格式)和文件(JSON格式): {}", log_file_path);
+                    info!("日志系统初始化成功（带分布式链路追踪），同时输出到控制台(JSON格式)和文件(JSON格式): {}", log_file_path);
                     info!("链路追踪数据发送至: {}", jaeger_endpoint);
                 }
                 Err(e) => {
                     // 无法打开日志文件，回退到控制台
                     eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
                     let json_layer = fmt::layer()
+                        .with_timer(LocalTimer)
                         .json()
                         .with_current_span(true)
                         .with_span_list(true)
-                        .with_thread_names(true);
+                        .with_thread_names(true)
+                        .with_target(true) // 显示目标模块路径
+                        .with_file(true) // 显示文件名
+                        .with_line_number(true); // 显示行号
                     
                     tracing_subscriber::registry()
                         .with(env_filter)
@@ -647,4 +755,97 @@ pub fn init_telemetry(_config: &crate::config::AppConfig, service_name: &str) ->
 #[cfg(not(feature = "telemetry"))]
 pub fn shutdown_telemetry() {
     // 没有实际操作
-} 
+}
+
+/// 错误追踪宏，用于在函数中记录详细的错误信息
+/// 包括文件名、行号、函数名等位置信息
+#[macro_export]
+macro_rules! error_with_location {
+    ($($arg:tt)*) => {
+        tracing::error!(
+            target: module_path!(),
+            file = file!(),
+            line = line!(),
+            column = column!(),
+            $($arg)*
+        )
+    };
+}
+
+/// 警告追踪宏，用于在函数中记录详细的警告信息
+#[macro_export]
+macro_rules! warn_with_location {
+    ($($arg:tt)*) => {
+        tracing::warn!(
+            target: module_path!(),
+            file = file!(),
+            line = line!(),
+            column = column!(),
+            $($arg)*
+        )
+    };
+}
+
+/// 信息追踪宏，用于记录带位置信息的信息日志
+#[macro_export]
+macro_rules! info_with_location {
+    ($($arg:tt)*) => {
+        tracing::info!(
+            target: module_path!(),
+            file = file!(),
+            line = line!(),
+            column = column!(),
+            $($arg)*
+        )
+    };
+}
+
+/// 调试追踪宏，用于记录带位置信息的调试日志
+#[macro_export]
+macro_rules! debug_with_location {
+    ($($arg:tt)*) => {
+        tracing::debug!(
+            target: module_path!(),
+            file = file!(),
+            line = line!(),
+            column = column!(),
+            $($arg)*
+        )
+    };
+}
+
+/// 函数执行计时宏，自动记录函数执行时间
+#[macro_export]
+macro_rules! timed_function {
+    ($func_name:expr, $block:block) => {{
+        let start = std::time::Instant::now();
+        tracing::debug!(
+            target: module_path!(),
+            file = file!(),
+            line = line!(),
+            function = $func_name,
+            "开始执行函数"
+        );
+        
+        let result = $block;
+        
+        let duration = start.elapsed();
+        tracing::debug!(
+            target: module_path!(),
+            file = file!(),
+            line = line!(),
+            function = $func_name,
+            duration_ms = duration.as_millis(),
+            "函数执行完成"
+        );
+        
+        result
+    }};
+}
+
+// 重新导出宏，以便其他模块可以使用
+pub use error_with_location;
+pub use warn_with_location;  
+pub use info_with_location;
+pub use debug_with_location;
+pub use timed_function; 

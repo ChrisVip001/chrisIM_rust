@@ -5,6 +5,7 @@ use axum::Json;
 use serde::de::StdError;
 use serde_json::json;
 use thiserror::Error;
+use std::fmt;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -76,6 +77,87 @@ pub enum Error {
 
     #[error("广播错误: {0}")]
     BroadCastError(String),
+}
+
+/// 增强的错误上下文，包含详细的错误位置信息
+#[derive(Debug)]
+pub struct ErrorContext {
+    pub error: Error,
+    pub file: &'static str,
+    pub line: u32,
+    pub column: u32,
+    pub target: &'static str,
+    pub thread: String,
+    pub timestamp: chrono::DateTime<chrono::Local>,
+    pub additional_context: Option<String>,
+}
+
+impl ErrorContext {
+    /// 创建错误上下文
+    pub fn new(
+        error: Error,
+        file: &'static str,
+        line: u32,
+        column: u32,
+        target: &'static str,
+    ) -> Self {
+        Self {
+            error,
+            file,
+            line,
+            column,
+            target,
+            thread: std::thread::current()
+                .name()
+                .unwrap_or("未知线程")
+                .to_string(),
+            timestamp: chrono::Local::now(),
+            additional_context: None,
+        }
+    }
+
+    /// 添加额外的上下文信息
+    pub fn with_context<S: Into<String>>(mut self, context: S) -> Self {
+        self.additional_context = Some(context.into());
+        self
+    }
+
+    /// 记录错误到日志系统
+    pub fn log_error(&self) {
+        crate::logging::error_with_location!(
+            error = %self.error,
+            file = self.file,
+            line = self.line,
+            column = self.column,
+            target = self.target,
+            thread = %self.thread,
+            timestamp = %self.timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
+            context = ?self.additional_context,
+            "发生错误"
+        );
+    }
+}
+
+impl fmt::Display for ErrorContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "错误: {} | 位置: {}:{}:{} | 模块: {} | 线程: {} | 时间: {}",
+            self.error,
+            self.file,
+            self.line,
+            self.column,
+            self.target,
+            self.thread,
+            self.timestamp.format("%Y-%m-%d %H:%M:%S%.3f")
+        )?;
+        
+        if let Some(context) = &self.additional_context {
+            write!(f, " | 上下文: {}", context)?;
+        }
+        
+        Ok(())
+    }
 }
 
 impl From<String> for Error {
@@ -179,3 +261,67 @@ impl IntoResponse for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// 增强的错误创建宏，自动捕获文件名、行号等位置信息
+#[macro_export]
+macro_rules! create_error {
+    ($error_type:expr) => {
+        $crate::error::ErrorContext::new(
+            $error_type,
+            file!(),
+            line!(),
+            column!(),
+            module_path!(),
+        )
+    };
+    ($error_type:expr, $context:expr) => {
+        $crate::error::ErrorContext::new(
+            $error_type,
+            file!(),
+            line!(),
+            column!(),
+            module_path!(),
+        ).with_context($context)
+    };
+}
+
+/// 错误记录并返回宏，用于简化错误处理流程
+#[macro_export]
+macro_rules! log_and_return_error {
+    ($error:expr) => {{
+        let error_ctx = create_error!($error);
+        error_ctx.log_error();
+        Err(error_ctx.error)
+    }};
+    ($error:expr, $context:expr) => {{
+        let error_ctx = create_error!($error, $context);
+        error_ctx.log_error();
+        Err(error_ctx.error)
+    }};
+}
+
+/// 错误映射宏，用于将一种错误转换为另一种错误并记录
+#[macro_export]
+macro_rules! map_error {
+    ($result:expr, $error_mapper:expr) => {
+        $result.map_err(|e| {
+            let mapped_error = $error_mapper(e);
+            let error_ctx = create_error!(mapped_error);
+            error_ctx.log_error();
+            error_ctx.error
+        })
+    };
+    ($result:expr, $error_mapper:expr, $context:expr) => {
+        $result.map_err(|e| {
+            let mapped_error = $error_mapper(e);
+            let error_ctx = create_error!(mapped_error, $context);
+            error_ctx.log_error();
+            error_ctx.error
+        })
+    };
+}
+
+// 重新导出宏
+pub use create_error;
+pub use log_and_return_error;
+pub use map_error;
