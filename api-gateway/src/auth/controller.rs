@@ -108,7 +108,10 @@ fn extract_platform_info(headers: &HeaderMap) -> PlatformType {
         .and_then(|value| value.to_str().ok())
         .unwrap_or("unknown");
 
-    let platform = PlatformType::from_str_name(system_type).expect("无效的平台！");
+    let platform = match PlatformType::from_str_name(system_type) { 
+        Ok(platform) => platform,
+        Err(_) => PlatformType::Unknown,
+    };
 
     debug!(
         "检测到登录平台: {:?}, 原始system-type: {}",

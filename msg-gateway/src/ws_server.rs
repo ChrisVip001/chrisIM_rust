@@ -3,7 +3,7 @@ use axum::extract::{Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use common::auth::verify_token_simple;
+use common::auth::jwt;
 use common::config::AppConfig;
 use common::error::Error;
 use common::proto::message::PlatformType;
@@ -49,6 +49,10 @@ pub struct AppState {
     /// JWT配置
     /// 用于验证客户端连接时提供的JWT令牌
     jwt_config: common::configs::auth_config::JwtConfig,
+    
+    /// 缓存实例
+    /// 用于验证redis中的token
+    cache_instance: Arc<dyn cache::Cache>,
 }
 
 /// JWT令牌的声明结构
@@ -141,8 +145,8 @@ impl WsServer {
                 let platform_type = platform_entry.key();
                 let client = platform_entry.value();
                 description.push_str(&format!(
-                    "  平台: {:?}, 平台ID: {}\n",
-                    platform_type, client.platform_id
+                    "  平台: {:?}, 用户ID: {}\n",
+                    platform_type, client.user_id
                 ));
             });
         });
@@ -171,17 +175,22 @@ impl WsServer {
             cloned_hub.run(rx).await;
         });
 
-        // 创建应用状态，包含管理器和JWT配置
+        // 初始化缓存实例
+        let cache_instance = cache::cache(&config)
+            .await;
+
+        // 创建应用状态，包含管理器、JWT配置和缓存实例
         let app_state = AppState {
             manager: hub.clone(),
             jwt_config: config.gateway.auth.jwt.clone(),
+            cache_instance,
         };
 
         // 配置Axum路由
         let router = Router::new()
-            // WebSocket连接路由，包含所有必要的路径参数
+            // WebSocket连接路由，只需要token参数
             .route(
-                "/ws/{user_id}/conn/{pointer_id}/{platform}/{token}",
+                "/ws/{token}",
                 get(Self::websocket_handler),
             )
             // 测试路由，用于查看连接状态
@@ -199,7 +208,7 @@ impl WsServer {
         let mut ws = tokio::spawn(async move {
             info!("WebSocket服务器已启动，监听地址: {}", addr);
             info!(
-                "WebSocket连接URL格式: /ws/{{user_id}}/conn/{{pointer_id}}/{{platform}}/{{token}}"
+                "WebSocket连接URL格式: /ws/{{token}}"
             );
             info!("测试接口: /test");
             axum::serve(listener, router).await.unwrap();
@@ -227,118 +236,133 @@ impl WsServer {
         }
     }
 
-    /// 验证JWT令牌
+    /// 验证JWT令牌并解析用户信息
     ///
     /// 使用统一的JWT验证逻辑，确保与api-gateway的验证规则完全一致。
-    /// 这解决了之前两个服务验证逻辑不一致的问题。
-    ///
+    /// 
     /// # 参数
     /// * `token` - 客户端提供的JWT令牌字符串
     /// * `jwt_config` - JWT配置信息
     ///
     /// # 返回值
-    /// * `Ok(())` - 令牌验证成功
+    /// * `Ok(Claims)` - 令牌验证成功，返回用户信息
     /// * `Err(Error)` - 令牌验证失败
-    fn verify_token(
+    async fn verify_and_parse_token(
         token: &str,
         jwt_config: &common::configs::auth_config::JwtConfig,
-    ) -> Result<(), Error> {
-        // 使用common模块中的统一验证函数
-        // 这确保了与api-gateway完全相同的验证逻辑
-        verify_token_simple(token, jwt_config)
-            .map_err(|e| Error::Authentication(format!("JWT令牌验证失败: {}", e)))
+        cache_instance: &Arc<dyn cache::Cache>,
+    ) -> Result<jwt::Claims, Error> {
+        // 验证JWT令牌并获取用户信息
+        let user_info = jwt::verify_token(token, jwt_config)
+            .map_err(|e| Error::Authentication(format!("JWT令牌验证失败: {}", e)))?;
+
+        // 验证Redis中的token是否存在且匹配
+        match cache_instance
+            .get_access_token_for_platform(&user_info.sub, user_info.platform)
+            .await
+        {
+            Ok(Some(stored_token)) => {
+                if stored_token != token {
+                    return Err(Error::Authentication("令牌已过期或已注销，请重新登录".to_string()));
+                }
+            }
+            Ok(None) => {
+                return Err(Error::Authentication("令牌已过期或已注销，请重新登录".to_string()));
+            }
+            Err(_) => {
+                return Err(Error::Authentication("令牌验证服务错误".to_string()));
+            }
+        }
+
+        Ok(user_info)
     }
 
     /// WebSocket连接处理器
     ///
-    /// 从URL路径中提取连接参数并处理WebSocket连接升级。
+    /// 从URL路径中提取token参数并处理WebSocket连接升级。
     /// 这是Axum路由的处理函数，负责将HTTP请求升级为WebSocket连接。
     ///
     /// # 参数
-    /// * `Path((user_id, pointer_id, platform, token))` - 从URL路径提取的参数
+    /// * `Path(token)` - 从URL路径提取的token参数
     /// * `ws` - WebSocket升级请求
     /// * `state` - 应用状态
     ///
     /// # 返回值
     /// 返回WebSocket升级响应
     pub async fn websocket_handler(
-        Path((user_id, pointer_id, platform, token)): Path<(String, String, i32, String)>,
+        Path(token): Path<String>,
         ws: WebSocketUpgrade,
         State(state): State<AppState>,
     ) -> impl IntoResponse {
-        // 将平台类型从整数转换为枚举值
-        let platform = PlatformType::try_from(platform).unwrap_or_default();
-
         // 处理WebSocket连接升级
         // 升级成功后会调用websocket函数处理连接
         ws.on_upgrade(move |socket| {
-            Self::websocket(user_id, pointer_id, token, platform, socket, state)
+            Self::websocket(token, socket, state)
         })
     }
 
     /// 处理WebSocket连接
     ///
     /// 建立WebSocket连接后的主要逻辑处理，包括：
-    /// 1. 验证JWT令牌
+    /// 1. 验证JWT令牌并解析用户信息
     /// 2. 注册客户端连接
     /// 3. 启动心跳检测
     /// 4. 处理消息收发
     /// 5. 管理连接生命周期
     ///
     /// # 参数
-    /// * `user_id` - 用户ID
-    /// * `pointer_id` - 客户端唯一标识
     /// * `token` - JWT令牌
-    /// * `platform` - 平台类型
     /// * `ws` - WebSocket连接
     /// * `app_state` - 应用状态
     pub async fn websocket(
-        user_id: String,
-        pointer_id: String,
         token: String,
-        platform: PlatformType,
         ws: WebSocket,
         app_state: AppState,
     ) {
-        tracing::info!(
-            "客户端连接建立: 用户ID={}, 平台ID={}, 平台类型={:?}",
-            user_id.clone(),
-            pointer_id.clone(),
-            platform
-        );
-
         // 将WebSocket分为发送和接收两部分
         // 这样可以在不同的任务中并发处理发送和接收
         let (mut ws_tx, mut ws_rx) = ws.split();
 
-        // 验证JWT令牌 - 使用统一的验证逻辑
-        if let Err(err) = Self::verify_token(&token, &app_state.jwt_config) {
-            warn!("JWT令牌验证失败: {:?}", err);
+        // 验证JWT令牌并解析用户信息
+        let user_info = match Self::verify_and_parse_token(&token, &app_state.jwt_config, &app_state.cache_instance).await {
+            Ok(user_info) => user_info,
+            Err(err) => {
+                warn!("JWT令牌验证失败: {:?}", err);
 
-            // 如果验证失败，发送关闭消息并断开连接
-            if let Err(e) = ws_tx
-                .send(Message::Close(Some(CloseFrame {
-                    code: UNAUTHORIZED_CODE,
-                    reason: "未授权连接".into(),
-                })))
-                .await
-            {
-                error!("发送验证失败消息给客户端时出错: {}", e);
+                // 如果验证失败，发送关闭消息并断开连接
+                if let Err(e) = ws_tx
+                    .send(Message::Close(Some(CloseFrame {
+                        code: UNAUTHORIZED_CODE,
+                        reason: "未授权连接".into(),
+                    })))
+                    .await
+                {
+                    error!("发送验证失败消息给客户端时出错: {}", e);
+                }
+                return;
             }
-            return;
-        }
+        };
+
+        // 从token中解析用户ID和平台
+        let user_id = user_info.sub.clone();
+        let platform = PlatformType::try_from(user_info.platform).unwrap_or_default();
+
+        info!(
+            "客户端连接建立: 用户ID={}, 平台类型={:?}",
+            user_id,
+            platform
+        );
 
         // 创建共享的发送通道，支持多线程安全访问
         let shared_tx = Arc::new(RwLock::new(ws_tx));
 
         // 创建通知通道，用于踢下线等控制信号
-        let (notify_sender, mut notify_receiver) = tokio::sync::mpsc::channel(1);
+        let (notify_sender, mut notify_receiver) = mpsc::channel(1);
         let mut hub = app_state.manager.clone();
 
         // 创建客户端对象
         let client = Client {
             user_id: user_id.clone(),
-            platform_id: pointer_id.clone(),
             sender: shared_tx.clone(),
             platform,
             notify_sender,
@@ -370,10 +394,10 @@ impl WsServer {
         // 启动踢下线监听任务
         // 监听来自其他地方的踢下线信号
         let shared_clone = shared_tx.clone();
-        let pointer_id_clone = pointer_id.clone();
+        let user_id_clone = user_id.clone();
         let mut watch_task = tokio::spawn(async move {
             if notify_receiver.recv().await.is_none() {
-                info!("客户端 {} 被踢下线", pointer_id_clone);
+                info!("用户 {} 在平台 {:?} 被踢下线", user_id_clone, platform);
 
                 // 向客户端发送踢下线信号
                 if let Err(e) = shared_clone
@@ -464,8 +488,8 @@ impl WsServer {
         hub.unregister(user_id.clone(), platform).await;
 
         info!(
-            "客户端连接已断开: 用户ID={}, 平台ID={}",
-            user_id, pointer_id
+            "客户端连接已断开: 用户ID={}, 平台类型={:?}",
+            user_id, platform
         );
     }
 }

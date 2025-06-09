@@ -129,25 +129,6 @@ pub fn verify_token(
     Ok(token_data.claims)
 }
 
-/// 简化的 token 验证函数
-/// 
-/// 仅验证 token 的有效性，不返回用户信息。
-/// 适用于只需要验证 token 有效性的场景，如 WebSocket 连接验证。
-/// 
-/// # 参数
-/// * `token` - JWT token 字符串
-/// * `jwt_config` - JWT 配置信息
-/// 
-/// # 返回值
-/// * `Ok(())` - 验证成功
-/// * `Err(Error)` - 验证失败
-pub fn verify_token_simple(
-    token: &str,
-    jwt_config: &JwtConfig,
-) -> Result<(), Error> {
-    verify_token(token, jwt_config).map(|_| ())
-}
-
 /// 生成 JWT Token
 /// 
 /// 生成标准的 JWT access token，包含完整的用户信息。

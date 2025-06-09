@@ -4,12 +4,12 @@ package messages;
 /// 用户登录系统时使用的平台类型
 /// 用于区分不同设备类型，支持多端登录和消息推送策略
 enum PlatformType {
-    Web = 0;
-    Mobile = 1;
-    IOS = 2;
-    Android = 3;
-    Desktop = 4;
-    Unknown = 5;
+    mobile = 0;
+    web = 1;
+    ios = 2;
+    android = 3;
+    pc = 4;
+    unknown = 5;
 }
 
 /// 消息内容类型枚举

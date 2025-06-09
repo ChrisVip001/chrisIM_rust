@@ -1,3 +1,14 @@
+<!--
+WebSocket连接方式已更改：
+旧格式：/ws/{user_id}/conn/{pointer_id}/{platform}/{token}
+新格式：/ws/{token}
+
+变更说明：
+1. 移除了URL中的user_id, pointer_id, platform参数
+2. 这些信息现在都从JWT token中解析获取
+3. 系统会验证Redis中是否存在对应的token
+4. platform_id现在由系统自动生成（user_id + platform + timestamp）
+-->
 <!DOCTYPE html>
 <html>
 <head>
@@ -29,10 +40,21 @@
         .error-response { background: #f8d7da; border-left: 4px solid #dc3545; }
         .config-container { background: #f8f9fa; border: 2px solid #007bff; }
         .config-display { background: #e9ecef; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; margin-top: 10px; }
+        .header { margin-bottom: 20px; }
+        .header h1 { margin-top: 0; margin-bottom: 10px; }
+        .header p { margin-bottom: 10px; }
     </style>
 </head>
 <body>
-    <h1>🚀 即时通讯系统 - 完整端到端测试</h1>
+    <div class="header">
+        <h1>🚀 WebSocket 消息测试工具</h1>
+        <p>支持二进制消息接收、JSON消息发送，适配bincode编码格式</p>
+        <p><strong>新连接方式：</strong>现在只需要JWT token即可连接WebSocket，用户ID和平台信息会从token中解析</p>
+        <p><strong>踢下线机制：</strong>当同一平台建立新连接时，旧连接会收到踢下线通知并主动断开，提升多标签页使用体验</p>
+        <div id="currentConfig" class="config-display">
+            当前配置: WebSocket: localhost:8085, API: localhost:8000
+        </div>
+    </div>
     
     <!-- 顶部：环境配置 -->
     <div class="container config-container">
@@ -64,10 +86,6 @@
             <button onclick="setCloudConfig()" style="background: #fd7e14; margin: 3px; padding: 8px 15px;">☁️ 腾讯云服务器</button>
             <button onclick="setStagingConfig()" style="background: #6f42c1; margin: 3px; padding: 8px 15px;">🧪 测试环境</button>
         </div>
-        
-        <div id="currentConfig" class="config-display">
-            当前配置: WebSocket: localhost:8085, API: localhost:8000
-        </div>
     </div>
     
     <div class="two-column">
@@ -80,6 +98,7 @@
                 <input type="text" id="receiverUserId" value="715034496520425472" placeholder="接收方用户ID">
                 <br>
                 
+                <!-- 注释掉pointer_id相关UI
                 <label>客户端ID (pointer_id):</label><br>
                 <input type="text" id="pointerId" value="test-client-browser-001" placeholder="客户端唯一标识">
                 <br>
@@ -90,6 +109,7 @@
                     <option value="1">Mobile (移动端)</option>
                 </select>
                 <br><br>
+                -->
                 
                 <label>接收方JWT Token:</label><br>
                 <textarea id="receiverToken" class="token" placeholder="接收方JWT令牌">eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3MTUwMzQ0OTY1MjA0MjU0NzIiLCJpc3MiOiJhcGktZ2F0ZXdheSIsImV4cCI6MTc0ODg1MzkxNywiaWF0IjoxNzQ4NzY3NTE3LCJ1c2VybmFtZSI6InpoYW5nc2FuIiwidGVuYW50X2lkIjoxLCJ0ZW5hbnRfbmFtZSI6ImRlZmF1bHQiLCJleHRyYSI6eyJjdXN0b21faWQiOiJteWlkLVhPZnZjODhWIiwicGxhdGZvcm0iOiJ1bmtub3duIn19.ZdQTn8jKOhz8GaQGyrNhRhdp7jByaFkTNskrGmvnxFQ</textarea>
@@ -207,17 +227,19 @@
         function connectWebSocket() {
             const serverHost = document.getElementById('serverHost').value;
             const wsPort = document.getElementById('wsPort').value;
-            const userId = document.getElementById('receiverUserId').value;
-            const pointerId = document.getElementById('pointerId').value;
-            const platform = document.getElementById('platform').value;
+            // 注释掉pointer_id和platform相关的获取
+            // const userId = document.getElementById('receiverUserId').value;
+            // const pointerId = document.getElementById('pointerId').value;
+            // const platform = document.getElementById('platform').value;
             const jwtToken = document.getElementById('receiverToken').value.trim();
             
-            if (!serverHost || !wsPort || !userId || !pointerId || !jwtToken) {
+            if (!serverHost || !wsPort || !jwtToken) {
                 alert('请填写完整的WebSocket连接信息');
                 return;
             }
 
-            const wsUrl = `ws://${serverHost}:${wsPort}/ws/${userId}/conn/${pointerId}/${platform}/${encodeURIComponent(jwtToken)}`;
+            // 新的URL格式：/ws/{token}
+            const wsUrl = `ws://${serverHost}:${wsPort}/ws/${encodeURIComponent(jwtToken)}`;
             
             log(`正在连接WebSocket: ${wsUrl.substring(0, 100)}...`);
             
@@ -261,7 +283,21 @@
                 };
                 
                 ws.onclose = function(event) {
-                    log(`❌ WebSocket连接已关闭，代码: ${event.code}, 原因: ${event.reason}`);
+                    let reason = "";
+                    switch(event.code) {
+                        case 4001:
+                            reason = " - 账号在其他地方登录（被踢下线）";
+                            break;
+                        case 4002:
+                            reason = " - 未授权连接";
+                            break;
+                        case 1000:
+                            reason = " - 正常关闭";
+                            break;
+                        default:
+                            reason = event.reason ? ` - ${event.reason}` : "";
+                    }
+                    log(`❌ WebSocket连接已关闭，代码: ${event.code}${reason}`);
                     updateWSStatus(`已断开 (${event.code})`, false);
                     ws = null;
                 };
@@ -622,6 +658,13 @@
             log('② 点击"连接WebSocket"建立接收连接');
             log('③ 点击"发送单聊消息"或"发送群聊消息"');
             log('④ 观察左侧是否收到推送的消息');
+            log('');
+            log('🔄 踢下线机制测试:');
+            log('• 在同一浏览器打开两个此页面标签页');
+            log('• 在第一个标签页连接WebSocket');
+            log('• 在第二个标签页使用相同token连接');
+            log('• 观察第一个标签页会收到踢下线通知(4001)并断开');
+            log('• 这确保了每个平台只有一个活跃连接');
             log('');
             log('🌐 支持的环境:');
             log('• 本地开发: localhost');

@@ -32,10 +32,6 @@ pub struct Client {
     /// 唯一标识用户身份，用于消息路由
     pub user_id: String,
     
-    /// 平台ID
-    /// 客户端的唯一标识符，用于区分同一用户的不同连接
-    pub platform_id: String,
-    
     /// 平台类型
     /// 标识客户端运行的平台（桌面端或移动端）
     pub platform: PlatformType,

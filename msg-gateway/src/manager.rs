@@ -290,14 +290,42 @@ impl Manager {
     /// 将新的客户端连接添加到连接中心。
     /// 支持同一用户在多个平台同时在线。
     /// 
+    /// 如果同一平台已存在连接，会主动踢下线旧连接，提升用户体验。
+    /// 
     /// # 参数
     /// * `id` - 用户ID
     /// * `client` - 客户端连接对象
     pub async fn register(&mut self, id: String, client: Client) {
-        self.hub
-            .entry(id)
-            .or_default()
-            .insert(client.platform, client);
+        let platforms = self.hub.entry(id.clone()).or_default();
+        
+        // 检查是否已存在同平台连接
+        if let Some(old_client) = platforms.get(&client.platform) {
+            info!(
+                "检测到用户 {} 在平台 {:?} 的重复连接，准备踢下线旧连接", 
+                id, client.platform
+            );
+            
+            // 发送踢下线信号给旧连接
+            if let Err(e) = old_client.notify_sender.send(()).await {
+                warn!("向用户 {} 平台 {:?} 的旧连接发送踢下线信号失败: {}", id, client.platform, e);
+            } else {
+                info!("已向用户 {} 平台 {:?} 的旧连接发送踢下线信号", id, client.platform);
+            }
+            
+            // 给旧连接一点时间来处理踢下线信号
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+        
+        // 保存平台信息用于日志输出
+        let platform = client.platform;
+        
+        // 注册新连接（会覆盖旧连接）
+        platforms.insert(platform, client);
+        
+        info!(
+            "用户 {} 在平台 {:?} 的新连接已注册成功", 
+            id, platform
+        );
     }
 
     /// 注销客户端连接
