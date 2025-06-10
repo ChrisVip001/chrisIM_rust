@@ -397,7 +397,7 @@ impl ChatServiceHandler {
         debug!("获取会话列表请求，用户ID: {}", user_id);
 
         // 从查询参数中获取recent_msg_count，默认20条
-        let recent_msg_count = get_i64_param(&body, "recent_msg_count", 20) as i32;
+        let recent_msg_count = get_i64_param(&body, "recentMsgCount", 20) as i32;
         
         // 验证参数范围
         let recent_msg_count = if recent_msg_count <= 0 {
@@ -409,20 +409,20 @@ impl ChatServiceHandler {
         };
 
         // 获取离线同步参数
-        let sync_mode = body.get("sync_mode").and_then(|v| v.as_bool()).unwrap_or(false);
+        let sync_mode = body.get("syncMode").and_then(|v| v.as_bool()).unwrap_or(false);
         let since_seq = if sync_mode {
-            body.get("since_seq").and_then(|v| v.as_i64())
+            body.get("sinceSeq").and_then(|v| v.as_i64())
         } else {
             None
         };
         let since_send_seq = if sync_mode {
-            body.get("since_send_seq").and_then(|v| v.as_i64()) 
+            body.get("sinceSendSeq").and_then(|v| v.as_i64()) 
         } else {
             None
         };
 
         if sync_mode {
-            debug!("离线同步模式: since_seq={:?}, since_send_seq={:?}", since_seq, since_send_seq);
+            debug!("离线同步模式: sinceSeq={:?}, sinceSendSeq={:?}", since_seq, since_send_seq);
         } else {
             debug!("正常模式: 每个会话获取 {} 条最近消息", recent_msg_count);
         }
