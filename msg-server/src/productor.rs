@@ -135,7 +135,7 @@ impl ChatRpcService {
 
         // 创建gRPC健康检查服务
         // 用于监控服务健康状态，支持Kubernetes等容器编排工具的健康检查
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
         
         // 设置服务为健康状态
         // 当服务能正常启动时就认为是健康的

@@ -353,7 +353,8 @@ impl Cache for RedisCache {
 
         let mut conn = self.get_connection().await?;
         // 使用管道一次性获取两个值，减少网络往返
-        let (seq1, seq2): (i64, i64) = redis::pipe()
+        // 使用Option类型处理可能的nil值
+        let (seq1, seq2): (Option<i64>, Option<i64>) = redis::pipe()
             .cmd("HGET")
             .arg(&key1)
             .arg(CUR_SEQ_KEY)
@@ -362,6 +363,10 @@ impl Cache for RedisCache {
             .arg(CUR_SEQ_KEY)
             .query_async(&mut conn)
             .await?;
+
+        // 处理默认值，如果Redis中没有数据则返回0
+        let seq1 = seq1.unwrap_or_default();
+        let seq2 = seq2.unwrap_or_default();
 
         Ok((seq1, seq2))
     }
