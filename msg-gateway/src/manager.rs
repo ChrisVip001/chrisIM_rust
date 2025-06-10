@@ -404,7 +404,10 @@ impl Manager {
         // 这个操作在消费者模块中完成
         // 即使增加失败也不是问题
         match self.cache.incr_send_seq(&message.send_id).await {
-            Ok((seq, _, _)) => message.send_seq = seq,
+            Ok((seq, _, _)) => {
+                info!("增加发送序列号成功: {}", seq);
+                message.send_seq = seq
+            },
             Err(e) => {
                 self.create_error_message(message, e);
                 return;

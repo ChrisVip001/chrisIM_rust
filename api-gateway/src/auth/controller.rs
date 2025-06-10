@@ -257,12 +257,12 @@ pub async fn login(
     };
 
     // 图片验证码校验
-    if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
-        return Ok(error_response(
-            "图片验证码错误",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
-    }
+    // if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
+    //     return Ok(error_response(
+    //         "图片验证码错误",
+    //         StatusCode::INTERNAL_SERVER_ERROR,
+    //     ));
+    // }
 
     // 调用用户服务验证密码
     let response = user_service.verify_password(verify_request).await?;

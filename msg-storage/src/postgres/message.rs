@@ -29,10 +29,11 @@ impl MsgStoreRepo for PostgresMessage {
             "INSERT INTO messages
              (local_id, server_id, send_id, receiver_id, msg_type, content_type, content, 
               send_time, platform, is_revoked, revoke_time, revoked_by, related_msg_id,
-              forward_comment, is_forwarded, is_reply)
+              forward_comment, is_forwarded, is_reply, create_time, seq, send_seq, is_read,
+              group_id, avatar, nickname)
              VALUES
-             ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-             ON CONFLICT (local_id) DO UPDATE SET
+             ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+             ON CONFLICT (send_id, server_id, send_time) DO UPDATE SET
              is_revoked = EXCLUDED.is_revoked,
              revoke_time = EXCLUDED.revoke_time,
              revoked_by = EXCLUDED.revoked_by,
@@ -58,6 +59,13 @@ impl MsgStoreRepo for PostgresMessage {
         .bind(message.forward_comment.as_deref())
         .bind(message.is_forwarded)
         .bind(message.is_reply)
+        .bind(message.create_time)
+        .bind(message.seq)
+        .bind(message.send_seq)
+        .bind(message.is_read)
+        .bind(&message.group_id)
+        .bind(&message.avatar)
+        .bind(&message.nickname)
         .execute(&self.pool)
         .await?;
         Ok(())

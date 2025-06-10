@@ -100,21 +100,21 @@ impl MsgRecBoxRepo for MsgBox {
         members: Vec<GroupMemSeq>,
     ) -> Result<(), Error> {
         let mut messages = Vec::with_capacity(members.len() + 1);
-        // 为发送者保存消息
+        
+        // 为发送者保存消息（保持原始send_seq，因为这是他发送的消息）
         messages.push(to_doc(&message)?);
 
-        // 重置消息发送序列号
-        message.send_seq = 0;
-
-        // 为每个群组成员保存消息
+        // 为每个群组成员保存消息副本（接收者的send_seq应该是0）
+        let original_send_seq = message.send_seq;
+        message.send_seq = 0; // 对于接收者，send_seq应该是0
+        
         for seq in members {
-            // 递增成员序列号
+            // 设置成员的接收序列号
             message.seq = seq.cur_seq;
-
             message.receiver_id = seq.mem_id;
-
             messages.push(to_doc(&message)?);
         }
+        
         self.mb.insert_many(messages).await?;
         Ok(())
     }

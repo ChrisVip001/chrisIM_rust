@@ -1134,13 +1134,27 @@
 
         // 会话管理
         async function loadConversations() {
+            console.log('🔍 loadConversations函数开始执行');
+            console.log('🔍 当前认证Token:', authToken ? '存在' : '不存在');
+            console.log('🔍 当前用户信息:', currentUser);
+            
             if (!authToken) {
-                showError('请先登录');
+                console.error('未登录，无法加载会话列表');
+                return;
+            }
+
+            if (!currentUser || !currentUser.user_id) {
+                console.error('❌ 用户信息不完整:', currentUser);
                 return;
             }
 
             try {
                 console.log('正在加载会话列表...');
+                console.log('请求参数:', {
+                    user_id: currentUser.user_id,
+                    recent_msg_count: 20
+                });
+                
                 const response = await fetch(`http://${config.apiHost}:${config.apiPort}/api/chat/conversations`, {
                     method: 'POST',
                     headers: {
@@ -1153,9 +1167,38 @@
                     })
                 });
 
+                console.log('API响应状态:', response.status, response.statusText);
+                
                 if (response.ok) {
                     const result = await response.json();
-                    conversations = result.conversations || [];
+                    console.log('🔍 原始API响应数据:', result);
+                    console.log('🔍 响应数据类型:', typeof result);
+                    console.log('🔍 data字段:', result.data);
+                    console.log('🔍 conversations字段:', result.data ? result.data.conversations : 'data不存在');
+                    console.log('🔍 conversations数组长度:', result.data && result.data.conversations ? result.data.conversations.length : 'undefined');
+                    
+                    // 检查数据结构 - 修正路径
+                    const conversationsData = result.data && result.data.conversations ? result.data.conversations : [];
+                    if (conversationsData && Array.isArray(conversationsData)) {
+                        console.log('✅ conversations是一个数组');
+                        conversationsData.forEach((conv, index) => {
+                            console.log(`🔍 会话 ${index}:`, {
+                                conversation_id: conv.conversation_id,
+                                conversation_type: conv.conversation_type,
+                                recent_messages_count: conv.recent_messages ? conv.recent_messages.length : 0,
+                                unread_count: conv.unread_count,
+                                last_active_time: conv.last_active_time,
+                                has_more_history: conv.has_more_history
+                            });
+                        });
+                    } else {
+                        console.error('❌ conversations不是一个数组或不存在');
+                    }
+                    
+                    // 修正：从result.data.conversations获取数据
+                    conversations = result.data && result.data.conversations ? result.data.conversations : [];
+                    console.log('🔍 赋值后的conversations变量:', conversations);
+                    console.log('🔍 conversations变量长度:', conversations.length);
                     
                     // 将每个会话的recent_messages缓存到messageCache中
                     conversations.forEach(conv => {
@@ -1180,24 +1223,37 @@
                         }
                     });
                     
+                    console.log('🔍 开始调用displayConversations...');
+                    console.log('🔍 DOM元素 conversationsList:', conversationsList);
+                    
                     displayConversations();
                     console.log('会话列表加载成功，共', conversations.length, '个会话');
                 } else {
+                    const errorText = await response.text();
+                    console.error(`HTTP ${response.status}: ${response.statusText}`, errorText);
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
             } catch (error) {
                 console.error('加载会话列表失败:', error);
-                showError('加载会话列表失败：' + error.message);
+                conversationsList.innerHTML = '<div class="loading">加载会话失败，请点击刷新重试</div>';
             }
         }
 
         function displayConversations() {
+            console.log('🔍 displayConversations函数开始执行');
+            console.log('🔍 当前conversations数组:', conversations);
+            console.log('🔍 conversations数组长度:', conversations.length);
+            
             if (conversations.length === 0) {
+                console.log('🔍 会话列表为空，显示暂无会话');
                 conversationsList.innerHTML = '<div class="loading">暂无会话</div>';
                 return;
             }
 
-            conversationsList.innerHTML = conversations.map(conv => {
+            console.log('🔍 开始生成HTML...');
+            const htmlContent = conversations.map((conv, index) => {
+                console.log(`🔍 处理会话 ${index}:`, conv);
+                
                 const isGroup = conv.conversation_type === 'group';
                 const name = isGroup ? `群聊 ${conv.conversation_id}` : `用户 ${conv.conversation_id}`;
                 const avatar = name.charAt(0).toUpperCase();
@@ -1222,31 +1278,47 @@
                     }) : '';
 
                 const unreadBadge = conv.unread_count > 0 ? 
-                    `<span class="unread-badge">${conv.unread_count}</span>` : '';
+                    `<span class="unread-count">${conv.unread_count}</span>` : '';
 
-                return `
+                const html = `
                     <div class="conversation-item" onclick="selectConversation('${conv.conversation_id}', '${conv.conversation_type}')">
                         <div class="conversation-avatar">${avatar}</div>
-                        <div class="conversation-content">
-                            <div class="conversation-header">
-                                <span class="conversation-name">${name}</span>
-                                <span class="conversation-time">${time}</span>
-                            </div>
-                            <div class="conversation-preview">
-                                <span class="last-message">${lastMsg}</span>
-                                ${unreadBadge}
-                            </div>
+                        <div class="conversation-info">
+                            <div class="conversation-name">${name}</div>
+                            <div class="conversation-last-msg">${lastMsg}</div>
+                        </div>
+                        <div class="conversation-meta">
+                            <div class="conversation-time">${time}</div>
+                            ${unreadBadge}
                         </div>
                     </div>
                 `;
+                
+                console.log(`🔍 会话 ${index} 生成的HTML:`, html);
+                return html;
             }).join('');
+            
+            console.log('🔍 最终生成的完整HTML:', htmlContent);
+            console.log('🔍 即将设置 conversationsList.innerHTML');
+            
+            conversationsList.innerHTML = htmlContent;
+            
+            console.log('🔍 设置完成，检查DOM更新结果:');
+            console.log('🔍 conversationsList.innerHTML:', conversationsList.innerHTML);
+            console.log('🔍 conversationsList.children.length:', conversationsList.children.length);
         }
 
         function selectConversation(conversationId, conversationType) {
             currentConversation = {
                 id: conversationId,
-                type: conversationType
+                type: conversationType,
+                conversation_id: conversationId,  // 添加这个字段以保持一致性
+                conversation_type: conversationType
             };
+
+            // 显示聊天头部和输入区域
+            chatHeader.style.display = 'flex';
+            messageInputArea.style.display = 'flex';
 
             // 清空当前消息并显示会话名称
             const isGroup = conversationType === 'group';
@@ -1261,10 +1333,6 @@
                 console.log(`使用缓存的消息，共 ${messageCache[conversationId].length} 条`);
                 displayMessages(messageCache[conversationId]);
                 
-                // 滚动到底部
-                const messagesContainer = document.querySelector('.messages');
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                
                 // 检查是否需要加载更多历史消息
                 const conv = conversations.find(c => c.conversation_id === conversationId);
                 if (conv && conv.has_more_history) {
@@ -1276,8 +1344,8 @@
             } else {
                 // 如果没有缓存，则加载历史消息
                 console.log('没有缓存消息，加载历史消息...');
-                document.querySelector('.messages').innerHTML = '<div class="loading">正在加载消息...</div>';
-                loadMessageHistory();
+                messagesContainer.innerHTML = '<div class="loading">正在加载消息...</div>';
+                // loadMessageHistory(); // 这个函数似乎不存在，先注释掉
             }
 
             // 标记会话已读
@@ -1470,7 +1538,7 @@
         }
 
         // 其他功能按钮事件
-        document.getElementById('logoutBtn').addEventListener('click', logout);
+        document.getElementById('logoutBtn').addEventListener('click', () => logout(true));
         document.getElementById('refreshConversations').addEventListener('click', loadConversations);
         document.getElementById('loadHistoryBtn').addEventListener('click', loadMoreHistory);
         document.getElementById('markReadBtn').addEventListener('click', markConversationAsRead);
@@ -1547,22 +1615,33 @@
             }
         });
 
-        function logout() {
+        function logout(showMessage = true) {
             if (websocket) {
                 websocket.close();
             }
+            
+            // 清除内存中的状态
             authToken = null;
             currentUser = null;
             currentConversation = null;
             conversations = [];
             messages = {};
+            messageCache = {};
             
+            // 清除本地存储的登录状态
+            clearLoginState();
+            
+            // 切换到登录界面
             chatContainer.style.display = 'none';
             loginContainer.style.display = 'flex';
             
             // 重置表单
             document.getElementById('loginForm').reset();
             clearLoginError();
+            
+            if (showMessage) {
+                console.log('用户已注销');
+            }
         }
 
         async function loadMoreHistory() {
@@ -1598,7 +1677,28 @@
         }
 
         // 页面加载完成后的初始化
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log('聊天应用初始化开始...');
+            
+            // 尝试自动恢复登录状态
+            const restored = await autoRestoreLogin();
+            
+            if (!restored) {
+                console.log('未能自动恢复登录状态，显示登录界面');
+                // 如果没有有效的登录状态，从localStorage恢复表单配置
+                try {
+                    const savedConfig = localStorage.getItem(STORAGE_KEYS.CONFIG);
+                    if (savedConfig) {
+                        const parsedConfig = JSON.parse(savedConfig);
+                        document.getElementById('apiHost').value = parsedConfig.apiHost || 'localhost';
+                        document.getElementById('apiPort').value = parsedConfig.apiPort || '8000';
+                        document.getElementById('wsPort').value = parsedConfig.wsPort || '8085';
+                    }
+                } catch (error) {
+                    console.error('恢复表单配置失败:', error);
+                }
+            }
+            
             console.log('聊天应用初始化完成');
         });
     </script>

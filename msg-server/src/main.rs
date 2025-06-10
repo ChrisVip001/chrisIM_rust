@@ -52,6 +52,16 @@ async fn main() -> anyhow::Result<()> {
     }
     
     info!("正在启动消息服务器...");
+
+    // 初始化序列号缓存
+    // 从数据库加载所有用户的序列号到Redis缓存中
+    // 这是确保序列号连续性的重要步骤
+    info!("正在初始化序列号缓存...");
+    if let Err(e) = msg_storage::init_seq_cache(&config).await {
+        tracing::error!("序列号缓存初始化失败: {:?}", e);
+        return Err(e.into());
+    }
+    info!("序列号缓存初始化完成");
     
     // 创建并初始化消费者服务实例
     // 消费者服务负责从Kafka消费消息，并进行后续处理

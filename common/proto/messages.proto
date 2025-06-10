@@ -385,15 +385,17 @@ message GetMessageHistoryResponse {
 /// 获取会话列表请求
 message GetConversationsRequest {
   string user_id = 1;  // 用户ID
+  int32 recent_msg_count = 2;  // 每个会话返回的最近消息数量（默认20，最大50）
 }
 
 /// 会话信息
 message Conversation {
   string conversation_id = 1;    // 会话ID
   string conversation_type = 2;  // 会话类型（single/group）
-  Msg last_message = 3;         // 最后一条消息
+  repeated Msg recent_messages = 3;  // 最近的消息列表（替代last_message，包含最近20条）
   int32 unread_count = 4;       // 未读消息数量
   int64 last_active_time = 5;   // 最后活跃时间
+  bool has_more_history = 6;    // 是否还有更多历史消息
 }
 
 /// 获取会话列表响应

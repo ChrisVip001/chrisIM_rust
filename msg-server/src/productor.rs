@@ -262,6 +262,21 @@ impl ChatService for ChatRpcService {
             msg.server_id = nanoid!();
         }
         
+        // 生成发送序列号
+        // 所有用户发送的消息都需要一个唯一的发送序列号用于排序和去重
+        if msg.send_seq == 0 {
+            match self.cache.incr_send_seq(&msg.send_id).await {
+                Ok((seq, _, _)) => {
+                    debug!("为用户 {} 生成发送序列号: {}", msg.send_id, seq);
+                    msg.send_seq = seq;
+                }
+                Err(e) => {
+                    error!("生成发送序列号失败: {}", e);
+                    return Err(tonic::Status::internal(format!("生成发送序列号失败: {}", e)));
+                }
+            }
+        }
+        
         // 设置消息的服务器发送时间戳（毫秒级）
         msg.send_time = chrono::Utc::now().timestamp_millis();
 
@@ -428,21 +443,28 @@ impl ChatService for ChatRpcService {
         request: tonic::Request<GetConversationsRequest>,
     ) -> Result<tonic::Response<GetConversationsResponse>, tonic::Status> {
         let req = request.into_inner();
-        debug!("获取会话列表请求，用户ID: {}", req.user_id);
+        debug!("获取会话列表请求，用户ID: {}, 每会话消息数: {}", req.user_id, req.recent_msg_count);
+
+        // 验证参数：每个会话的消息数量限制
+        let recent_msg_count = if req.recent_msg_count <= 0 {
+            20  // 默认20条
+        } else if req.recent_msg_count > 50 {
+            50  // 最大50条
+        } else {
+            req.recent_msg_count
+        };
 
         // 获取用户当前序列号
         let (rec_seq, send_seq) = self.cache.get_cur_seq(&req.user_id).await?;
 
-        // 获取最近的消息来构建会话列表
-        // 这里我们获取最近100条消息，然后按会话分组
-        let recent_count = 100i64;
+        let recent_count = 500i64; // 最近500条消息
         let rec_start = std::cmp::max(0, rec_seq - recent_count);
         let send_start = std::cmp::max(0, send_seq - recent_count);
 
         match self.msg_storage.get_msgs(&req.user_id, send_start, send_seq, rec_start, rec_seq).await {
             Ok(messages) => {
-                // 按会话ID分组消息，构建会话列表
-                let mut conversations = std::collections::HashMap::new();
+                // 按会话ID分组消息，每个会话保留最近的N条消息
+                let mut conversations: std::collections::HashMap<String, Vec<Msg>> = std::collections::HashMap::new();
                 
                 for msg in messages {
                     // 确定会话ID：对于单聊，会话ID是对方的用户ID；对于群聊，会话ID是群组ID
@@ -461,32 +483,56 @@ impl ChatService for ChatRpcService {
                         continue;
                     }
 
-                    // 更新会话信息（保留最新的消息）
-                    let conversation_entry = conversations.entry(conversation_id.clone()).or_insert_with(|| {
-                        Conversation {
-                            conversation_id: conversation_id.clone(),
-                            conversation_type: if msg.msg_type == MsgType::GroupMsg as i32 { "group".to_string() } else { "single".to_string() },
-                            last_message: Some(msg.clone()),
-                            unread_count: 0,
-                            last_active_time: msg.send_time,
-                        }
-                    });
-
-                    // 更新为最新消息（基于发送时间）
-                    if msg.send_time > conversation_entry.last_active_time {
-                        conversation_entry.last_message = Some(msg.clone());
-                        conversation_entry.last_active_time = msg.send_time;
-                    }
-
-                    // 计算未读消息数（只计算接收到的未读消息）
-                    if msg.receiver_id == req.user_id && !msg.is_read {
-                        conversation_entry.unread_count += 1;
-                    }
+                    // 添加消息到对应会话
+                    conversations.entry(conversation_id).or_insert_with(Vec::new).push(msg);
                 }
 
-                // 转换为数组并按最后活跃时间排序
-                let mut conversation_list: Vec<Conversation> = conversations.into_values().collect();
-                conversation_list.sort_by(|a, b| b.last_active_time.cmp(&a.last_active_time)); // 降序排列，最新的在前面
+                // 构建最终的会话列表
+                let mut conversation_list = Vec::new();
+                
+                for (conversation_id, mut msgs) in conversations {
+                    if msgs.is_empty() {
+                        continue;
+                    }
+
+                    // 按发送时间排序（最新的在前）
+                    msgs.sort_by(|a, b| b.send_time.cmp(&a.send_time));
+
+                    // 确定会话类型
+                    let conversation_type = if msgs[0].msg_type == MsgType::GroupMsg as i32 { 
+                        "group".to_string() 
+                    } else { 
+                        "single".to_string() 
+                    };
+
+                    // 计算未读消息数（只计算接收到的未读消息）
+                    let unread_count = msgs.iter()
+                        .filter(|msg| msg.receiver_id == req.user_id && !msg.is_read)
+                        .count() as i32;
+
+                    // 获取最后活跃时间
+                    let last_active_time = msgs[0].send_time;
+
+                    // 截取最近的N条消息
+                    let recent_messages = msgs.into_iter()
+                        .take(recent_msg_count as usize)
+                        .collect::<Vec<_>>();
+
+                    // 判断是否还有更多历史消息
+                    let has_more_history = recent_messages.len() == recent_msg_count as usize;
+
+                    conversation_list.push(Conversation {
+                        conversation_id,
+                        conversation_type,
+                        recent_messages,
+                        unread_count,
+                        last_active_time,
+                        has_more_history,
+                    });
+                }
+
+                // 按最后活跃时间排序（最新的在前面）
+                conversation_list.sort_by(|a, b| b.last_active_time.cmp(&a.last_active_time));
 
                 Ok(tonic::Response::new(GetConversationsResponse {
                     conversations: conversation_list.clone(),

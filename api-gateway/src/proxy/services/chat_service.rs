@@ -67,7 +67,7 @@ impl ChatServiceHandler {
             (&Method::GET, "history") => self.get_message_history(&current_user_id, body).await,
 
             // 获取会话列表
-            (&Method::GET, "conversations") => self.get_conversations(&current_user_id, body).await,
+            (&Method::POST, "conversations") => self.get_conversations(&current_user_id, body).await,
 
             // 拉取离线消息
             (&Method::GET, "pull_offline_messages") => {
@@ -158,7 +158,7 @@ impl ChatServiceHandler {
             avatar: String::new(),   // 可以从用户信息中获取
             nickname: String::new(), // 可以从用户信息中获取
             related_msg_id,
-            send_seq: 0, // 由msg-gateway设置
+            send_seq: 0,
             is_revoked: false,
             revoke_time: 0,
             revoked_by: String::new(),
@@ -235,7 +235,7 @@ impl ChatServiceHandler {
             avatar: String::new(),   // 可以从用户信息中获取
             nickname: String::new(), // 可以从用户信息中获取
             related_msg_id,
-            send_seq: 0, // 由msg-gateway设置
+            send_seq: 0,
             is_revoked: false,
             revoke_time: 0,
             revoked_by: String::new(),
@@ -392,13 +392,28 @@ impl ChatServiceHandler {
     async fn get_conversations(
         &mut self,
         user_id: &str,
-        _body: Value,
+        body: Value,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("获取会话列表请求，用户ID: {}", user_id);
+
+        // 从查询参数中获取recent_msg_count，默认20条
+        let recent_msg_count = get_i64_param(&body, "recent_msg_count", 20) as i32;
+        
+        // 验证参数范围
+        let recent_msg_count = if recent_msg_count <= 0 {
+            20  // 默认20条
+        } else if recent_msg_count > 50 {
+            50  // 最大50条
+        } else {
+            recent_msg_count
+        };
+
+        debug!("每个会话获取 {} 条最近消息", recent_msg_count);
 
         // 调用msg-server的gRPC接口获取会话列表
         let request = GetConversationsRequest {
             user_id: user_id.to_string(),
+            recent_msg_count,
         };
 
         match self.client.get_conversations(request).await {
