@@ -408,12 +408,32 @@ impl ChatServiceHandler {
             recent_msg_count
         };
 
-        debug!("每个会话获取 {} 条最近消息", recent_msg_count);
+        // 获取离线同步参数
+        let sync_mode = body.get("sync_mode").and_then(|v| v.as_bool()).unwrap_or(false);
+        let since_seq = if sync_mode {
+            body.get("since_seq").and_then(|v| v.as_i64())
+        } else {
+            None
+        };
+        let since_send_seq = if sync_mode {
+            body.get("since_send_seq").and_then(|v| v.as_i64()) 
+        } else {
+            None
+        };
+
+        if sync_mode {
+            debug!("离线同步模式: since_seq={:?}, since_send_seq={:?}", since_seq, since_send_seq);
+        } else {
+            debug!("正常模式: 每个会话获取 {} 条最近消息", recent_msg_count);
+        }
 
         // 调用msg-server的gRPC接口获取会话列表
         let request = GetConversationsRequest {
             user_id: user_id.to_string(),
             recent_msg_count,
+            since_seq,
+            since_send_seq,
+            sync_mode: Some(sync_mode),
         };
 
         match self.client.get_conversations(request).await {

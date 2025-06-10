@@ -443,7 +443,8 @@ impl ChatService for ChatRpcService {
         request: tonic::Request<GetConversationsRequest>,
     ) -> Result<tonic::Response<GetConversationsResponse>, tonic::Status> {
         let req = request.into_inner();
-        debug!("获取会话列表请求，用户ID: {}, 每会话消息数: {}", req.user_id, req.recent_msg_count);
+        debug!("获取会话列表请求，用户ID: {}, 每会话消息数: {}, 同步模式: {:?}", 
+               req.user_id, req.recent_msg_count, req.sync_mode);
 
         // 验证参数：每个会话的消息数量限制
         let recent_msg_count = if req.recent_msg_count <= 0 {
@@ -457,12 +458,50 @@ impl ChatService for ChatRpcService {
         // 获取用户当前序列号
         let (rec_seq, send_seq) = self.cache.get_cur_seq(&req.user_id).await?;
 
-        let recent_count = 500i64; // 最近500条消息
-        let rec_start = std::cmp::max(0, rec_seq - recent_count);
-        let send_start = std::cmp::max(0, send_seq - recent_count);
+        // 根据是否为同步模式确定查询范围
+        let (rec_start, rec_end, send_start, send_end) = if req.sync_mode.unwrap_or(false) {
+            // 同步模式：只获取指定序列号之后的新消息
+            let since_seq = req.since_seq.unwrap_or(0);
+            let since_send_seq = req.since_send_seq.unwrap_or(0);
+            
+            debug!("离线同步模式: since_seq={}, since_send_seq={}, 当前seq={}, 当前send_seq={}", 
+                   since_seq, since_send_seq, rec_seq, send_seq);
+            
+            // 接收消息：从客户端最后接收序列号+1开始到当前序列号
+            let rec_start = since_seq + 1;
+            let rec_end = rec_seq;
+            
+            // 发送消息：从客户端最后发送序列号+1开始到当前发送序列号  
+            let send_start = since_send_seq + 1;
+            let send_end = send_seq;
+            
+            // 如果没有新消息，直接返回空结果
+            if rec_start > rec_end && send_start > send_end {
+                debug!("没有新消息需要同步");
+                return Ok(tonic::Response::new(GetConversationsResponse {
+                    conversations: Vec::new(),
+                    total: 0,
+                    error: String::new(),
+                }));
+            }
+            
+            (rec_start, rec_end, send_start, send_end)
+        } else {
+            // 正常模式：获取最近的消息
+            let recent_count = 500i64; // 最近500条消息
+            let rec_start = std::cmp::max(0, rec_seq - recent_count);
+            let send_start = std::cmp::max(0, send_seq - recent_count);
+            
+            (rec_start, rec_seq, send_start, send_seq)
+        };
 
-        match self.msg_storage.get_msgs(&req.user_id, send_start, send_seq, rec_start, rec_seq).await {
+        debug!("查询范围: 接收消息 [{}, {}], 发送消息 [{}, {}]", 
+               rec_start, rec_end, send_start, send_end);
+
+        match self.msg_storage.get_msgs(&req.user_id, send_start, send_end, rec_start, rec_end).await {
             Ok(messages) => {
+                debug!("从数据库获取到 {} 条消息", messages.len());
+                
                 // 按会话ID分组消息，每个会话保留最近的N条消息
                 let mut conversations: std::collections::HashMap<String, Vec<Msg>> = std::collections::HashMap::new();
                 
@@ -513,13 +552,23 @@ impl ChatService for ChatRpcService {
                     // 获取最后活跃时间
                     let last_active_time = msgs[0].send_time;
 
-                    // 截取最近的N条消息
-                    let recent_messages = msgs.into_iter()
-                        .take(recent_msg_count as usize)
-                        .collect::<Vec<_>>();
+                    // 截取最近的N条消息（在同步模式下可能返回所有新消息）
+                    let recent_messages = if req.sync_mode.unwrap_or(false) {
+                        // 同步模式：返回所有新消息，不限制数量
+                        msgs
+                    } else {
+                        // 正常模式：截取最近的N条消息
+                        msgs.into_iter()
+                            .take(recent_msg_count as usize)
+                            .collect::<Vec<_>>()
+                    };
 
-                    // 判断是否还有更多历史消息
-                    let has_more_history = recent_messages.len() == recent_msg_count as usize;
+                    // 判断是否还有更多历史消息（同步模式下不需要判断）
+                    let has_more_history = if req.sync_mode.unwrap_or(false) {
+                        false  // 同步模式下不需要分页
+                    } else {
+                        recent_messages.len() == recent_msg_count as usize
+                    };
 
                     conversation_list.push(Conversation {
                         conversation_id,
@@ -533,6 +582,8 @@ impl ChatService for ChatRpcService {
 
                 // 按最后活跃时间排序（最新的在前面）
                 conversation_list.sort_by(|a, b| b.last_active_time.cmp(&a.last_active_time));
+
+                debug!("成功构建 {} 个会话", conversation_list.len());
 
                 Ok(tonic::Response::new(GetConversationsResponse {
                     conversations: conversation_list.clone(),

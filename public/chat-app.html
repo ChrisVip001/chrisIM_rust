@@ -844,7 +844,7 @@
                     updateConnectionStatus('disconnected', 'WebSocket连接失败');
                 });
                 
-                loadConversations().catch(convError => {
+                loadConversations(false).catch(convError => {
                     console.error('加载会话列表失败:', convError);
                     conversationsList.innerHTML = '<div class="loading">加载会话失败，请点击刷新重试</div>';
                 });
@@ -968,7 +968,7 @@
                 
                 // 步骤7：加载会话列表（异步，不阻塞）
                 console.log('加载会话列表...');
-                loadConversations().catch(convError => {
+                loadConversations(false).catch(convError => {
                     console.error('加载会话列表失败:', convError);
                     conversationsList.innerHTML = '<div class="loading">加载会话失败，请点击刷新重试</div>';
                 });
@@ -1128,15 +1128,16 @@
                 }
                 
                 // 更新会话列表
-                loadConversations();
+                loadConversations(false);
             }
         }
 
         // 会话管理
-        async function loadConversations() {
+        async function loadConversations(syncMode = false, sinceSeq = null, sinceSendSeq = null) {
             console.log('🔍 loadConversations函数开始执行');
             console.log('🔍 当前认证Token:', authToken ? '存在' : '不存在');
             console.log('🔍 当前用户信息:', currentUser);
+            console.log('🔍 同步模式参数:', { syncMode, sinceSeq, sinceSendSeq });
             
             if (!authToken) {
                 console.error('未登录，无法加载会话列表');
@@ -1150,10 +1151,28 @@
 
             try {
                 console.log('正在加载会话列表...');
-                console.log('请求参数:', {
+                
+                // 构建请求参数
+                const requestBody = {
                     user_id: currentUser.user_id,
-                    recent_msg_count: 20
-                });
+                    recent_msg_count: 20  // 每个会话获取最近20条消息
+                };
+
+                // 如果是同步模式，添加同步参数
+                if (syncMode) {
+                    requestBody.sync_mode = true;
+                    if (sinceSeq !== null) {
+                        requestBody.since_seq = sinceSeq;
+                    }
+                    if (sinceSendSeq !== null) {
+                        requestBody.since_send_seq = sinceSendSeq;
+                    }
+                    console.log('使用同步模式，参数:', { since_seq: sinceSeq, since_send_seq: sinceSendSeq });
+                } else {
+                    console.log('使用正常模式');
+                }
+                
+                console.log('请求参数:', requestBody);
                 
                 const response = await fetch(`http://${config.apiHost}:${config.apiPort}/api/chat/conversations`, {
                     method: 'POST',
@@ -1161,10 +1180,7 @@
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${authToken}`
                     },
-                    body: JSON.stringify({
-                        user_id: currentUser.user_id,
-                        recent_msg_count: 20  // 每个会话获取最近20条消息
-                    })
+                    body: JSON.stringify(requestBody)
                 });
 
                 console.log('API响应状态:', response.status, response.statusText);
@@ -1196,7 +1212,31 @@
                     }
                     
                     // 修正：从result.data.conversations获取数据
-                    conversations = result.data && result.data.conversations ? result.data.conversations : [];
+                    if (syncMode) {
+                        // 同步模式：增量更新会话列表
+                        const newConversations = result.data && result.data.conversations ? result.data.conversations : [];
+                        if (newConversations.length > 0) {
+                            // 合并新会话到现有列表
+                            newConversations.forEach(newConv => {
+                                const existingIndex = conversations.findIndex(conv => conv.conversation_id === newConv.conversation_id);
+                                if (existingIndex >= 0) {
+                                    // 更新现有会话
+                                    conversations[existingIndex] = newConv;
+                                } else {
+                                    // 添加新会话
+                                    conversations.push(newConv);
+                                }
+                            });
+                            console.log(`同步模式更新了 ${newConversations.length} 个会话`);
+                        } else {
+                            console.log('同步模式：没有新的会话数据');
+                        }
+                    } else {
+                        // 正常模式：替换整个会话列表
+                        conversations = result.data && result.data.conversations ? result.data.conversations : [];
+                        console.log('正常模式加载了', conversations.length, '个会话');
+                    }
+                    
                     console.log('🔍 赋值后的conversations变量:', conversations);
                     console.log('🔍 conversations变量长度:', conversations.length);
                     
@@ -1227,7 +1267,12 @@
                     console.log('🔍 DOM元素 conversationsList:', conversationsList);
                     
                     displayConversations();
-                    console.log('会话列表加载成功，共', conversations.length, '个会话');
+                    
+                    if (syncMode) {
+                        console.log('会话列表同步完成，共', conversations.length, '个会话');
+                    } else {
+                        console.log('会话列表加载成功，共', conversations.length, '个会话');
+                    }
                 } else {
                     const errorText = await response.text();
                     console.error(`HTTP ${response.status}: ${response.statusText}`, errorText);
@@ -1539,7 +1584,15 @@
 
         // 其他功能按钮事件
         document.getElementById('logoutBtn').addEventListener('click', () => logout(true));
-        document.getElementById('refreshConversations').addEventListener('click', loadConversations);
+        document.getElementById('refreshConversations').addEventListener('click', () => {
+            // 正常刷新：完整加载会话列表
+            loadConversations(false);
+            
+            // 如果需要使用同步模式，可以这样调用：
+            // const maxRecSeq = 1580;  // 从IndexDB获取最大接收序列号
+            // const maxSendSeq = 2105; // 从IndexDB获取最大发送序列号
+            // loadConversations(true, maxRecSeq, maxSendSeq);
+        });
         document.getElementById('loadHistoryBtn').addEventListener('click', loadMoreHistory);
         document.getElementById('markReadBtn').addEventListener('click', markConversationAsRead);
 
@@ -1669,7 +1722,7 @@
                 const result = await response.json();
                 if (response.ok && result.success) {
                     console.log('会话已标记为已读');
-                    loadConversations(); // 刷新会话列表
+                    loadConversations(false); // 刷新会话列表
                 }
             } catch (error) {
                 console.error('标记已读失败:', error);

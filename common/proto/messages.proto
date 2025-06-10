@@ -386,6 +386,12 @@ message GetMessageHistoryResponse {
 message GetConversationsRequest {
   string user_id = 1;  // 用户ID
   int32 recent_msg_count = 2;  // 每个会话返回的最近消息数量（默认20，最大50）
+  
+  // 离线同步参数（可选）
+  // 用于客户端重连后的增量同步，只获取指定序列号之后的新消息
+  optional int64 since_seq = 3;        // 客户端最后的接收序列号，获取此序列号之后的接收消息
+  optional int64 since_send_seq = 4;   // 客户端最后的发送序列号，获取此序列号之后的发送消息
+  optional bool sync_mode = 5;         // 是否为同步模式（true=增量同步，false=正常获取最近消息）
 }
 
 /// 会话信息
