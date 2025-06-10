@@ -177,6 +177,8 @@ fn build_cors_layer() -> CorsLayer {
             // 添加更多常用的请求头
             axum::http::header::CACHE_CONTROL,
             axum::http::header::PRAGMA,
+            // 添加自定义的system-type请求头
+            axum::http::HeaderName::from_static("system-type"),
         ])
         .allow_credentials(true)
         .max_age(Duration::from_secs(3600))
