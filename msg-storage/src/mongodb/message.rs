@@ -271,11 +271,11 @@ impl MsgRecBoxRepo for MsgBox {
                     "$or": [
                         {
                             "receiver_id": user_id,
-                            "seq": { "$gt": rec_start, "$lte": rec_end }
+                            "seq": { "$gte": rec_start, "$lte": rec_end }
                         },
                         {
                             "send_id": user_id,
-                            "send_seq": { "$gt": send_start, "$lte": send_end }
+                            "send_seq": { "$gte": send_start, "$lte": send_end }
                         }
                     ]
                 }
