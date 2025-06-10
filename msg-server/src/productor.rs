@@ -443,157 +443,40 @@ impl ChatService for ChatRpcService {
         request: tonic::Request<GetConversationsRequest>,
     ) -> Result<tonic::Response<GetConversationsResponse>, tonic::Status> {
         let req = request.into_inner();
-        debug!("获取会话列表请求，用户ID: {}, 每会话消息数: {}, 同步模式: {:?}", 
-               req.user_id, req.recent_msg_count, req.sync_mode);
-
-        // 验证参数：每个会话的消息数量限制
-        let recent_msg_count = if req.recent_msg_count <= 0 {
-            20  // 默认20条
-        } else if req.recent_msg_count > 50 {
-            50  // 最大50条
-        } else {
-            req.recent_msg_count
-        };
+        debug!("获取会话列表请求，用户ID: {}, 同步模式: {:?}", req.user_id, req.sync_mode);
 
         // 获取用户当前序列号
         let (rec_seq, send_seq) = self.cache.get_cur_seq(&req.user_id).await?;
 
-        // 根据是否为同步模式确定查询范围
-        let (rec_start, rec_end, send_start, send_end) = if req.sync_mode.unwrap_or(false) {
-            // 同步模式：只获取指定序列号之后的新消息
-            let since_seq = req.since_seq.unwrap_or(0);
-            let since_send_seq = req.since_send_seq.unwrap_or(0);
-            
-            debug!("离线同步模式: since_seq={}, since_send_seq={}, 当前seq={}, 当前send_seq={}", 
-                   since_seq, since_send_seq, rec_seq, send_seq);
-            
-            // 接收消息：从客户端最后接收序列号+1开始到当前序列号
-            let rec_start = since_seq + 1;
-            let rec_end = rec_seq;
-            
-            // 发送消息：从客户端最后发送序列号+1开始到当前发送序列号  
-            let send_start = since_send_seq + 1;
-            let send_end = send_seq;
-            
-            // 如果没有新消息，直接返回空结果
-            if rec_start > rec_end && send_start > send_end {
-                debug!("没有新消息需要同步");
-                return Ok(tonic::Response::new(GetConversationsResponse {
-                    conversations: Vec::new(),
-                    total: 0,
-                    error: String::new(),
-                }));
-            }
-            
-            (rec_start, rec_end, send_start, send_end)
-        } else {
-            // 正常模式：获取最近的消息
-            let recent_count = 500i64; // 最近500条消息
-            let rec_start = std::cmp::max(0, rec_seq - recent_count);
-            let send_start = std::cmp::max(0, send_seq - recent_count);
-            
-            (rec_start, rec_seq, send_start, send_seq)
-        };
+        // 确定查询模式和范围
+        let query_range = self.determine_query_range(&req, rec_seq, send_seq);
+        debug!("查询模式: {:?}, 范围: {:?}", query_range.mode, query_range);
 
-        debug!("查询范围: 接收消息 [{}, {}], 发送消息 [{}, {}]", 
-               rec_start, rec_end, send_start, send_end);
+        // 如果是增量同步且无新消息，直接返回
+        if query_range.mode == QueryMode::IncrementalSync && query_range.is_empty() {
+            debug!("增量同步：没有新消息");
+            return Ok(tonic::Response::new(GetConversationsResponse {
+                conversations: Vec::new(),
+                total: 0,
+            }));
+        }
 
-        match self.msg_storage.get_msgs(&req.user_id, send_start, send_end, rec_start, rec_end).await {
+        // 查询消息
+        match self.fetch_messages(&req.user_id, &query_range).await {
             Ok(messages) => {
-                debug!("从数据库获取到 {} 条消息", messages.len());
-                
-                // 按会话ID分组消息，每个会话保留最近的N条消息
-                let mut conversations: std::collections::HashMap<String, Vec<Msg>> = std::collections::HashMap::new();
-                
-                for msg in messages {
-                    // 确定会话ID：对于单聊，会话ID是对方的用户ID；对于群聊，会话ID是群组ID
-                    let conversation_id = if msg.msg_type == MsgType::GroupMsg as i32 {
-                        msg.group_id.clone()
-                    } else {
-                        // 单聊消息：如果是发送的消息，会话ID是接收者ID；如果是接收的消息，会话ID是发送者ID
-                        if msg.send_id == req.user_id {
-                            msg.receiver_id.clone()
-                        } else {
-                            msg.send_id.clone()
-                        }
-                    };
-
-                    if conversation_id.is_empty() {
-                        continue;
-                    }
-
-                    // 添加消息到对应会话
-                    conversations.entry(conversation_id).or_insert_with(Vec::new).push(msg);
-                }
-
-                // 构建最终的会话列表
-                let mut conversation_list = Vec::new();
-                
-                for (conversation_id, mut msgs) in conversations {
-                    if msgs.is_empty() {
-                        continue;
-                    }
-
-                    // 按发送时间排序（最新的在前）
-                    msgs.sort_by(|a, b| b.send_time.cmp(&a.send_time));
-
-                    // 确定会话类型
-                    let conversation_type = if msgs[0].msg_type == MsgType::GroupMsg as i32 { 
-                        "group".to_string() 
-                    } else { 
-                        "single".to_string() 
-                    };
-
-                    // 计算未读消息数（只计算接收到的未读消息）
-                    let unread_count = msgs.iter()
-                        .filter(|msg| msg.receiver_id == req.user_id && !msg.is_read)
-                        .count() as i32;
-
-                    // 获取最后活跃时间
-                    let last_active_time = msgs[0].send_time;
-
-                    // 截取最近的N条消息（在同步模式下可能返回所有新消息）
-                    let recent_messages = if req.sync_mode.unwrap_or(false) {
-                        // 同步模式：返回所有新消息，不限制数量
-                        msgs
-                    } else {
-                        // 正常模式：截取最近的N条消息
-                        msgs.into_iter()
-                            .take(recent_msg_count as usize)
-                            .collect::<Vec<_>>()
-                    };
-
-                    // 判断是否还有更多历史消息（同步模式下不需要判断）
-                    let has_more_history = if req.sync_mode.unwrap_or(false) {
-                        false  // 同步模式下不需要分页
-                    } else {
-                        recent_messages.len() == recent_msg_count as usize
-                    };
-
-                    conversation_list.push(Conversation {
-                        conversation_id,
-                        conversation_type,
-                        recent_messages,
-                        unread_count,
-                        last_active_time,
-                        has_more_history,
-                    });
-                }
-
-                // 按最后活跃时间排序（最新的在前面）
-                conversation_list.sort_by(|a, b| b.last_active_time.cmp(&a.last_active_time));
-
-                debug!("成功构建 {} 个会话", conversation_list.len());
+                debug!("获取到 {} 条消息", messages.len());
+                let conversations = self.build_conversations(&req, messages, &query_range);
+                debug!("构建了 {} 个会话", conversations.len());
+                let total = conversations.len() as i32;
 
                 Ok(tonic::Response::new(GetConversationsResponse {
-                    conversations: conversation_list.clone(),
-                    total: conversation_list.len() as i32,
-                    error: String::new(),
+                    conversations,
+                    total,
                 }))
             }
             Err(e) => {
                 error!("获取会话列表失败: {}", e);
-                Err(tonic::Status::internal(format!("获取会话列表失败:{}",  e)))
+                Err(tonic::Status::internal(format!("获取会话列表失败: {}", e)))
             }
         }
     }
@@ -986,6 +869,176 @@ impl ChatRpcService {
                 error!("获取离线消息失败: {}", e);
                 Err(tonic::Status::internal(format!("获取离线消息失败: {}", e)))
             }
+        }
+    }
+}
+
+/// 查询模式枚举
+#[derive(Debug, PartialEq)]
+enum QueryMode {
+    /// 增量同步：获取指定序列号之后的新消息
+    IncrementalSync,
+    /// 全量离线：获取所有离线消息
+    FullOffline,
+    /// 正常模式：获取最近N条消息
+    Normal,
+}
+
+/// 查询范围
+#[derive(Debug)]
+struct QueryRange {
+    mode: QueryMode,
+    rec_start: i64,
+    rec_end: i64,
+    send_start: i64,
+    send_end: i64,
+}
+
+impl QueryRange {
+    fn is_empty(&self) -> bool {
+        self.rec_start > self.rec_end && self.send_start > self.send_end
+    }
+}
+
+impl ChatRpcService {
+    /// 确定查询模式和范围
+    fn determine_query_range(&self, req: &GetConversationsRequest, rec_seq: i64, send_seq: i64) -> QueryRange {
+        let sync_mode = req.sync_mode.unwrap_or(false);
+        let since_seq = req.since_seq.unwrap_or(0);
+        let since_send_seq = req.since_send_seq.unwrap_or(0);
+
+        // 判断模式
+        let mode = if sync_mode && (since_seq > 0 || since_send_seq > 0) {
+            QueryMode::IncrementalSync
+        } else if !sync_mode || (since_seq == 0 && since_send_seq == 0) {
+            QueryMode::FullOffline
+        } else {
+            QueryMode::Normal
+        };
+
+        // 根据模式计算查询范围
+        match mode {
+            QueryMode::IncrementalSync => {
+                // 增量同步：从客户端最后序列号+1开始到当前序列号
+                QueryRange {
+                    mode,
+                    rec_start: since_seq + 1,
+                    rec_end: rec_seq,
+                    send_start: since_send_seq + 1,
+                    send_end: send_seq,
+                }
+            }
+            QueryMode::FullOffline => {
+                // 全量离线：获取所有消息（从1开始到当前序列号）
+                QueryRange {
+                    mode,
+                    rec_start: 1,
+                    rec_end: rec_seq,
+                    send_start: 1,
+                    send_end: send_seq,
+                }
+            }
+            QueryMode::Normal => {
+                // 正常模式：获取最近2000条消息
+                const RECENT_COUNT: i64 = 2000;
+                QueryRange {
+                    mode,
+                    rec_start: std::cmp::max(1, rec_seq - RECENT_COUNT),
+                    rec_end: rec_seq,
+                    send_start: std::cmp::max(1, send_seq - RECENT_COUNT),
+                    send_end: send_seq,
+                }
+            }
+        }
+    }
+
+    /// 查询消息
+    async fn fetch_messages(&self, user_id: &str, range: &QueryRange) -> Result<Vec<Msg>, Box<dyn std::error::Error + Send + Sync>> {
+        self.msg_storage
+            .get_msgs(user_id, range.send_start, range.send_end, range.rec_start, range.rec_end)
+            .await
+            .map_err(|e| e.into())
+    }
+
+    /// 构建会话列表
+    fn build_conversations(&self, req: &GetConversationsRequest, messages: Vec<Msg>, range: &QueryRange) -> Vec<Conversation> {
+        if messages.is_empty() {
+            return Vec::new();
+        }
+
+        // 按会话ID分组消息
+        let conversations_map = self.group_messages_by_conversation(&req.user_id, messages);
+        
+        // 构建会话对象
+        let mut conversations: Vec<Conversation> = conversations_map
+            .into_iter()
+            .filter_map(|(conversation_id, mut msgs)| {
+                if msgs.is_empty() {
+                    return None;
+                }
+
+                // 按发送时间排序（最新的在前）
+                msgs.sort_by(|a, b| b.send_time.cmp(&a.send_time));
+
+                Some(self.create_conversation(conversation_id, msgs, range))
+            })
+            .collect();
+
+        // 按最后活跃时间排序
+        conversations.sort_by(|a, b| b.last_active_time.cmp(&a.last_active_time));
+        conversations
+    }
+
+    /// 按会话ID分组消息
+    fn group_messages_by_conversation(&self, user_id: &str, messages: Vec<Msg>) -> std::collections::HashMap<String, Vec<Msg>> {
+        let mut conversations = std::collections::HashMap::new();
+
+        for msg in messages {
+            let conversation_id = self.extract_conversation_id(&msg, user_id);
+            if !conversation_id.is_empty() {
+                conversations.entry(conversation_id).or_insert_with(Vec::new).push(msg);
+            }
+        }
+
+        conversations
+    }
+
+    /// 提取会话ID
+    fn extract_conversation_id(&self, msg: &Msg, user_id: &str) -> String {
+        if msg.msg_type == MsgType::GroupMsg as i32 {
+            // 群聊：会话ID是群组ID
+            msg.group_id.clone()
+        } else {
+            // 单聊：会话ID是对方的用户ID
+            if msg.send_id == user_id {
+                msg.receiver_id.clone()
+            } else {
+                msg.send_id.clone()
+            }
+        }
+    }
+
+    /// 创建会话对象
+    fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>, range: &QueryRange) -> Conversation {
+        let conversation_type = if msgs[0].msg_type == MsgType::GroupMsg as i32 {
+            "group"
+        } else {
+            "single"
+        }.to_string();
+
+        // 计算未读消息数（只计算接收到的未读消息）
+        let unread_count = msgs.iter()
+            .filter(|msg| !msg.is_read && msg.receiver_id != msg.send_id)
+            .count() as i32;
+
+        let last_active_time = msgs[0].send_time;
+        
+        Conversation {
+            conversation_id,
+            conversation_type,
+            recent_messages: msgs,
+            unread_count,
+            last_active_time,
         }
     }
 }

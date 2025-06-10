@@ -396,18 +396,6 @@ impl ChatServiceHandler {
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("获取会话列表请求，用户ID: {}", user_id);
 
-        // 从查询参数中获取recent_msg_count，默认20条
-        let recent_msg_count = get_i64_param(&body, "recentMsgCount", 20) as i32;
-        
-        // 验证参数范围
-        let recent_msg_count = if recent_msg_count <= 0 {
-            20  // 默认20条
-        } else if recent_msg_count > 50 {
-            50  // 最大50条
-        } else {
-            recent_msg_count
-        };
-
         // 获取离线同步参数
         let sync_mode = body.get("syncMode").and_then(|v| v.as_bool()).unwrap_or(false);
         let since_seq = if sync_mode {
@@ -421,16 +409,12 @@ impl ChatServiceHandler {
             None
         };
 
-        if sync_mode {
-            debug!("离线同步模式: sinceSeq={:?}, sinceSendSeq={:?}", since_seq, since_send_seq);
-        } else {
-            debug!("正常模式: 每个会话获取 {} 条最近消息", recent_msg_count);
-        }
+        debug!("同步参数: sync_mode={}, since_seq={:?}, since_send_seq={:?}", 
+               sync_mode, since_seq, since_send_seq);
 
-        // 调用msg-server的gRPC接口获取会话列表
+        // 构建gRPC请求
         let request = GetConversationsRequest {
             user_id: user_id.to_string(),
-            recent_msg_count,
             since_seq,
             since_send_seq,
             sync_mode: Some(sync_mode),

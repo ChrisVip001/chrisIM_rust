@@ -385,13 +385,11 @@ message GetMessageHistoryResponse {
 /// 获取会话列表请求
 message GetConversationsRequest {
   string user_id = 1;  // 用户ID
-  int32 recent_msg_count = 2;  // 每个会话返回的最近消息数量（默认20，最大50）
-  
   // 离线同步参数（可选）
   // 用于客户端重连后的增量同步，只获取指定序列号之后的新消息
-  optional int64 since_seq = 3;        // 客户端最后的接收序列号，获取此序列号之后的接收消息
-  optional int64 since_send_seq = 4;   // 客户端最后的发送序列号，获取此序列号之后的发送消息
-  optional bool sync_mode = 5;         // 是否为同步模式（true=增量同步，false=正常获取最近消息）
+  optional int64 since_seq = 2;        // 客户端最后的接收序列号，获取此序列号之后的接收消息
+  optional int64 since_send_seq = 3;   // 客户端最后的发送序列号，获取此序列号之后的发送消息
+  optional bool sync_mode = 4;         // 是否为同步模式（true=增量同步，false=正常获取最近消息）
 }
 
 /// 会话信息
@@ -401,14 +399,12 @@ message Conversation {
   repeated Msg recent_messages = 3;  // 最近的消息列表（替代last_message，包含最近20条）
   int32 unread_count = 4;       // 未读消息数量
   int64 last_active_time = 5;   // 最后活跃时间
-  bool has_more_history = 6;    // 是否还有更多历史消息
 }
 
 /// 获取会话列表响应
 message GetConversationsResponse {
   repeated Conversation conversations = 1;  // 会话列表
   int32 total = 2;                         // 总会话数
-  string error = 3;                        // 错误信息（如果有）
 }
 
 /// 撤回消息请求

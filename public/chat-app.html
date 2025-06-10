@@ -1158,18 +1158,19 @@
                     recent_msg_count: 20  // 每个会话获取最近20条消息
                 };
 
-                // 如果是同步模式，添加同步参数
+                // 根据同步模式添加相关参数
                 if (syncMode) {
-                    requestBody.sync_mode = true;
+                    requestBody.syncMode = true;
                     if (sinceSeq !== null) {
-                        requestBody.since_seq = sinceSeq;
+                        requestBody.sinceSeq = sinceSeq;
                     }
                     if (sinceSendSeq !== null) {
-                        requestBody.since_send_seq = sinceSendSeq;
+                        requestBody.sinceSendSeq = sinceSendSeq;
                     }
-                    console.log('使用同步模式，参数:', { since_seq: sinceSeq, since_send_seq: sinceSendSeq });
+                    console.log('🔄 启用同步模式:', requestBody);
                 } else {
-                    console.log('使用正常模式');
+                    requestBody.syncMode = false;
+                    console.log('📋 正常模式加载会话列表');
                 }
                 
                 console.log('请求参数:', requestBody);
