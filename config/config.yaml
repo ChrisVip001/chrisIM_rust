@@ -111,7 +111,7 @@ gateway:
       - "192.168.1.9"
     # 路径白名单
     path_whitelist:
-      - "/api/health"
+      - "/health"
       - "/metrics"
       - "/api/user/login"
       - "/api/user/loginByPhone"
