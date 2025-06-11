@@ -299,11 +299,20 @@ impl MsgRecBoxRepo for MsgBox {
             },
         ];
 
-        let len = send_end - send_start + (rec_end - rec_start);
+        // 防止整数溢出和内存分配问题
+        // 计算预期的消息数量，但要防止溢出
+        let send_range = send_end.saturating_sub(send_start).max(0);
+        let rec_range = rec_end.saturating_sub(rec_start).max(0);
+        let estimated_len = send_range.saturating_add(rec_range);
+        
+        // 限制最大容量，防止内存溢出
+        const MAX_CAPACITY: i64 = 100_000; // 最多预分配10万条消息的空间
+        let safe_capacity = estimated_len.min(MAX_CAPACITY);
+        
         // 执行聚合查询
         let mut cursor = self.mb.aggregate(pipeline).await?;
 
-        let mut messages = Vec::with_capacity((len) as usize);
+        let mut messages = Vec::with_capacity(safe_capacity as usize);
         while let Some(result) = cursor.next().await {
             let mut msg = Msg::try_from(result?)?;
             // 如果消息是用户发送的，将seq设置为0
