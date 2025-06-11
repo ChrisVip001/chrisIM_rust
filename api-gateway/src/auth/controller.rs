@@ -346,14 +346,14 @@ pub async fn refresh_token(
             if stored_token != refresh_req.refresh_token {
                 return Ok(error_response(
                     "令牌已过期或已注销，请重新登录",
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::UNAUTHORIZED,
                 ));
             }
         }
         Ok(None) => {
             return Ok(error_response(
                 "令牌已过期或已注销，请重新登录",
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::UNAUTHORIZED,
             ));
         }
         Err(_) => {
