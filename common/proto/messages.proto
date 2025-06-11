@@ -261,7 +261,7 @@ service MsgService {
 /// 接收消息，生成消息ID并发送到消息队列，返回操作结果
 service ChatService { 
   /// 发送消息到Kafka队列
-  rpc SendMsg(SendMsgRequest) returns (Msg); 
+  rpc SendMsg(SendMsgRequest) returns (Msg);
   
   /// 标记消息已读
   rpc MarkMessagesAsRead(MarkMessagesAsReadRequest) returns (MarkMessagesAsReadResponse);
@@ -270,7 +270,7 @@ service ChatService {
   rpc MarkConversationAsRead(MarkConversationAsReadRequest) returns (MarkMessagesAsReadResponse);
   
   /// 获取消息历史
-  rpc GetMessageHistory(GetMessageHistoryRequest) returns (GetMessageHistoryResponse);
+  rpc GetMessageHistory(GetDbMessagesRequest) returns (GetMessageHistoryResponse);
   
   /// 获取会话列表
   rpc GetConversations(GetConversationsRequest) returns (GetConversationsResponse);
@@ -315,20 +315,14 @@ message SaveMessageRequest {
   bool need_to_history = 2; // 是否需要保存到历史记录
 }
 
-/// 获取数据库消息请求
-message GetDbMsgRequest {
-  string user_id = 1;  // 用户ID
-  int64 start = 2;     // 开始序列号
-  int64 end = 3;       // 结束序列号
-}
-
 /// 获取数据库消息列表请求
 message GetDbMessagesRequest {
   string user_id = 1;    // 用户ID
-  int64 send_start = 2;  // 发送开始时间
-  int64 send_end = 3;    // 发送结束时间
-  int64 start = 4;       // 开始序列号
-  int64 end = 5;         // 结束序列号
+  string conversation_id = 2; // 会话ID(单聊：对方用户ID，群聊：群组ID)
+  int64 send_seq_start = 3; // 发送序列号起始值
+  int64 send_seq_end = 4; // 发送序列号结束值
+  int64 seq_start = 5; // 接收序列号起始值
+  int64 seq_end = 6; // 接收序列号结束值
 }
 
 /// 删除消息请求
@@ -362,24 +356,10 @@ message MarkConversationAsReadRequest {
   optional int64 up_to_time = 3; // 标记到此时间戳之前的所有消息为已读（可选，默认为当前时间）
 }
 
-/// 获取消息历史请求
-message GetMessageHistoryRequest {
-  string user_id = 1;         // 用户ID
-  string conversation_id = 2; // 会话ID（单聊时是对方用户ID，群聊时是群组ID）
-  int32 page = 3;            // 页码（从1开始）
-  int32 page_size = 4;       // 每页数量
-  int64 before_seq = 5;      // 在此序列号之前的消息（用于分页）
-}
-
 /// 获取消息历史响应
 message GetMessageHistoryResponse {
   repeated Msg messages = 1;    // 消息列表
-  bool has_more = 2;           // 是否还有更多消息
-  int64 next_seq = 3;          // 下一页的起始序列号
   string conversation_id = 4;   // 会话ID
-  int32 current_page = 5;      // 当前页码
-  int32 page_size = 6;         // 每页数量
-  string error = 7;            // 错误信息（如果有）
 }
 
 /// 获取会话列表请求

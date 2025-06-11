@@ -9,25 +9,12 @@ use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
 use tonic::transport::Server;
-use tracing::{error, info, warn, debug};
-// 添加gRPC健康检查相关导入
-use tonic_health::server::HealthReporter;
+use tracing::{error, info, debug};
 
 use common::config::{AppConfig, Component};
 use common::grpc::LoggingInterceptor;
 use common::proto::message::chat_service_server::{ChatService, ChatServiceServer};
-use common::proto::message::{
-    MsgResponse, MsgType, SendMsgRequest, Msg,
-    MarkMessagesAsReadRequest, MarkMessagesAsReadResponse,
-    MarkConversationAsReadRequest,
-    GetMessageHistoryRequest, GetMessageHistoryResponse,
-    GetConversationsRequest, GetConversationsResponse,
-    RevokeMessageRequest, RevokeMessageResponse,
-    DeleteMessagesRequest, DeleteMessagesResponse,
-    ForwardMessageRequest, ForwardMessageResponse,
-    ReplyMessageRequest, ReplyMessageResponse,
-    Conversation
-};
+use common::proto::message::{MsgType, SendMsgRequest, Msg, MarkMessagesAsReadRequest, MarkMessagesAsReadResponse, MarkConversationAsReadRequest, GetMessageHistoryResponse, GetConversationsRequest, GetConversationsResponse, RevokeMessageRequest, RevokeMessageResponse, DeleteMessagesRequest, DeleteMessagesResponse, ForwardMessageRequest, ForwardMessageResponse, ReplyMessageRequest, ReplyMessageResponse, Conversation, GetDbMessagesRequest};
 use msg_storage::{msg_rec_box_repo, message::MsgRecBoxRepo};
 use cache::Cache;
 
@@ -367,65 +354,64 @@ impl ChatService for ChatRpcService {
         }
     }
 
-    /// 获取消息历史
+    /// 根据用户ID、会话ID和序列号范围获取消息历史
+    /// 
+    /// 逻辑说明：
+    /// - send_seq_start/send_seq_end: 用户发送消息的序列号范围
+    /// - seq_start/seq_end: 用户接收消息的序列号范围
+    /// - conversation_id: 会话ID，用于过滤特定会话的消息
+    /// - 如果序列号范围为0，则使用当前序列号作为参考
     async fn get_message_history(
         &self,
-        request: tonic::Request<GetMessageHistoryRequest>,
+        request: tonic::Request<GetDbMessagesRequest>,
     ) -> Result<tonic::Response<GetMessageHistoryResponse>, tonic::Status> {
         let req = request.into_inner();
-        debug!("获取消息历史请求: user_id={}, conversation_id={}, page={}, page_size={}", 
-               req.user_id, req.conversation_id, req.page, req.page_size);
-
-        // 验证参数
-        if req.page < 1 {
-            return Err(tonic::Status::invalid_argument("页码必须大于0"))
-        }
-
-        if req.page_size < 1 || req.page_size > 100 {
-            return Err(tonic::Status::invalid_argument("每页数量必须在1-100之间"))
-        }
+        
+        debug!("获取消息历史请求: user_id={}, conversation_id={}, send_seq_start={}, send_seq_end={}, seq_start={}, seq_end={}", 
+               req.user_id, req.conversation_id, req.send_seq_start, req.send_seq_end, req.seq_start, req.seq_end);
+        
+        // 验证必需参数
+        GetDbMessagesRequest::validate(&req)
+            .map_err(|e| tonic::Status::invalid_argument(e.to_string()))?;
 
         // 获取用户当前序列号
-        let (rec_seq, send_seq) = match self.cache.get_cur_seq(&req.user_id).await {
+        let (current_seq, current_send_seq) = match self.cache.get_cur_seq(&req.user_id).await {
             Ok(seqs) => seqs,
             Err(e) => {
                 error!("获取用户序列号失败: {}", e);
-                return Err(tonic::Status::internal(format!("获取用户序列号失败:{}",  e)))
+                return Err(tonic::Status::internal(format!("获取用户序列号失败: {}", e)));
             }
         };
 
-        // 计算查询范围
-        let end_seq = if req.before_seq > 0 { req.before_seq } else { rec_seq };
-        let start_seq = std::cmp::max(0, end_seq - req.page_size as i64);
-        
-        // 对于发送序列号，也使用相同的逻辑
-        let send_end_seq = if req.before_seq > 0 { req.before_seq } else { send_seq };
-        let send_start_seq = std::cmp::max(0, send_end_seq - req.page_size as i64);
+        // 确定实际的序列号范围
+        // 如果传入的结束序列号为0，则使用当前序列号
+        let actual_send_start = req.send_seq_start;
+        let actual_send_end = if req.send_seq_end == 0 { current_send_seq } else { req.send_seq_end };
+        let actual_seq_start = req.seq_start;
+        let actual_seq_end = if req.seq_end == 0 { current_seq } else { req.seq_end };
 
-        // 从MongoDB获取消息历史
-        match self.msg_storage.get_msgs(&req.user_id, send_start_seq, send_end_seq, start_seq, end_seq).await {
+        debug!("实际查询范围: send_seq: {}-{}, seq: {}-{}", 
+               actual_send_start, actual_send_end, actual_seq_start, actual_seq_end);
+
+        // 使用新的按会话ID查询方法
+        match self.msg_storage.get_conversation_messages_by_seq_range(
+            &req.user_id, 
+            &req.conversation_id, 
+            actual_send_start, 
+            actual_send_end, 
+            actual_seq_start, 
+            actual_seq_end
+        ).await {
             Ok(messages) => {
-                let has_more = messages.len() as i32 == req.page_size;
-                let next_seq = if has_more && !messages.is_empty() {
-                    // 获取最后一条消息的序列号作为下次查询的起点
-                    messages.last().map(|msg| msg.seq).unwrap_or(0)
-                } else {
-                    0
-                };
-
+                debug!("成功获取 {} 条消息", messages.len());
                 Ok(tonic::Response::new(GetMessageHistoryResponse {
                     messages,
-                    has_more,
-                    next_seq,
                     conversation_id: req.conversation_id,
-                    current_page: req.page,
-                    page_size: req.page_size,
-                    error: String::new(),
                 }))
             }
             Err(e) => {
                 error!("获取消息历史失败: {}", e);
-                Err(tonic::Status::internal(format!("获取消息历史失败:{}",  e)))
+                Err(tonic::Status::internal(format!("获取消息历史失败: {}", e)))
             }
         }
     }
@@ -818,49 +804,6 @@ impl ChatService for ChatRpcService {
             Err((kafka_error, _)) => {
                 error!("回复消息到Kafka失败: {}", kafka_error);
                 Err(tonic::Status::internal(format!("发送回复消息失败: {}", kafka_error)))
-            }
-        }
-    }
-}
-
-impl ChatRpcService {
-    /// 拉取离线消息
-    /// 
-    /// 获取用户从上次登录到现在的所有未读消息。
-    /// 这个接口在用户登录时调用，用于同步离线期间的消息。
-    /// 
-    /// # 参数
-    /// * `request` - 包含用户ID和上次登录时间的请求
-    /// 
-    /// # 返回值
-    /// * `Ok(Response<GetMessageHistoryResponse>)` - 离线消息列表
-    /// * `Err(Status)` - 获取失败的错误状态
-    pub async fn pull_offline_messages(
-        &self,
-        request: tonic::Request<GetMessageHistoryRequest>,
-    ) -> Result<tonic::Response<GetMessageHistoryResponse>, tonic::Status> {
-        let req = request.into_inner();
-        debug!("拉取离线消息请求: user_id={}, last_login_time={}", 
-               req.user_id, req.before_seq);
-
-        // 从MongoDB获取离线消息
-        match self.msg_storage.pull_offline_messages(&req.user_id, req.before_seq).await {
-            Ok(messages) => {
-                debug!("成功获取 {} 条离线消息", messages.len());
-                let message_count = messages.len();
-                Ok(tonic::Response::new(GetMessageHistoryResponse {
-                    messages,
-                    has_more: false,  // 离线消息一次性全部返回
-                    next_seq: 0,      // 不需要分页
-                    conversation_id: req.conversation_id,
-                    current_page: 1,
-                    page_size: message_count as i32,
-                    error: String::new(),
-                }))
-            }
-            Err(e) => {
-                error!("获取离线消息失败: {}", e);
-                Err(tonic::Status::internal(format!("获取离线消息失败: {}", e)))
             }
         }
     }

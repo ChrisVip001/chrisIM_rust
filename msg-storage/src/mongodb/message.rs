@@ -387,42 +387,122 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(result.deleted_count as i32)
     }
 
-    /// 拉取离线消息
-    /// 获取用户从上次登录到现在的所有未读消息
-    async fn pull_offline_messages(&self, user_id: &str, last_login_time: i64) -> Result<Vec<Msg>, Error> {
-        // 构建查询条件：
-        // 1. 接收者是当前用户
-        // 2. 消息发送时间大于上次登录时间
-        // 3. 消息未读
-        // 4. 消息未被撤回
-        let filter = doc! {
-            "receiver_id": user_id,
-            "send_time": { "$gt": last_login_time },
-            "is_read": false,
-            "is_revoked": false,
-            // 排除一些不需要的消息类型
-            "msg_type": { 
-                "$nin": [
-                    MsgType::Read as i32,
-                    MsgType::MsgRecResp as i32,
-                    MsgType::Notification as i32,
-                    MsgType::Service as i32,
-                ]
-            }
+    /// 根据会话ID和序列号范围获取消息历史
+    async fn get_conversation_messages_by_seq_range(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        send_seq_start: i64,
+        send_seq_end: i64,
+        seq_start: i64,
+        seq_end: i64,
+    ) -> Result<Vec<Msg>, Error> {
+        // 构建查询条件
+        let mut query = doc! {
+            "$or": [
+                {
+                    // 用户接收的消息，且属于指定会话
+                    "receiver_id": user_id,
+                    "$or": [
+                        {
+                            // 群聊消息：group_id 等于 conversation_id
+                            "group_id": conversation_id,
+                            "msg_type": MsgType::GroupMsg as i32
+                        },
+                        {
+                            // 单聊消息：send_id 等于 conversation_id（对方发给我的）
+                            "send_id": conversation_id,
+                            "msg_type": MsgType::SingleMsg as i32
+                        }
+                    ]
+                },
+                {
+                    // 用户发送的消息，且属于指定会话
+                    "send_id": user_id,
+                    "$or": [
+                        {
+                            // 群聊消息：group_id 等于 conversation_id
+                            "group_id": conversation_id,
+                            "msg_type": MsgType::GroupMsg as i32
+                        },
+                        {
+                            // 单聊消息：receiver_id 等于 conversation_id（我发给对方的）
+                            "receiver_id": conversation_id,
+                            "msg_type": MsgType::SingleMsg as i32
+                        }
+                    ]
+                }
+            ]
         };
 
-        // 按发送时间升序排序
+        // 添加序列号范围过滤条件
+        // 使用复杂的逻辑表达式来处理序列号范围
+        let mut seq_conditions = vec![];
+
+        // 如果指定了接收消息的序列号范围
+        if seq_start > 0 || seq_end > 0 {
+            let mut recv_condition = doc! {
+                "receiver_id": user_id
+            };
+            
+            if seq_start > 0 && seq_end > 0 {
+                recv_condition.insert("seq", doc! {"$gte": seq_start, "$lte": seq_end});
+            } else if seq_start > 0 {
+                recv_condition.insert("seq", doc! {"$gte": seq_start});
+            } else if seq_end > 0 {
+                recv_condition.insert("seq", doc! {"$lte": seq_end});
+            }
+            
+            seq_conditions.push(recv_condition);
+        }
+
+        // 如果指定了发送消息的序列号范围
+        if send_seq_start > 0 || send_seq_end > 0 {
+            let mut send_condition = doc! {
+                "send_id": user_id
+            };
+            
+            if send_seq_start > 0 && send_seq_end > 0 {
+                send_condition.insert("send_seq", doc! {"$gte": send_seq_start, "$lte": send_seq_end});
+            } else if send_seq_start > 0 {
+                send_condition.insert("send_seq", doc! {"$gte": send_seq_start});
+            } else if send_seq_end > 0 {
+                send_condition.insert("send_seq", doc! {"$lte": send_seq_end});
+            }
+            
+            seq_conditions.push(send_condition);
+        }
+
+        // 如果有序列号条件，与会话过滤条件组合
+        if !seq_conditions.is_empty() {
+            query = doc! {
+                "$and": [
+                    query,
+                    {
+                        "$or": seq_conditions
+                    }
+                ]
+            };
+        }
+
+        // 按时间正序排列
         let options = FindOptions::builder()
-            .sort(doc! { "send_time": 1 })
+            .sort(doc! {"send_time": 1})
             .build();
 
         // 执行查询
-        let mut cursor = self.mb.find(filter).with_options(options).await?;
-        
-        // 收集结果
+        let mut cursor = self.mb.find(query).with_options(options).await?;
         let mut messages = Vec::new();
-        while let Some(doc) = TryStreamExt::try_next(&mut cursor).await? {
-            messages.push(Msg::try_from(doc)?);
+        
+        while let Some(result) = cursor.next().await {
+            let mut msg = Msg::try_from(result?)?;
+            
+            // 如果消息是用户发送的，将接收序列号设置为0
+            if user_id == msg.send_id {
+                msg.seq = 0;
+            }
+            
+            messages.push(msg);
         }
 
         Ok(messages)

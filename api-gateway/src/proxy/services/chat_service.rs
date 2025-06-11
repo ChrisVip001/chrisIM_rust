@@ -5,11 +5,7 @@ use axum::{
 };
 use chrono::Utc;
 use common::proto::message::chat_service_client::ChatServiceClient;
-use common::proto::message::{
-    ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest,
-    GetMessageHistoryRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, PlatformType,
-    ReplyMessageRequest, RevokeMessageRequest, SendMsgRequest,
-};
+use common::proto::message::{ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest, GetDbMessagesRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, PlatformType, ReplyMessageRequest, RevokeMessageRequest, SendMsgRequest};
 use common::service_discovery::LbWithServiceDiscovery;
 use serde_json::{json, Value};
 use tracing::{debug, error};
@@ -64,15 +60,10 @@ impl ChatServiceHandler {
             }
 
             // 获取消息历史
-            (&Method::GET, "history") => self.get_message_history(&current_user_id, body).await,
+            (&Method::POST, "history") => self.get_message_history(&current_user_id, body).await,
 
             // 获取会话列表
             (&Method::POST, "conversations") => self.get_conversations(&current_user_id, body).await,
-
-            // 拉取离线消息
-            (&Method::GET, "pull_offline_messages") => {
-                self.pull_offline_messages(&current_user_id, body).await
-            }
 
             // 撤回消息
             (&Method::POST, "revoke") => self.revoke_message(&current_user_id, body).await,
@@ -341,6 +332,7 @@ impl ChatServiceHandler {
     }
 
     /// 获取消息历史
+    /// 根据会话ID和序列号范围获取消息历史
     async fn get_message_history(
         &mut self,
         user_id: &str,
@@ -348,32 +340,59 @@ impl ChatServiceHandler {
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("获取消息历史请求: {}", body);
 
-        // 提取参数
+        // 提取必需参数
         let conversation_id = get_optional_string(&body, "conversationId", Some("conversation_id"))
             .ok_or_else(|| anyhow::anyhow!("conversationId参数是必需的"))?;
-        let page = get_i64_param(&body, "page", 1) as i32;
-        let page_size = get_i64_param(&body, "pageSize", 20) as i32;
-        let before_seq = get_i64_param(&body, "beforeSeq", 0);
+
+        // 提取序列号范围参数
+        let send_seq_start = body.get("sendSeqStart")
+            .or_else(|| body.get("send_seq_start"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        
+        let send_seq_end = body.get("sendSeqEnd")
+            .or_else(|| body.get("send_seq_end"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+            
+        let seq_start = body.get("seqStart")
+            .or_else(|| body.get("seq_start"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+            
+        let seq_end = body.get("seqEnd")
+            .or_else(|| body.get("seq_end"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
 
         // 验证参数
-        if page < 1 {
-            return Ok(error_response("页码必须大于0", StatusCode::BAD_REQUEST));
+        if conversation_id.is_empty() {
+            return Ok(error_response("会话ID不能为空", StatusCode::BAD_REQUEST));
         }
 
-        if page_size < 1 || page_size > 100 {
-            return Ok(error_response(
-                "每页数量必须在1-100之间",
-                StatusCode::BAD_REQUEST,
-            ));
+        if send_seq_start < 0 || send_seq_end < 0 || seq_start < 0 || seq_end < 0 {
+            return Ok(error_response("序列号不能为负数", StatusCode::BAD_REQUEST));
         }
 
-        // 调用msg-server的gRPC接口获取消息历史
-        let request = GetMessageHistoryRequest {
+        if send_seq_end > 0 && send_seq_end < send_seq_start {
+            return Ok(error_response("发送序列号结束值不能小于起始值", StatusCode::BAD_REQUEST));
+        }
+
+        if seq_end > 0 && seq_end < seq_start {
+            return Ok(error_response("接收序列号结束值不能小于起始值", StatusCode::BAD_REQUEST));
+        }
+
+        debug!("序列号范围: send_seq: {}-{}, seq: {}-{}", 
+               send_seq_start, send_seq_end, seq_start, seq_end);
+
+        // 构建gRPC请求
+        let request = GetDbMessagesRequest {
             user_id: user_id.to_string(),
-            conversation_id: conversation_id.clone(),
-            page,
-            page_size,
-            before_seq,
+            conversation_id,
+            send_seq_start,
+            send_seq_end,
+            seq_start,
+            seq_end,
         };
 
         match self.client.get_message_history(request).await {
@@ -430,16 +449,6 @@ impl ChatServiceHandler {
                 ))
             }
         }
-    }
-
-    /// 拉取离线消息
-    async fn pull_offline_messages(
-        &mut self,
-        user_id: &str,
-        _body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
-        debug!("拉取离线消息请求，用户ID: {}", user_id);
-        Ok(error_response("暂不支持离线消息拉取", StatusCode::NOT_IMPLEMENTED))
     }
 
     /// 撤回消息

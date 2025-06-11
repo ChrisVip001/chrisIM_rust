@@ -76,6 +76,30 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
         rec_end: i64,
     ) -> Result<Vec<Msg>, Error>;
 
+    /// 根据会话ID和序列号范围获取消息历史
+    /// 专门用于获取某个会话在指定序列号范围内的历史消息
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `conversation_id` - 会话ID（单聊时是对方用户ID，群聊时是群组ID）
+    /// * `send_seq_start` - 发送消息的起始序列号
+    /// * `send_seq_end` - 发送消息的结束序列号  
+    /// * `seq_start` - 接收消息的起始序列号
+    /// * `seq_end` - 接收消息的结束序列号
+    /// 
+    /// # 返回值
+    /// * `Ok(Vec<Msg>)` - 消息列表，按时间正序排列
+    /// * `Err(Error)` - 查询失败的错误信息
+    async fn get_conversation_messages_by_seq_range(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        send_seq_start: i64,
+        send_seq_end: i64,
+        seq_start: i64,
+        seq_end: i64,
+    ) -> Result<Vec<Msg>, Error>;
+
     /// 根据用户ID和消息序列号更新消息已读状态
     async fn msg_read(&self, user_id: &str, msg_seq: &[i64]) -> Result<(), Error>;
 
@@ -94,18 +118,7 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
 
     /// 根据消息ID删除消息（支持批量）
     async fn delete_messages_by_ids(&self, user_id: &str, message_ids: &[String]) -> Result<i32, Error>;
-
-    /// 拉取离线消息
-    /// 获取用户从上次登录到现在的所有未读消息
-    /// 
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// * `last_login_time` - 上次登录时间戳（毫秒）
-    /// 
-    /// # 返回值
-    /// * `Ok(Vec<Msg>)` - 离线消息列表
-    /// * `Err(Error)` - 获取失败的错误信息
-    async fn pull_offline_messages(&self, user_id: &str, last_login_time: i64) -> Result<Vec<Msg>, Error>;
+    
 }
 
 /// 消息接收箱清理器trait

@@ -1,5 +1,4 @@
-use std::fmt;
-use crate::proto::message::{GetDbMessagesRequest, GetDbMsgRequest, GroupMemSeq, Msg, MsgResponse, MsgType, PlatformType, SaveGroupMsgRequest, SaveMessageRequest, SendMsgRequest, UserAndGroupId};
+use crate::proto::message::{GetDbMessagesRequest, GroupMemSeq, Msg, MsgResponse, MsgType, SaveGroupMsgRequest, SaveMessageRequest, SendMsgRequest, UserAndGroupId};
 use crate::Error;
 use mongodb::bson::Document;
 use tonic::Status;
@@ -39,17 +38,19 @@ impl TryFrom<Document> for Msg {
             platform: value.get_i32("platform").unwrap_or_default(),
             avatar: value.get_str("avatar").unwrap_or_default().to_string(),
             nickname: value.get_str("nickname").unwrap_or_default().to_string(),
-            related_msg_id: {
-                let related = value.get_str("related_msg_id").unwrap_or_default();
-                if related.is_empty() { None } else { Some(related.to_string()) }
-            },
+            related_msg_id: value
+                .get_str("related_msg_id")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(String::from),
             is_revoked: value.get_bool("is_revoked").unwrap_or_default(),
             revoke_time: value.get_i64("revoke_time").unwrap_or_default(),
             revoked_by: value.get_str("revoked_by").unwrap_or_default().to_string(),
-            forward_comment: {
-                let comment = value.get_str("forward_comment").unwrap_or_default();
-                if comment.is_empty() { None } else { Some(comment.to_string()) }
-            },
+            forward_comment: value
+                .get_str("forward_comment")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(String::from),
             is_forwarded: value.get_bool("is_forwarded").unwrap_or_default(),
             is_reply: value.get_bool("is_reply").unwrap_or_default(),
         })
@@ -221,38 +222,31 @@ impl GroupMemSeq {
     }
 }
 
-
-impl GetDbMsgRequest {
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.user_id.is_empty() {
-            return Err(Error::BadRequest("user_id is empty".to_string()));
-        }
-        if self.start < 0 {
-            return Err(Error::BadRequest("start is invalid".to_string()));
-        }
-        if self.end < 0 {
-            return Err(Error::BadRequest("end is invalid".to_string()));
-        }
-        if self.end < self.start {
-            return Err(Error::BadRequest("start is greater than end".to_string()));
-        }
-        Ok(())
-    }
-}
-
 impl GetDbMessagesRequest {
     pub fn validate(&self) -> Result<(), Error> {
         if self.user_id.is_empty() {
             return Err(Error::BadRequest("user_id is empty".to_string()));
         }
-        if self.start < 0 {
-            return Err(Error::BadRequest("start is invalid".to_string()));
+        if self.conversation_id.is_empty() {
+            return Err(Error::BadRequest("conversation_id is empty".to_string()));
         }
-        if self.end < 0 {
-            return Err(Error::BadRequest("end is invalid".to_string()));
+        if self.seq_start < 0 {
+            return Err(Error::BadRequest("seq_start is invalid".to_string()));
         }
-        if self.end < self.start {
-            return Err(Error::BadRequest("start is greater than end".to_string()));
+        if self.seq_end < 0 {
+            return Err(Error::BadRequest("seq_end is invalid".to_string()));
+        }
+        if self.seq_end > 0 && self.seq_end < self.seq_start {
+            return Err(Error::BadRequest("seq_start is greater than seq_end".to_string()));
+        }
+        if self.send_seq_start < 0 {
+            return Err(Error::BadRequest("send_seq_start is invalid".to_string()));
+        }
+        if self.send_seq_end < 0 {
+            return Err(Error::BadRequest("send_seq_end is invalid".to_string()));
+        }
+        if self.send_seq_end > 0 && self.send_seq_end < self.send_seq_start {
+            return Err(Error::BadRequest("send_seq_start is greater than send_seq_end".to_string()));
         }
         Ok(())
     }
