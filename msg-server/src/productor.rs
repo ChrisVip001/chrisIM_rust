@@ -910,7 +910,7 @@ impl ChatRpcService {
         // 判断模式
         let mode = if sync_mode && (since_seq > 0 || since_send_seq > 0) {
             QueryMode::IncrementalSync
-        } else if !sync_mode || (since_seq == 0 && since_send_seq == 0) {
+        } else if sync_mode || (since_seq == 0 && since_send_seq == 0) {
             QueryMode::FullOffline
         } else {
             QueryMode::Normal
@@ -929,12 +929,13 @@ impl ChatRpcService {
                 }
             }
             QueryMode::FullOffline => {
-                // 全量离线：获取所有消息（从1开始到当前序列号）
+                // 全量离线：获取最近的消息，限制数量防止内存溢出
+                const OFFLINE_RECENT_COUNT: i64 = 5000; // 离线模式最多获取5000条消息
                 QueryRange {
                     mode,
-                    rec_start: 1,
+                    rec_start: std::cmp::max(1, rec_seq - OFFLINE_RECENT_COUNT),
                     rec_end: rec_seq,
-                    send_start: 1,
+                    send_start: std::cmp::max(1, send_seq - OFFLINE_RECENT_COUNT),
                     send_end: send_seq,
                 }
             }
