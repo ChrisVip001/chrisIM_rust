@@ -399,31 +399,16 @@ impl Manager {
     /// # 参数
     /// * `message` - 要处理的消息（可变引用，会被修改）
     async fn process_message(&mut self, message: &mut Msg) {
-        // 在缓存中增加发送序列号
-        // 我们不在这里操作数据库保存发送序列号
-        // 这个操作在消费者模块中完成
-        // 即使增加失败也不是问题
-        match self.cache.incr_send_seq(&message.send_id).await {
-            Ok((seq, _, _)) => {
-                info!("增加发送序列号成功: {}", seq);
-                message.send_seq = seq
-            },
-            Err(e) => {
-                self.create_error_message(message, e);
-                return;
-            }
-        }
-
         // 通过gRPC发送消息
         match self.send_rpc_message(message.clone()).await {
             Ok(response) => {
                 debug!("消息发送成功");
+                // 完整复制response的所有数据给message
+                *message = response;
                 // 清空消息内容，避免重复发送
                 message.content.clear();
-                // 设置响应消息类型和相关信息
+                // 设置响应消息类型
                 message.msg_type = MsgType::MsgRecResp as i32;
-                message.server_id.clone_from(&response.server_id);
-                message.send_time = response.send_time;
             }
             Err(err) => {
                 error!("gRPC调用失败: {:?}", err);
