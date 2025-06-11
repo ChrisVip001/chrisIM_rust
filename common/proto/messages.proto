@@ -261,7 +261,7 @@ service MsgService {
 /// 接收消息，生成消息ID并发送到消息队列，返回操作结果
 service ChatService { 
   /// 发送消息到Kafka队列
-  rpc SendMsg(SendMsgRequest) returns (MsgResponse); 
+  rpc SendMsg(SendMsgRequest) returns (Msg); 
   
   /// 标记消息已读
   rpc MarkMessagesAsRead(MarkMessagesAsReadRequest) returns (MarkMessagesAsReadResponse);

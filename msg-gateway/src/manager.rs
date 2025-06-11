@@ -417,14 +417,9 @@ impl Manager {
         // 通过gRPC发送消息
         match self.send_rpc_message(message.clone()).await {
             Ok(response) => {
-                if response.err.is_empty() {
-                    debug!("消息发送成功");
-                    // 清空消息内容，避免重复发送
-                    message.content.clear();
-                } else {
-                    error!("消息发送失败: {:?}", response.err);
-                    self.create_error_message(message, response.err)
-                }
+                debug!("消息发送成功");
+                // 清空消息内容，避免重复发送
+                message.content.clear();
                 // 设置响应消息类型和相关信息
                 message.msg_type = MsgType::MsgRecResp as i32;
                 message.server_id.clone_from(&response.server_id);
@@ -447,7 +442,7 @@ impl Manager {
     /// # 返回值
     /// * `Ok(MsgResponse)` - 服务器响应
     /// * `Err(tonic::Status)` - gRPC调用失败
-    async fn send_rpc_message(&self, message: Msg) -> Result<MsgResponse, tonic::Status> {
+    async fn send_rpc_message(&self, message: Msg) -> Result<Msg, tonic::Status> {
         let mut chat_rpc = self.chat_rpc.clone();
         chat_rpc
             .send_msg(SendMsgRequest {

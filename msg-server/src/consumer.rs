@@ -378,7 +378,7 @@ impl ConsumerService {
             }
         }
         
-        return (msg_type, need_increase_seq, need_history);
+        (msg_type, need_increase_seq, need_history)
     }
 
     /// 从缓存查询群组成员ID列表

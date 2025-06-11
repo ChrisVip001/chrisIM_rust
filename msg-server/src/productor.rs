@@ -244,7 +244,7 @@ impl ChatService for ChatRpcService {
     async fn send_msg(
         &self,
         request: tonic::Request<SendMsgRequest>,
-    ) -> Result<tonic::Response<MsgResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<Msg>, tonic::Status> {
         // 从gRPC请求中提取消息内容
         let mut msg = request
             .into_inner()
@@ -292,14 +292,7 @@ impl ChatService for ChatRpcService {
                 debug!("消息已成功发送到Kafka: {}", msg.server_id);
                 
                 // 返回成功响应
-                let response = MsgResponse {
-                    local_id: msg.local_id,
-                    server_id: msg.server_id,
-                    send_time: msg.send_time,
-                    err: String::new(),
-                };
-                
-                Ok(tonic::Response::new(response))
+                Ok(tonic::Response::new(msg))
             }
             Err((kafka_error, _)) => {
                 error!("发送消息到Kafka失败: {}", kafka_error);
