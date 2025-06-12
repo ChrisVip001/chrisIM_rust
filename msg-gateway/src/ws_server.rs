@@ -55,24 +55,6 @@ pub struct AppState {
     cache_instance: Arc<dyn cache::Cache>,
 }
 
-/// JWT令牌的声明结构
-///
-/// 定义了JWT令牌中包含的标准字段，用于用户身份验证。
-#[derive(Serialize, Deserialize)]
-pub struct Claims {
-    /// 用户标识（Subject）
-    /// JWT标准字段，表示令牌的主体用户
-    pub sub: String,
-
-    /// 过期时间（Expiration Time）
-    /// JWT标准字段，Unix时间戳格式
-    pub exp: u64,
-
-    /// 颁发时间（Issued At）
-    /// JWT标准字段，Unix时间戳格式
-    pub iat: u64,
-}
-
 /// WebSocket服务器
 ///
 /// 负责处理WebSocket连接、消息路由和客户端管理
