@@ -155,12 +155,6 @@ impl Manager {
             for platform_entry in clients.iter() {
                 let platform_type = platform_entry.key();
                 let client = platform_entry.value();
-
-                // 跳过当前发送消息的平台，避免重复发送
-                if *platform_type == current_platform {
-                    continue;
-                }
-
                 // 向其他平台发送消息副本
                 if let Err(e) = client.send_text(content.clone()).await {
                     error!("向发送者平台 {:?} 发送消息副本失败: {}", platform_type, e);
@@ -196,13 +190,7 @@ impl Manager {
     }
 
     /// 向客户端连接发送消息
-    /// 
-    /// 根据客户端数量采用不同的发送策略：
-    /// - 0个客户端: 记录错误日志
-    /// - 1个客户端: 直接发送
-    /// - 2个客户端: 分别发送（支持双端同时在线）
-    /// - 超过2个: 记录警告（异常情况）
-    /// 
+    ///
     /// # 参数
     /// * `clients` - 目标用户的所有客户端连接
     /// * `msg` - 要发送的消息
@@ -227,34 +215,22 @@ impl Manager {
             }
         };
 
-        match clients.len() {
-            1 => {
-                // 单个客户端在线
-                if let Some(client) = clients.iter().next() {
-                    if let Err(e) = client.value().send_text(content).await {
-                        error!("发送消息失败: {}", e);
-                    }
-                }
+        // 向所有在线客户端发送消息
+        let mut sent_count = 0;
+        for client_entry in clients.iter() {
+            let client = client_entry.value();
+            if let Err(e) = client.send_text(content.clone()).await {
+                error!("发送消息失败: {}", e);
+            } else {
+                sent_count += 1;
+                debug!("已向客户端发送消息");
             }
-            2 => {
-                // 两个客户端在线（桌面端+移动端）
-                let mut iter = clients.iter();
-                
-                // 向第一个客户端发送
-                if let Some(first_client) = iter.next() {
-                    if let Err(e) = first_client.value().send_text(content.clone()).await {
-                        error!("发送消息失败: {}", e);
-                    }
-                }
-                
-                // 向第二个客户端发送
-                if let Some(second_client) = iter.next() {
-                    if let Err(e) = second_client.value().send_text(content).await {
-                        error!("发送消息失败: {}", e);
-                    }
-                }
-            }
-            _ => warn!("客户端数量异常: {}", clients.len()),
+        }
+
+        if sent_count == 0 {
+            error!("未成功发送消息给任何客户端");
+        } else {
+            debug!("成功向 {} 个客户端发送消息", sent_count);
         }
     }
 
@@ -381,11 +357,9 @@ impl Manager {
 
         // 从通道读取消息并处理
         while let Some(mut message) = receiver.recv().await {
+            // 处理消息并发送到Kafka
             self.process_message(&mut message).await;
-
-            // 向发送者回复处理结果
-            debug!("回复消息处理结果:{:?}", message);
-            self.send_single_msg(&message.send_id, &message).await;
+            debug!("消息已处理并发送到Kafka: {:?}", message);
         }
     }
 
