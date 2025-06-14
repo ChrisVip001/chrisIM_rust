@@ -17,6 +17,7 @@ use common::proto::message::chat_service_server::{ChatService, ChatServiceServer
 use common::proto::message::{MsgType, SendMsgRequest, Msg, MarkMessagesAsReadRequest, MarkMessagesAsReadResponse, MarkConversationAsReadRequest, GetMessageHistoryResponse, GetConversationsRequest, GetConversationsResponse, RevokeMessageRequest, RevokeMessageResponse, DeleteMessagesRequest, DeleteMessagesResponse, ForwardMessageRequest, ForwardMessageResponse, ReplyMessageRequest, ReplyMessageResponse, Conversation, GetDbMessagesRequest};
 use msg_storage::{msg_rec_box_repo, message::MsgRecBoxRepo};
 use cache::Cache;
+use common::Error;
 
 /// 聊天消息RPC服务实现
 /// 
@@ -890,7 +891,7 @@ impl ChatRpcService {
     }
 
     /// 查询消息
-    async fn fetch_messages(&self, user_id: &str, range: &QueryRange) -> Result<Vec<Msg>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn fetch_messages(&self, user_id: &str, range: &QueryRange) -> Result<Vec<Msg>, Error> {
         self.msg_storage
             .get_msgs(user_id, range.send_start, range.send_end, range.rec_start, range.rec_end)
             .await
@@ -914,15 +915,15 @@ impl ChatRpcService {
                     return None;
                 }
 
-                // 按发送时间排序（最新的在前）
-                msgs.sort_by(|a, b| b.send_time.cmp(&a.send_time));
+                // 按发送时间排序（最新的在后）
+                msgs.sort_by(|a, b| a.send_time.cmp(&b.send_time));
 
                 Some(self.create_conversation(conversation_id, msgs, range))
             })
             .collect();
 
-        // 按最后活跃时间排序
-        conversations.sort_by(|a, b| b.last_active_time.cmp(&a.last_active_time));
+        // 按最后活跃时间排序（最新的在后）
+        conversations.sort_by(|a, b| a.last_active_time.cmp(&b.last_active_time));
         conversations
     }
 
