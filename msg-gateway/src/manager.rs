@@ -135,8 +135,6 @@ impl Manager {
     /// * `msg` - 要发送的消息
     async fn send_to_self(&self, id: &str, msg: &Msg) {
         if let Some(clients) = self.hub.get(id) {
-            // 获取当前发送消息的平台类型
-            let current_platform = PlatformType::try_from(msg.platform).unwrap_or(PlatformType::Unknown);
 
             // 创建适合JSON序列化的消息副本
             let json_msg = self.prepare_message_for_json(msg);
