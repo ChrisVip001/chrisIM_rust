@@ -135,9 +135,13 @@ impl Manager {
     /// * `msg` - 要发送的消息
     async fn send_to_self(&self, id: &str, msg: &Msg) {
         if let Some(clients) = self.hub.get(id) {
-
             // 创建适合JSON序列化的消息副本
-            let json_msg = self.prepare_message_for_json(msg);
+            let mut json_msg = self.prepare_message_for_json(msg);
+            
+            // 设置is_self标识为true，因为这是发送给发送者自己的消息
+            if let Some(obj) = json_msg.as_object_mut() {
+                obj.insert("is_self".to_string(), serde_json::Value::Bool(true));
+            }
 
             // 序列化消息为JSON
             let content = match serde_json::to_string(&json_msg) {
@@ -202,7 +206,12 @@ impl Manager {
         }
 
         // 创建适合JSON序列化的消息副本
-        let json_msg = self.prepare_message_for_json(msg);
+        let mut json_msg = self.prepare_message_for_json(msg);
+        
+        // 设置is_self标识为false，因为这是发送给接收者的消息
+        if let Some(obj) = json_msg.as_object_mut() {
+            obj.insert("is_self".to_string(), serde_json::Value::Bool(false));
+        }
         
         // 序列化为JSON
         let content = match serde_json::to_string(&json_msg) {
