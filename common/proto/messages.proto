@@ -385,6 +385,8 @@ message Conversation {
 message GetConversationsResponse {
   repeated Conversation conversations = 1;  // 会话列表
   int32 total = 2;                         // 总会话数
+  int64 seq_max = 3;                       // 最大接收序列号
+  int64 send_seq_max = 4;                  // 最大发送序列号
 }
 
 /// 撤回消息请求

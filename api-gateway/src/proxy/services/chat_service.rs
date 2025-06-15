@@ -1,11 +1,9 @@
 use super::common::{error_response, extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
-use axum::{
-    body::Body,
-    http::{Method, Response, StatusCode},
-};
+use axum::{body::Body, http::{Method, Response, StatusCode}, Json};
+use axum::response::IntoResponse;
 use chrono::Utc;
 use common::proto::message::chat_service_client::ChatServiceClient;
-use common::proto::message::{ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest, GetDbMessagesRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, PlatformType, ReplyMessageRequest, RevokeMessageRequest, SendMsgRequest};
+use common::proto::message::{ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest, GetDbMessagesRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, PlatformType, ReplyMessageRequest, RevokeMessageRequest, SendMsgRequest, GetConversationsResponse};
 use common::service_discovery::LbWithServiceDiscovery;
 use serde_json::{json, Value};
 use tracing::{debug, error};
@@ -440,7 +438,19 @@ impl ChatServiceHandler {
         };
 
         match self.client.get_conversations(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok({
+                let conversations = response.into_inner();
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "code": StatusCode::OK.as_u16(),
+                        "data": conversations,
+                        "success": true,
+                        "seq_max": conversations.seq_max,
+                        "send_seq_max": conversations.send_seq_max,
+                    }))
+                ).into_response()
+            }),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(

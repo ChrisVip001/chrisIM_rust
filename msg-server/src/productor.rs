@@ -438,6 +438,8 @@ impl ChatService for ChatRpcService {
             return Ok(tonic::Response::new(GetConversationsResponse {
                 conversations: Vec::new(),
                 total: 0,
+                seq_max: rec_seq,
+                send_seq_max: send_seq,
             }));
         }
 
@@ -452,6 +454,8 @@ impl ChatService for ChatRpcService {
                 Ok(tonic::Response::new(GetConversationsResponse {
                     conversations,
                     total,
+                    seq_max: rec_seq,
+                    send_seq_max: send_seq,
                 }))
             }
             Err(e) => {
