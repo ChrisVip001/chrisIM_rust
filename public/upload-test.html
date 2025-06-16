@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>MinIO 签名上传示例</title>
+</head>
+<body>
+<h2>签名上传 MinIO 文件</h2>
+<input type="file" id="fileInput" />
+<button onclick="uploadFile()">上传</button>
+<div id="result"></div>
+
+<script>
+  async function getSignature() {
+    // 调用你后端生成签名的接口，调整为你的真实地址和参数
+    const response = await fetch('http://127.0.0.1:8000/api/files/upload-signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // 视情况添加认证头
+        'Authorization': 'Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3MTY1NzIzNjM3NDY5NzE2NDgiLCJpc3MiOiJhcGktZ2F0ZXdheSIsImV4cCI6MTc0ODk4MTE5OCwiaWF0IjoxNzQ4ODk0Nzk4LCJ1c2VybmFtZSI6Iua1i-ivlSIsInRlbmFudF9pZCI6MSwidGVuYW50X25hbWUiOiJkZWZhdWx0IiwiZXh0cmEiOnsiY3VzdG9tX2lkIjoibXlpZC1USVBVY25tSSIsInBsYXRmb3JtIjoiaW9zIn19.ZVnBERP3hCNPG84qv7YDEHiuE0gfBgxeqihj51SJYj4'
+      },
+      body: JSON.stringify({ bucket_type: "file" })
+    });
+    if (!response.ok) throw new Error('获取签名失败');
+    const data = await response.json();
+    if (!data.success) throw new Error('签名接口返回失败');
+    return data.data;
+  }
+
+  async function uploadFile() {
+    const fileInput = document.getElementById('fileInput');
+    const file = fileInput.files[0];
+    const result = document.getElementById('result');
+    if (!file) {
+      result.textContent = '请先选择文件';
+      return;
+    }
+
+    try {
+      const sig = await getSignature();
+
+      // 确保 key 以 uploads 开头，sig.dir 通常已经是
+      const key = `${sig.dir}/${file.name}`;
+
+      // 策略要求 Content-Type 以 application 开头，这里用 application/octet-stream
+      const contentType = 'application/octet-stream';
+
+      const formData = new FormData();
+      formData.append('key', key);
+      formData.append('Content-Type', contentType);
+      formData.append('AWSAccessKeyId', sig.access_key_id);
+      formData.append('policy', sig.policy);
+      formData.append('signature', sig.signature);
+      formData.append('file', file);
+
+      const uploadUrl = sig.host + '/rust-im'; // 记得加桶名路径！
+
+      const uploadResp = await fetch(uploadUrl, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!uploadResp.ok) {
+        const text = await uploadResp.text();
+        result.textContent = `上传失败详情：${text}`;
+        return;
+      }
+
+      result.textContent = `上传成功！访问路径: ${uploadUrl}/${key}`;
+    } catch (e) {
+      result.textContent = '上传出错: ' + e.message;
+    }
+  }
+</script>
+</body>
+</html>

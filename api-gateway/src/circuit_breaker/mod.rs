@@ -1,10 +1,10 @@
-use crate::config::CONFIG;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
+use common::config::ConfigLoader;
 use futures::future::BoxFuture;
 use parking_lot::RwLock;
 use serde_json::json;
@@ -182,16 +182,15 @@ impl<S> CircuitBreakerMiddleware<S> {
         }
 
         // 从配置中读取熔断参数
-        let config_future = CONFIG.read();
-        let config = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(config_future)
-        });
+        // 读取全局配置
+        let config = ConfigLoader::get_global().expect("Failed to get global config");
+        let gateway_config = &config.gateway;
 
         // 创建新的熔断器
         let breaker = Arc::new(CircuitBreaker::new(
             service_id,
-            config.circuit_breaker.failure_threshold,
-            config.circuit_breaker.half_open_timeout_secs,
+            gateway_config.circuit_breaker.failure_threshold,
+            gateway_config.circuit_breaker.half_open_timeout_secs,
         ));
 
         breakers.insert(service_id.to_string(), breaker.clone());

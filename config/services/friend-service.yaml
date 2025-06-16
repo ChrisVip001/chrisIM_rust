@@ -1,0 +1,55 @@
+# 好友服务特定配置
+component: FriendServer
+
+# 服务器配置
+server:
+  host: 127.0.0.1
+  port: 50003  # 特定于好友服务的端口
+  ws_lb_strategy: RoundRobin
+
+# 数据库配置 - 好友服务特定数据库
+database:
+  postgres:
+    host: 127.0.0.1
+    port: 5432
+    user: friend_service
+    password: friend_pwd123
+    database: friend_db
+  
+  # 好友服务的MongoDB配置
+  mongodb:
+    host: 127.0.0.1
+    port: 27017
+    user: friend_mongo
+    password: friend_mongo_pwd
+    database: friend_db
+    clean:
+      period: 7200  # 更长的清理周期
+      except_types:
+        - "MsgTypeFriendApplyReq"
+        - "MsgTypeFriendApplyResp"
+        - "MsgTypeFriendBlack"
+        - "MsgTypeFriendDelete"
+
+# 日志配置
+log:
+  level: "info"
+  output: "console"  # 控制台输出
+  format: "json"
+  sqlx_level: "info"
+  components:
+    tower: "warn"
+    hyper: "warn"
+    axum: "info"
+    tonic: "info"
+    rustIM: "debug"
+    redis: "warn"
+
+# 好友服务的缓存配置
+redis:
+  host: 127.0.0.1
+  port: 6379
+  seq_step: 5
+  max_connections: 50
+  pool_timeout_ms: 2000
+  connection_timeout_ms: 3000 

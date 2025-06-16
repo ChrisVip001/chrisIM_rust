@@ -1,28 +1,30 @@
 use chrono::{DateTime, Utc};
 use common::proto::user;
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use uuid::Uuid;
 
 /// 用户数据库模型
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize,FromRow)]
 pub struct User {
     pub id: String,
     pub username: String,
-    pub email: String,
+    pub email: Option<String>,
     pub password: String,
     pub nickname: Option<String>,
     pub avatar_url: Option<String>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
     pub phone: String,
     pub address: Option<String>,
     pub head_image: Option<String>,
     pub head_image_thumb: Option<String>,
-    pub sex: Option<u32>,
-    pub user_stat: u32,
+    pub sex: Option<i32>,
+    pub user_stat: i32,
     pub tenant_id: String,
-    pub last_login_time: DateTime<Utc>,
-    pub user_idx: Option<String>,
+    pub last_login_time: Option<DateTime<Utc>>,
+    pub custom_id: String,
+    pub sign: Option<String>,
 }
 
 /// 创建用户请求数据
@@ -33,6 +35,7 @@ pub struct CreateUserData {
     pub password: String,
     pub nickname: Option<String>,
     pub avatar_url: Option<String>,
+    pub custom_id: String,
 }
 
 /// 更新用户请求数据
@@ -42,6 +45,14 @@ pub struct UpdateUserData {
     pub email: Option<String>,
     pub avatar_url: Option<String>,
     pub password: Option<String>,
+    pub address: Option<String>,
+    pub head_image: Option<String>,
+    pub head_image_thumb: Option<String>,
+    pub sex: Option<u32>,
+    pub user_id: Option<String>,
+    pub username: Option<String>,
+    pub custom_id: Option<String>,
+    pub sign: Option<String>,
 }
 
 impl From<User> for user::User {
@@ -51,29 +62,30 @@ impl From<User> for user::User {
         Self {
             id: user.id.to_string(),
             username: user.username,
-            email: user.email,
+            email: user.email.unwrap_or_default(),
             nickname: user.nickname,
             avatar_url: user.avatar_url,
             created_at: Some(Timestamp {
                 seconds: user.created_at.timestamp(),
                 nanos: user.created_at.timestamp_subsec_nanos() as i32,
             }),
-            updated_at: Some(Timestamp {
-                seconds: user.updated_at.timestamp(),
-                nanos: user.updated_at.timestamp_subsec_nanos() as i32,
+            updated_at: user.updated_at.map(|dt| Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
             }),
             phone: user.phone,
             address: user.address,
             head_image: user.head_image,
             head_image_thumb: user.head_image_thumb,
-            sex: user.sex.map(|x| x as i32),
-            user_stat: user.user_stat as i32,
+            sex: user.sex,
+            user_stat: user.user_stat,
             tenant_id: user.tenant_id,
-            last_login_time: Some(Timestamp {
-                seconds: user.last_login_time.timestamp(),
-                nanos: user.last_login_time.timestamp_subsec_nanos() as i32,
+            last_login_time: user.last_login_time.map(|dt| Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
             }),
-            user_idx: user.user_idx,
+            custom_id: user.custom_id,
+            sign: user.sign,
         }
     }
 }
@@ -94,6 +106,7 @@ impl From<user::CreateUserRequest> for CreateUserData {
             } else {
                 Some(req.avatar_url)
             },
+            custom_id: String::new(), // 初始化为空，将在服务层设置
         }
     }
 }
@@ -105,6 +118,14 @@ impl From<user::UpdateUserRequest> for UpdateUserData {
             nickname: req.nickname,
             avatar_url: req.avatar_url,
             password: req.password,
+            address: req.address,
+            head_image: req.head_image,
+            head_image_thumb: req.head_image_thumb,
+            sex: req.sex.map(|x| x as u32),
+            user_id: req.user_id,
+            username: req.username,
+            custom_id: req.custom_id,
+            sign: req.sign,
         }
     }
 }
@@ -117,6 +138,8 @@ pub struct RegisterUserData {
     pub nickname: Option<String>,
     pub tenant_id : String,
     pub phone: String,
+    pub verify_code: String,
+    pub custom_id: String,
 }
 
 impl From<user::RegisterRequest> for RegisterUserData {
@@ -127,6 +150,8 @@ impl From<user::RegisterRequest> for RegisterUserData {
             nickname: if req.nickname.is_empty() { None } else { Some(req.nickname) },
             tenant_id: req.tenant_id,
             phone: req.phone,
+            verify_code: req.verify_code,
+            custom_id: String::new(), // 初始化为空，将在服务层设置
         }
     }
 }
@@ -134,19 +159,21 @@ impl From<user::RegisterRequest> for RegisterUserData {
 /// 忘记密码请求数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForgetPasswordData {
-    pub username: String,
+    // pub username: String,
     pub password: String,
     pub tenant_id : String,
     pub phone: String,
+    pub verify_code: String,
 }
 
 impl From<user::ForgetPasswordRequest> for ForgetPasswordData {
     fn from(req: user::ForgetPasswordRequest) -> Self {
         Self {
-            username: req.username,
+            // username: req.username,
             password: req.password,
             tenant_id: req.tenant_id,
             phone: req.phone,
+            verify_code: req.verify_code,
         }
     }
 }

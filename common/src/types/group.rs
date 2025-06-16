@@ -1,12 +1,13 @@
 use sqlx::postgres::PgRow;
 use sqlx::{Error, FromRow, Row};
 use tonic::Status;
+use chrono::{DateTime, Utc};
+use prost_types::Timestamp;
 
-use crate::message::{
-    GetGroupAndMembersResp, GetMemberReq, GroupInfo, GroupMemSeq, GroupMember, GroupMemberRole,
+use crate::proto::group::{
+    GetGroupAndMembersResp, GetMemberReq, GroupInfo, Member, MemberRole,
     GroupMembersIdRequest, RemoveMemberRequest,
 };
-
 use super::Validator;
 
 impl GroupMembersIdRequest {
@@ -35,18 +36,18 @@ impl Validator for RemoveMemberRequest {
         if self.group_id.is_empty() {
             return Err(Status::invalid_argument("group_id is empty"));
         }
-        if self.user_id.is_empty() {
-            return Err(Status::invalid_argument("user_id is empty"));
+        if self.user_ids.is_empty() {
+            return Err(Status::invalid_argument("user_ids is empty"));
         }
-        if self.mem_id.is_empty() {
-            return Err(Status::invalid_argument("mem_ids is empty"));
+        if self.removed_by_id.is_empty() {
+            return Err(Status::invalid_argument("removed_by_id is empty"));
         }
         Ok(())
     }
 }
 
 impl GetGroupAndMembersResp {
-    pub fn new(group: GroupInfo, members: Vec<GroupMember>) -> Self {
+    pub fn new(group: GroupInfo, members: Vec<Member>) -> Self {
         Self {
             group: Some(group),
             members,
@@ -62,7 +63,7 @@ pub enum GroupRole {
     Member,
 }
 
-impl From<GroupRole> for GroupMemberRole {
+impl From<GroupRole> for MemberRole {
     fn from(value: GroupRole) -> Self {
         match value {
             GroupRole::Owner => Self::Owner,
@@ -73,22 +74,26 @@ impl From<GroupRole> for GroupMemberRole {
 }
 
 // implement slqx FromRow trait
-impl FromRow<'_, PgRow> for GroupMember {
+impl FromRow<'_, PgRow> for Member {
     fn from_row(row: &PgRow) -> Result<Self, Error> {
         let role: GroupRole = row.try_get("role")?;
-        let role = GroupMemberRole::from(role) as i32;
+        let role = MemberRole::from(role) as i32;
+        let joined_at: Option<DateTime<Utc>> = row.try_get("joined_at").ok();
+
         Ok(Self {
-            user_id: row.try_get("user_id")?,
+            id: row.try_get("id")?,
             group_id: row.try_get("group_id")?,
-            avatar: row.try_get("avatar")?,
-            gender: row.try_get("gender")?,
-            age: row.try_get("age")?,
-            region: row.try_get("region")?,
-            group_name: row.try_get("group_name")?,
-            joined_at: row.try_get("joined_at")?,
-            remark: None,
-            signature: row.try_get("signature")?,
+            user_id: row.try_get("user_id")?,
+            username: row.try_get("username").ok(),
+            nickname: row.try_get("nickname").ok(),
+            avatar_url: row.try_get("avatar_url").ok(),
             role,
+            joined_at: joined_at.map(|dt| Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+            is_muted: false,
+            mute_info: None,
         })
     }
 }
@@ -109,13 +114,3 @@ impl FromRow<'_, PgRow> for GroupInfo {
     }
 }
 
-impl GroupMemSeq {
-    pub fn new(mem_id: String, cur_seq: i64, max_seq: i64, need_update: bool) -> Self {
-        Self {
-            mem_id,
-            cur_seq,
-            max_seq,
-            need_update,
-        }
-    }
-}

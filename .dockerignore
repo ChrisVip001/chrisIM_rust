@@ -1,0 +1,113 @@
+# ===========================================
+# Docker 构建忽略文件
+# 用于减少构建上下文大小，加速 Docker 构建
+# ===========================================
+
+# Rust 构建产物和缓存
+target/                  # Cargo 构建目录
+**/*.rs.bk              # Rust 备份文件
+**/*.pdb                # 调试符号文件
+Cargo.lock              # 锁定文件（在 Dockerfile 中单独处理）
+
+# IDE 和编辑器文件
+.vscode/                # VS Code 配置
+.idea/                  # IntelliJ IDEA 配置
+*.swp                   # Vim 交换文件
+*.swo                   # Vim 交换文件
+*~                      # 临时文件
+.vim/                   # Vim 配置
+.emacs.d/              # Emacs 配置
+
+# 系统文件
+.DS_Store              # macOS 系统文件
+Thumbs.db              # Windows 缩略图
+desktop.ini            # Windows 桌面配置
+
+# Git 相关
+.git/                  # Git 仓库数据
+.gitignore             # Git 忽略文件
+.gitattributes         # Git 属性文件
+.gitmodules            # Git 子模块
+
+# 日志和调试文件
+*.log                  # 所有日志文件
+logs/                  # 日志目录
+debug/                 # 调试文件目录
+*.out                  # 输出文件
+
+# 临时文件和缓存
+tmp/                   # 临时目录
+temp/                  # 临时目录
+cache/                 # 缓存目录
+.cache/                # 隐藏缓存目录
+
+# 文档和说明
+*.md                   # Markdown 文档
+docs/                  # 文档目录
+README*                # README 文件
+LICENSE*               # 许可证文件
+CHANGELOG*             # 变更日志
+
+# 测试相关
+tests/                 # 测试目录
+**/test_*              # 测试文件
+**/*_test.rs           # Rust 测试文件
+coverage/              # 代码覆盖率报告
+.coverage              # 覆盖率文件
+
+# 开发环境配置
+.env                   # 环境变量文件
+.env.*                 # 各种环境的配置
+.envrc                 # direnv 配置
+.tool-versions         # asdf 工具版本
+
+# Docker 相关（避免递归）
+Dockerfile*            # Dockerfile 文件
+docker-compose*.yml    # Docker Compose 文件
+.dockerignore          # 本文件
+
+# CI/CD 配置
+.github/               # GitHub Actions
+.gitlab-ci.yml         # GitLab CI
+.travis.yml            # Travis CI
+.circleci/             # CircleCI
+Jenkinsfile            # Jenkins
+
+# 包管理器
+node_modules/          # Node.js 依赖
+npm-debug.log*         # npm 调试日志
+yarn-error.log         # Yarn 错误日志
+
+# 备份和临时文件
+*.bak                  # 备份文件
+*.orig                 # 原始文件
+*.tmp                  # 临时文件
+*.temp                 # 临时文件
+*~                     # 编辑器临时文件
+
+# 安全敏感文件
+*.key                  # 私钥文件
+*.pem                  # 证书文件
+*.p12                  # 证书文件
+secrets/               # 密钥目录
+.secrets/              # 隐藏密钥目录
+
+# 本地开发文件
+.local/                # 本地配置
+local/                 # 本地文件
+*.local                # 本地配置文件
+
+# 性能分析和监控
+*.prof                 # 性能分析文件
+flamegraph.svg         # 火焰图
+perf.data              # 性能数据
+
+# ===========================================
+# 例外规则（使用 ! 前缀）
+# ===========================================
+# !important.md        # 如果需要包含特定文件，取消注释并修改
+
+# ===========================================
+# 项目特定忽略
+# ===========================================
+# 如果有项目特定的文件需要忽略，在这里添加 

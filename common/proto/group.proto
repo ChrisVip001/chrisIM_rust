@@ -19,7 +19,7 @@ service GroupService {
   rpc DeleteGroup (DeleteGroupRequest) returns (DeleteGroupResponse);
   
   // 添加群组成员
-  rpc AddMember (AddMemberRequest) returns (MemberResponse);
+  rpc AddMember (AddMemberRequest) returns (AddMemberResponse);
   
   // 移除群组成员
   rpc RemoveMember (RemoveMemberRequest) returns (RemoveMemberResponse);
@@ -35,6 +35,38 @@ service GroupService {
   
   // 检查用户是否在群组中
   rpc CheckMembership (CheckMembershipRequest) returns (CheckMembershipResponse);
+  
+  // 搜索用户的群组
+  rpc SearchUserGroups (SearchUserGroupsRequest) returns (SearchUserGroupsResponse);
+
+  // 新增方法 - 群组设置
+  rpc GetGroupSettings (GetGroupSettingsRequest) returns (GroupSettingsResponse);
+  rpc UpdateGroupSettings (UpdateGroupSettingsRequest) returns (GroupSettingsResponse);
+
+  // 新增方法 - 群公告
+  rpc CreateAnnouncement (CreateAnnouncementRequest) returns (AnnouncementResponse);
+  rpc GetAnnouncement (GetAnnouncementRequest) returns (AnnouncementResponse);
+  rpc GetGroupAnnouncements (GetGroupAnnouncementsRequest) returns (GetGroupAnnouncementsResponse);
+  rpc DeleteAnnouncement (DeleteAnnouncementRequest) returns (DeleteAnnouncementResponse);
+
+  // 新增方法 - 群黑名单
+  rpc AddToBlacklist (AddToBlacklistRequest) returns (BlacklistResponse);
+  rpc RemoveFromBlacklist (RemoveFromBlacklistRequest) returns (RemoveFromBlacklistResponse);
+  rpc GetBlacklist (GetBlacklistRequest) returns (GetBlacklistResponse);
+
+  // 新增方法 - 群禁言
+  rpc MuteMember (MuteMemberRequest) returns (MuteResponse);
+  rpc UnmuteMember (UnmuteMemberRequest) returns (UnmuteResponse);
+  rpc GetMutedMembers (GetMutedMembersRequest) returns (GetMutedMembersResponse);
+  rpc CheckUserMuteStatus (CheckUserMuteStatusRequest) returns (CheckUserMuteStatusResponse);
+
+  // 新增方法 - 群成员设置
+  rpc GetMemberSettings (GetMemberSettingsRequest) returns (MemberSettingsResponse);
+  rpc UpdateMemberSettings (UpdateMemberSettingsRequest) returns (MemberSettingsResponse);
+
+  // 新增方法 - 群二维码
+  rpc CreateGroupQrcode (CreateGroupQrcodeRequest) returns (GroupQrcodeResponse);
+  rpc GetGroupQrcode (GetGroupQrcodeRequest) returns (GroupQrcodeResponse);
 }
 
 // 创建群组请求
@@ -43,6 +75,7 @@ message CreateGroupRequest {
   string description = 2;
   string owner_id = 3;
   string avatar_url = 4;
+  repeated string members = 5;  // 初始群组成员ID列表
 }
 
 // 获取群组请求
@@ -72,15 +105,21 @@ message DeleteGroupResponse {
 // 添加成员请求
 message AddMemberRequest {
   string group_id = 1;
-  string user_id = 2;
+  repeated string user_ids = 2;       // 修改为用户ID列表
   string added_by_id = 3;
-  MemberRole role = 4;
+  MemberRole role = 4;                // 默认角色（所有添加的成员都是此角色）
+}
+
+// 添加成员响应
+message AddMemberResponse {
+  bool success = 1;
+  int32 added_count = 2;              // 成功添加的成员数量
 }
 
 // 移除成员请求
 message RemoveMemberRequest {
   string group_id = 1;
-  string user_id = 2;
+  repeated string user_ids = 2;       // 修改为用户ID列表
   string removed_by_id = 3;
 }
 
@@ -100,11 +139,16 @@ message UpdateMemberRoleRequest {
 // 获取成员列表请求
 message GetMembersRequest {
   string group_id = 1;
+  int32 page = 2;        // 页码，默认为1
+  int32 page_size = 3;   // 每页数量，默认为20
 }
 
 // 获取成员列表响应
 message GetMembersResponse {
   repeated Member members = 1;
+  int32 total = 2;       // 总成员数
+  int32 page = 3;        // 当前页码
+  int32 page_size = 4;   // 每页数量
 }
 
 // 获取用户群组列表请求
@@ -151,16 +195,43 @@ message Group {
   google.protobuf.Timestamp updated_at = 8;
 }
 
+message GroupMembersIdRequest { string group_id = 1; }
+
+/// group information also related to database
+message GroupInfo {
+  string id = 1;
+  string owner = 2;
+  string name = 3;
+  string avatar = 4;
+  string description = 5;
+  string announcement = 6;
+  int64 create_time = 7;
+  int64 update_time = 8;
+}
+
 // 成员
 message Member {
-  string id = 1;
+  string id = 1;                                // 成员记录ID (VARCHAR(36) PRIMARY KEY)
+  string group_id = 2;                          // 群组ID (VARCHAR(36) NOT NULL)
+  string user_id = 3;                           // 用户ID (VARCHAR(36) NOT NULL)
+  optional string username = 4;                 // 用户名（从users表关联）
+  optional string nickname = 5;                 // 昵称（从users表关联）
+  optional string avatar_url = 6;               // 头像URL（从users表关联）
+  MemberRole role = 7;                          // 成员角色 (VARCHAR(10) NOT NULL DEFAULT 'MEMBER')
+  google.protobuf.Timestamp joined_at = 8;      // 加入时间 (TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)
+  bool is_muted = 9;                            // 是否被禁言
+  optional MuteEntry mute_info = 10;            // 禁言详细信息（如果被禁言）
+}
+
+message GetMemberReq {
+  string user_id = 1;
   string group_id = 2;
-  string user_id = 3;
-  string username = 4;
-  optional string nickname = 5;
-  optional string avatar_url = 6;
-  MemberRole role = 7;
-  google.protobuf.Timestamp joined_at = 8;
+  repeated string mem_ids = 3;
+}
+
+message GetGroupAndMembersResp {
+  GroupInfo group = 1;
+  repeated Member members = 2;
 }
 
 // 用户的群组
@@ -171,6 +242,7 @@ message UserGroup {
   int32 member_count = 4;
   MemberRole role = 5;
   google.protobuf.Timestamp joined_at = 6;
+  string remark = 7;  // 群备注
 }
 
 // 成员角色
@@ -178,4 +250,281 @@ enum MemberRole {
   MEMBER = 0;
   ADMIN = 1;
   OWNER = 2;
+}
+
+// 搜索用户群组请求
+message SearchUserGroupsRequest {
+  string user_id = 1;
+  string keyword = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+// 搜索用户群组响应
+message SearchUserGroupsResponse {
+  repeated UserGroup groups = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+// 新增消息定义 - 群组设置
+message GroupSettings {
+  string group_id = 1;
+  bool allow_member_friendship = 2;
+  bool join_approval_required = 3;
+  bool only_admin_can_invite = 4;
+  bool only_admin_can_modify = 5;
+  bool notify_member_join = 6;
+  bool all_member_muted = 7;
+}
+
+message GetGroupSettingsRequest {
+  string group_id = 1;
+}
+
+message GroupSettingsResponse {
+  GroupSettings settings = 1;
+}
+
+message UpdateGroupSettingsRequest {
+  string group_id = 1;
+  string updated_by_id = 2;
+  optional bool allow_member_friendship = 3;
+  optional bool join_approval_required = 4;
+  optional bool only_admin_can_invite = 5;
+  optional bool only_admin_can_modify = 6;
+  optional bool notify_member_join = 7;
+  optional bool all_member_muted = 8;
+}
+
+// 新增消息定义 - 群公告
+message Announcement {
+  string id = 1;
+  string group_id = 2;
+  string creator_id = 3;
+  string title = 4;
+  string content = 5;
+  bool is_pinned = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message CreateAnnouncementRequest {
+  string group_id = 1;
+  string creator_id = 2;
+  string title = 3;
+  string content = 4;
+  bool is_pinned = 5;
+}
+
+message AnnouncementResponse {
+  Announcement announcement = 1;
+}
+
+message GetAnnouncementRequest {
+  string announcement_id = 1;
+}
+
+message GetGroupAnnouncementsRequest {
+  string group_id = 1;
+}
+
+message GetGroupAnnouncementsResponse {
+  repeated Announcement announcements = 1;
+}
+
+message DeleteAnnouncementRequest {
+  string announcement_id = 1;
+  string deleted_by_id = 2;
+}
+
+message DeleteAnnouncementResponse {
+  bool success = 1;
+}
+
+// 新增消息定义 - 群黑名单
+message BlacklistEntry {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  string creator_id = 4;
+  string reason = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message AddToBlacklistRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string creator_id = 3;
+  string reason = 4;
+}
+
+message BlacklistResponse {
+  BlacklistEntry entry = 1;
+}
+
+message RemoveFromBlacklistRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string removed_by_id = 3;
+}
+
+message RemoveFromBlacklistResponse {
+  bool success = 1;
+}
+
+message GetBlacklistRequest {
+  string group_id = 1;
+}
+
+message GetBlacklistResponse {
+  repeated BlacklistEntry entries = 1;
+}
+
+// 新增消息定义 - 群禁言
+message MuteEntry {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  string creator_id = 4;
+  string reason = 5;
+  google.protobuf.Timestamp mute_until = 6;
+  bool is_permanent = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message MuteMemberRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string creator_id = 3;
+  string reason = 4;
+  google.protobuf.Timestamp mute_until = 5;
+  bool is_permanent = 6;
+}
+
+message MuteResponse {
+  MuteEntry entry = 1;
+}
+
+message UnmuteMemberRequest {
+  string group_id = 1;
+  string user_id = 2;
+  string unmuted_by_id = 3;
+}
+
+message UnmuteResponse {
+  bool success = 1;
+}
+
+message GetMutedMembersRequest {
+  string group_id = 1;
+}
+
+message GetMutedMembersResponse {
+  repeated MuteEntry entries = 1;
+}
+
+// 新增: 检查用户禁言状态请求
+message CheckUserMuteStatusRequest {
+  string group_id = 1;
+  string user_id = 2;
+}
+
+// 新增: 检查用户禁言状态响应
+message CheckUserMuteStatusResponse {
+  bool is_muted = 1;                // 是否被禁言
+  optional MuteEntry mute_info = 2; // 禁言信息（如果被禁言）
+}
+
+// 新增消息定义 - 群成员设置
+message MemberSettings {
+  string id = 1;
+  string group_id = 2;
+  string user_id = 3;
+  bool mute_notifications = 4;
+  string nickname_in_group = 5;
+  string remark = 6;               // 群备注
+  bool is_top = 7;                 // 群置顶，true-是，false-否
+  bool recall_notification = 8;    // 群撤回通知，true-是，false-否
+  bool show_nickname = 9;          // 是否显示群昵称，true-是，false-否
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message GetMemberSettingsRequest {
+  string group_id = 1;
+  string user_id = 2;
+}
+
+message MemberSettingsResponse {
+  MemberSettings settings = 1;
+}
+
+message UpdateMemberSettingsRequest {
+  string group_id = 1;
+  string user_id = 2;
+  optional bool mute_notifications = 3;
+  optional string nickname_in_group = 4;
+  optional string remark = 5;               // 群备注
+  optional bool is_top = 6;                 // 群置顶，true-是，false-否
+  optional bool recall_notification = 7;    // 群撤回通知，true-是，false-否
+  optional bool show_nickname = 8;          // 是否显示群昵称，true-是，false-否
+}
+
+// 群邀请（与group_invitations表对应）
+message GroupInvitation {
+  string id = 1;                                        // 邀请记录ID (VARCHAR(36) PRIMARY KEY)
+  string group_id = 2;                                  // 群组ID (VARCHAR(36) NOT NULL)
+  string inviter_id = 3;                                // 邀请人ID (VARCHAR(36) NOT NULL)
+  string invitee_id = 4;                                // 被邀请人ID (VARCHAR(36) NOT NULL)
+  string status = 5;                                    // 邀请状态：PENDING、ACCEPTED、REJECTED (VARCHAR(10) NOT NULL DEFAULT 'PENDING')
+  google.protobuf.Timestamp created_at = 6;             // 创建时间 (TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)
+  google.protobuf.Timestamp updated_at = 7;             // 更新时间 (TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)
+}
+
+// 群二维码（与group_qrcodes表对应）
+message GroupQrcode {
+  string id = 1;
+  string group_id = 2;
+  string creator_id = 3;
+  string qrcode_url = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  bool is_permanent = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message CreateGroupQrcodeRequest {
+  string group_id = 1;
+  string creator_id = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  bool is_permanent = 4;
+}
+
+message GroupQrcodeResponse {
+  GroupQrcode qrcode = 1;
+}
+
+message GetGroupQrcodeRequest {
+  string group_id = 1;
+}
+
+/// 创建群组请求对象
+message GroupCreate {
+  string id = 1;                    // 群组ID
+  string owner = 2;                 // 群主ID
+  string avatar = 3;                // 群头像
+  string group_name = 4;            // 群名称
+  repeated string members_id = 5;   // 群成员ID列表
+}
+
+/// 群组更新信息
+message GroupUpdate {
+  string id = 1;            // 群组ID
+  string name = 2;          // 群名称
+  string avatar = 3;        // 群头像
+  string description = 4;   // 群描述
+  string announcement = 5;  // 群公告
+  int64 update_time = 6;    // 更新时间
 } 

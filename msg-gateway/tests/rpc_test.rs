@@ -44,19 +44,19 @@ fn setup_server(config: &Config) {
 async fn get_client(config: &Config) -> MsgServiceClient<Channel> {
     // start server at first
     setup_server(config);
-    let url = config.server.url(false);
+    let pg_url = config.server.pg_url(false);
 
-    println!("connect to {}", url);
-    if let Err(err) = MsgServiceClient::connect(url.clone()).await {
+    println!("connect to {}", pg_url);
+    if let Err(err) = MsgServiceClient::connect(pg_url.clone()).await {
         println!("err: {:?}", err);
     }
     // try to connect to server
     let future = async move {
-        while MsgServiceClient::connect(url.clone()).await.is_err() {
+        while MsgServiceClient::connect(pg_url.clone()).await.is_err() {
             tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         }
         // return result
-        MsgServiceClient::connect(url).await.unwrap()
+        MsgServiceClient::connect(pg_url).await.unwrap()
     };
     // set timeout
     time::timeout(time::Duration::from_secs(5), future)

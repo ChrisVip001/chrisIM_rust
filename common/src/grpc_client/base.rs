@@ -1,227 +1,239 @@
+use crate::Error;
 use anyhow::Result;
-use rand::Rng;
+use std::collections::HashSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tonic::transport::{Channel, Endpoint};
-use tracing::{error, info, debug};
+use tonic::transport::channel::Change as TonicChange;
+// 导入密码散列相关依赖
+use crate::grpc_client::client_factory::ClientFactory;
+use async_trait::async_trait;
+use tracing::log::warn;
 
-use crate::service_registry::ServiceRegistry;
+// 从本地模块导入服务发现和错误处理相关组件
+use crate::config::{AppConfig, Component};
+use crate::service_discovery::{DynamicServiceDiscovery, LbWithServiceDiscovery, ServiceFetcher};
 
-/// gRPC服务客户端，用于调用其他微服务的gRPC接口
-#[derive(Clone, Debug)]
-pub struct GrpcServiceClient {
-    service_registry: ServiceRegistry,
+// 重新导出服务注册中心模块
+pub use crate::service_register_center::{service_register_center, typos, ServiceRegister};
+
+/// 服务解析器，用于从服务注册中心获取服务信息
+pub struct ServiceResolver {
     service_name: String,
-    // 缓存已发现的服务Channel
-    channels: Arc<Mutex<Vec<Channel>>>,
-    // 配置参数
-    connection_timeout: Duration,
-    request_timeout: Duration,
-    concurrency_limit: usize,
+    service_center: Arc<dyn ServiceRegister>,
 }
 
-impl GrpcServiceClient {
-    /// 创建新的gRPC服务客户端
-    pub fn new(
-        service_registry: ServiceRegistry,
-        service_name: &str,
-        connection_timeout: Duration,
-        request_timeout: Duration,
-        concurrency_limit: usize,
-    ) -> Self {
+#[async_trait]
+impl ServiceFetcher for ServiceResolver {
+    /// 获取服务地址集合
+    async fn fetch(&self) -> Result<HashSet<SocketAddr>, Error> {
+        let map = self.service_center.find_by_name(&self.service_name).await?;
+        let x = map
+            .values()
+            .filter_map(|v| match format!("{}:{}", v.host, v.port).parse() {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    warn!("解析主机地址错误:{}", e);
+                    None
+                }
+            })
+            .collect();
+        Ok(x)
+    }
+}
+
+///  服务解析器，用于从服务注册中心获取服务信息
+impl ServiceResolver {
+    /// 创建新的服务解析器
+    pub fn new(service_center: Arc<dyn ServiceRegister>, service_name: String) -> Self {
         Self {
-            service_registry,
-            service_name: service_name.to_string(),
-            channels: Arc::new(Mutex::new(Vec::new())),
-            connection_timeout,
-            request_timeout,
-            concurrency_limit,
-        }
-    }
-
-    /// 使用默认设置创建新的gRPC服务客户端
-    pub fn with_defaults(service_registry: ServiceRegistry, service_name: &str) -> Self {
-        Self::new(
-            service_registry,
             service_name,
-            Duration::from_secs(5),
-            Duration::from_secs(30),
-            100,
-        )
-    }
-
-    /// 从环境变量创建服务客户端
-    pub fn from_env(service_name: &str) -> Self {
-        let service_registry = ServiceRegistry::from_env();
-        Self::with_defaults(service_registry, service_name)
-    }
-
-    /// 刷新服务通道
-    pub async fn refresh_channels(&self) -> Result<()> {
-        debug!("开始刷新服务通道: {}", self.service_name);
-        // 从Consul获取服务实例
-        let service_urls = self
-            .service_registry
-            .discover_service(&self.service_name)
-            .await?;
-
-        if service_urls.is_empty() {
-            return Err(anyhow::anyhow!(
-                "没有发现可用的 {} 服务实例",
-                self.service_name
-            ));
+            service_center,
         }
+    }
+}
 
-        // 创建新的gRPC通道
-        let mut new_channels = Vec::with_capacity(service_urls.len());
-        for url in service_urls {
-            // 转换HTTP URL到gRPC URL (移除http:// 前缀)
-            let grpc_url = if url.starts_with("http://") {
-                debug!("转换HTTP URL '{}' 为gRPC URL", url);
-                url[7..].to_string()
-            } else {
-                url
+/// 获取带负载均衡的通道
+///
+/// 简化版的获取通道函数，使用应用配置和服务名称
+pub async fn get_chan(config: &AppConfig, name: String) -> Result<LbWithServiceDiscovery, Error> {
+    let (channel, tonic_sender) = Channel::balance_channel(1024);
+
+    // 创建一个 tower::discover::Change 的转换器
+    let (tower_sender, mut tower_receiver) = tokio::sync::mpsc::channel::<tower::discover::Change<SocketAddr, Endpoint>>(1024);
+    
+    // 启动一个任务来转换 tower::discover::Change 到 tonic Change
+    let tonic_sender_clone = tonic_sender.clone();
+    tokio::spawn(async move {
+        while let Some(change) = tower_receiver.recv().await {
+            // 使用正确的 tonic Change 类型
+            let tonic_change = match change {
+                tower::discover::Change::Insert(key, value) => {
+                    TonicChange::Insert(key, value)
+                }
+                tower::discover::Change::Remove(key) => {
+                    TonicChange::Remove(key)
+                }
             };
-
-            match self.create_channel(&grpc_url).await {
-                Ok(channel) => {
-                    new_channels.push(channel);
-                }
-                Err(err) => {
-                    error!("无法连接到gRPC服务 {}: {}", grpc_url, err);
-                }
+            
+            if let Err(_) = tonic_sender_clone.send(tonic_change).await {
+                break;
             }
         }
+    });
 
-        if new_channels.is_empty() {
-            return Err(anyhow::anyhow!(
-                "没有可用的 {} 服务实例连接",
-                self.service_name
-            ));
-        }
+    // 创建 ServiceResolver
+    let service_resolver = ServiceResolver::new(service_register_center(config), name.clone());
 
-        // 更新通道缓存
-        let mut channels = self.channels.lock().await;
-        *channels = new_channels;
+    // 创建 DynamicServiceDiscovery，使用 tower_sender
+    let mut discovery = DynamicServiceDiscovery::new(
+        service_resolver,
+        Duration::from_secs(30),
+        tower_sender,
+        config.service_center.protocol.clone(),
+    );
 
-        info!(
-            "已更新 {} 服务的 {} 个gRPC连接",
-            self.service_name,
-            channels.len()
-        );
-        Ok(())
-    }
+    // 初始化并启动服务发现
+    discovery.discovery().await?;
+    tokio::spawn(discovery.run());
 
-    /// 创建单个gRPC通道
-    async fn create_channel(&self, target: &str) -> Result<Channel, tonic::transport::Error> {
-        // 确保gRPC URL格式正确
-        let endpoint_url = if target.starts_with("http://") {
-            // 移除http://前缀，因为tonic会自动添加
-            target[7..].to_string()
-        } else if target.starts_with("https://") {
-            // 移除https://前缀
-            target[8..].to_string()
-        } else {
-            // 已经是正确格式
-            target.to_string()
-        };
-        
-        let endpoint = Endpoint::from_shared(format!("http://{}", endpoint_url))?
-            .connect_timeout(self.connection_timeout)
-            .timeout(self.request_timeout)
-            .concurrency_limit(self.concurrency_limit);
-
-        let channel = endpoint.connect().await?;
-        debug!("gRPC通道连接成功: {}", endpoint_url);
-        
-        Ok(channel)
-    }
-
-    /// 获取通道（带负载均衡）
-    pub async fn get_channel(&self) -> Result<Channel> {
-        // 检查缓存是否为空
-        {
-            let channels = self.channels.lock().await;
-            if !channels.is_empty() {
-                // 简单轮询负载均衡
-                let index = rand::rng().random_range(0..channels.len());
-                return Ok(channels[index].clone());
-            }
-        }
-
-        // 缓存为空，刷新通道
-        self.refresh_channels().await?;
-
-        let channels = self.channels.lock().await;
-        if channels.is_empty() {
-            return Err(anyhow::anyhow!("没有可用的 {} 服务实例", self.service_name));
-        }
-
-        let index = rand::rng().random_range(0..channels.len());
-        Ok(channels[index].clone())
-    }
-
-    /// 启动一个后台任务定期刷新服务实例列表
-    pub fn start_refresh_task(client: Arc<Self>) {
-        let refresh_interval = std::env::var("SERVICE_REFRESH_INTERVAL")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(30); // 默认30秒刷新一次
-
-        let refresh_duration = Duration::from_secs(refresh_interval);
-
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(refresh_duration);
-
-            loop {
-                interval.tick().await;
-
-                if let Err(err) = client.refresh_channels().await {
-                    error!("刷新服务实例失败: {}", err);
-                }
-            }
-        });
-    }
+    Ok(LbWithServiceDiscovery(channel))
 }
 
-/// gRPC服务客户端工厂，用于创建各种服务的gRPC客户端
-#[derive(Clone)]
-pub struct GrpcClientFactory {
-    service_registry: ServiceRegistry,
+/// 注册微服务到服务注册中心
+///
+/// # 参数
+/// * `config` - 应用配置
+/// * `com` - 服务组件类型
+///
+/// # 返回
+/// 成功返回 Ok(()), 失败返回 Error
+pub async fn register_service(config: &AppConfig, com: Component) -> Result<String, Error> {
+    // 获取服务注册中心
+    let service_registry = service_register_center(config);
+
+    let (name, host, port, tags, health_check) = match com {
+        Component::MessageServer => {
+            let name = config.rpc.chat.name.clone();
+            let host = config.rpc.chat.host.clone();
+            let port = config.rpc.chat.port;
+            let tags = config.rpc.chat.tags.clone();
+            let health_check = config.rpc.chat.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
+        }
+        Component::MessageGateway => {
+            let name = config.rpc.ws.name.clone();
+            let host = config.rpc.ws.host.clone();
+            let port = config.rpc.ws.port;
+            let tags = config.rpc.ws.tags.clone();
+            let health_check = config.rpc.ws.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
+        }
+        Component::UserServer => {
+            let name = config.rpc.user.name.clone();
+            let host = config.rpc.user.host.clone();
+            let port = config.rpc.user.port;
+            let tags = config.rpc.user.tags.clone();
+            let health_check = config.rpc.user.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
+        }
+        Component::FriendServer => {
+            let name = config.rpc.friend.name.clone();
+            let host = config.rpc.friend.host.clone();
+            let port = config.rpc.friend.port;
+            let tags = config.rpc.friend.tags.clone();
+            let health_check = config.rpc.friend.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
+        }
+        Component::GroupServer => {
+            let name = config.rpc.group.name.clone();
+            let host = config.rpc.group.host.clone();
+            let port = config.rpc.group.port;
+            let tags = config.rpc.group.tags.clone();
+            let health_check = config.rpc.group.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
+        }
+        Component::All => {
+            // TODO 要完善
+            return Err(Error::Internal("不支持注册所有服务".to_string()));
+        }
+    };
+
+    // 构建服务注册信息
+    let registration = typos::Registration {
+        id: format!("{}-{}-{}", name, host, port),
+        name,
+        host,
+        port,
+        tags,
+        check: health_check,
+    };
+
+    // 注册服务
+    let service_id = service_registry.register(registration).await?;
+    Ok(service_id)
 }
 
-impl GrpcClientFactory {
-    /// 创建新的gRPC客户端工厂
-    pub fn new(service_registry: ServiceRegistry) -> Self {
-        Self { service_registry }
-    }
-
-    /// 从环境变量创建gRPC客户端工厂
-    pub fn from_env() -> Self {
-        let service_registry = ServiceRegistry::from_env();
-        Self::new(service_registry)
-    }
-
-    /// 创建指定服务的gRPC客户端
-    pub fn create_client(&self, service_name: &str) -> GrpcServiceClient {
-        GrpcServiceClient::with_defaults(self.service_registry.clone(), service_name)
-    }
-
-    /// 创建指定服务的gRPC客户端，带自定义配置
-    pub fn create_client_with_config(
-        &self,
-        service_name: &str,
-        connection_timeout: Duration,
-        request_timeout: Duration,
-        concurrency_limit: usize,
-    ) -> GrpcServiceClient {
-        GrpcServiceClient::new(
-            self.service_registry.clone(),
-            service_name,
-            connection_timeout,
-            request_timeout,
-            concurrency_limit,
-        )
-    }
+/// 获取RPC客户端
+///
+/// 使用泛型参数T，T必须实现ClientFactory特征
+///
+/// # 参数
+/// * `config` - 应用配置
+/// * `service_name` - 服务名称
+///
+/// # 返回
+/// 返回对应类型的RPC客户端
+pub async fn get_rpc_client<T: ClientFactory>(
+    config: &AppConfig,
+    service_name: String,
+) -> Result<T, Error> {
+    let channel = get_chan(config, service_name).await?;
+    Ok(T::n(channel))
 }

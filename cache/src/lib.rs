@@ -8,7 +8,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::message::GroupMemSeq;
+use common::proto::message::{GroupMemSeq, PlatformType};
+use serde::{Deserialize, Serialize};
 
 use common::config::AppConfig;
 use common::error::Error;
@@ -86,15 +87,112 @@ pub trait Cache: Sync + Send + Debug {
 
     /// 用户注册后删除注册验证码
     async fn del_register_code(&self, email: &str) -> Result<(), Error>;
+    
+    
+    /// 用户平台登录
+    /// 
+    /// 将用户在指定平台标记为在线状态
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_login(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
-    /// 用户登录
-    async fn user_login(&self, user_id: &str) -> Result<(), Error>;
+    /// 用户平台登出
+    /// 
+    /// 将用户在指定平台标记为离线状态
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_logout(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
-    /// 用户登出
-    async fn user_logout(&self, user_id: &str) -> Result<(), Error>;
+    /// 存储指定平台的访问令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `token` - 访问令牌
+    /// * `platform` - 平台类型
+    /// * `expiry_seconds` - 过期时间（秒）
+    async fn save_access_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error>;
 
-    /// 在线用户计数
-    async fn online_count(&self) -> Result<i64, Error>;
+    /// 存储指定平台的刷新令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `token` - 刷新令牌
+    /// * `platform` - 平台类型
+    /// * `expiry_seconds` - 过期时间（秒）
+    async fn save_refresh_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error>;
+
+    /// 获取指定平台的访问令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    /// 
+    /// # 返回值
+    /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
+    async fn get_access_token_for_platform(&self, user_id: &str, platform: i32) -> Result<Option<String>, Error>;
+
+    /// 获取指定平台的刷新令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    /// 
+    /// # 返回值
+    /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
+    async fn get_refresh_token_for_platform(&self, user_id: &str, platform: i32) -> Result<Option<String>, Error>;
+
+    /// 删除指定平台的访问令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn delete_access_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error>;
+
+    /// 删除指定平台的刷新令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn delete_refresh_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error>;
+
+    /// 批量获取用户完整在线状态信息
+    /// 
+    /// # 参数
+    /// * `user_ids` - 用户ID列表
+    /// 
+    /// # 返回值
+    /// * `Vec<UserOnlineStatus>` - 用户在线状态信息列表
+    async fn batch_get_users_online_status(&self, user_ids: &[String]) -> Result<Vec<UserOnlineStatus>, Error>;
+}
+
+/// 用户在线状态信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserOnlineStatus {
+    /// 用户ID
+    pub user_id: String,
+    /// 是否在线（全局状态）
+    pub is_online: bool,
+    /// 在线平台列表
+    pub online_platforms: Vec<String>,
+    /// 在线平台数量
+    pub platform_count: i64,
+}
+
+impl UserOnlineStatus {
+    /// 创建新的用户在线状态
+    pub fn new(user_id: String, is_online: bool, online_platforms: Vec<String>) -> Self {
+        let platform_count = online_platforms.len() as i64;
+        Self {
+            user_id,
+            is_online,
+            online_platforms,
+            platform_count,
+        }
+    }
 }
 
 /// 根据配置创建缓存实例
@@ -104,6 +202,6 @@ pub trait Cache: Sync + Send + Debug {
 ///
 /// # 返回
 /// * 实现了Cache特征的实例，被Arc包裹以便共享
-pub fn cache(config: &AppConfig) -> Arc<dyn Cache> {
-    Arc::new(redis::RedisCache::from_config(config))
+pub async fn cache(config: &AppConfig) -> Arc<dyn Cache> {
+    Arc::new(redis::RedisCache::from_config(config).await)
 }

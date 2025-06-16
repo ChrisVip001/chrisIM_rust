@@ -9,9 +9,9 @@ axum = { workspace = true }
 tonic = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
+http-body-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 bincode = { workspace = true }
 redis = { workspace = true }
 sqlx = { workspace = true }
@@ -21,24 +21,40 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 jsonwebtoken = { workspace = true }
-dotenv = { workspace = true }
 async-trait = { workspace = true }
-config = { workspace = true, features = ["yaml", "toml", "json"] }
 reqwest = { workspace = true, features = ["json"] }
 bcrypt = { workspace = true }
 aws-sdk-s3 = {workspace = true }
 rand = { workspace = true }
+argon2 = "0.5.3"
 # 配置监听
+config = { workspace = true, features = ["yaml", "toml", "json"] }
 notify = { version = "8.0.0", optional = true }
-mongodb = "2.8.2"
+mongodb = "3.2.3"
+# 添加rustls依赖
+rustls = "0.23.26"
+# 添加签名计算相关依赖
+hmac = "0.12.1"
+sha2 = "0.10.8"
+base64 = "0.21.5"
 
-# 链路追踪和日志 
+# 链路追踪和日志
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # 分布式链路追踪依赖，可选
 opentelemetry = { version = "0.20", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.13", features = ["http-proto", "tonic"] }
 tracing-opentelemetry = "0.20"
-tower = "0.4.13"
+tower = { workspace = true }
+# 正则表达式
+regex = "1.11.1"
+once_cell = "1.21.3"
+# Consul
+rs-consul = "0.11.0"  # 使用最新版本
+hostname = "0.4"  # 用于获取主机名
+http = "1.3.1"
+image = "0.23"
+imageproc = "0.22"
+rusttype = "0.9.3"
 
 [features]
 default = []
@@ -46,4 +62,4 @@ dynamic-config = ["notify"]
 telemetry = []
 
 [build-dependencies]
-tonic-build = "0.11.0"
+tonic-build = { workspace = true }

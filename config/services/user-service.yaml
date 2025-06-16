@@ -1,0 +1,45 @@
+# 用户服务特定配置
+component: UserServer
+
+# 服务器配置
+server:
+  host: 127.0.0.1
+  port: 50002  # 特定于用户服务的端口
+  ws_lb_strategy: RoundRobin
+
+# 数据库配置
+database:
+  postgres:
+    host: 127.0.0.1
+    port: 5432
+    user: user_service  # 特定于用户服务的数据库用户
+    password: user_pwd123
+    database: user_db
+  
+  # 服务特定Redis配置
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    seq_step: 10
+    max_connections: 100
+    pool_timeout_ms: 3000
+    connection_timeout_ms: 5000
+
+# 日志配置
+log:
+  level: "debug"  # 用户服务使用更详细的日志级别
+  output: "file"  # 将日志输出到文件
+  format: "json"
+  sqlx_level: "debug"
+  components:
+    tower: "info"
+    hyper: "info"
+    axum: "debug"
+    tonic: "debug"
+    rustIM: "debug"
+    redis: "debug"
+
+# 服务特定的JWT配置
+jwt:
+  secret: "user_service_specific_jwt_secret"
+  expiration: 86400  # 24小时 
