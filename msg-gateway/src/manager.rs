@@ -11,7 +11,7 @@ use cache::Cache;
 use common::error::Error;
 use common::proto::message::chat_service_client::ChatServiceClient;
 use common::proto::message::{
-    ContentType, GroupMemSeq, Msg, MsgResponse, MsgType, PlatformType, SendMsgRequest
+    ContentType, GroupMemSeq, Msg, MsgType, PlatformType, SendMsgRequest
 };
 use common::service_discovery::LbWithServiceDiscovery;
 

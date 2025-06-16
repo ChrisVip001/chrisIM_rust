@@ -447,7 +447,7 @@ impl ChatService for ChatRpcService {
         match self.fetch_messages(&req.user_id, &query_range).await {
             Ok(messages) => {
                 debug!("获取到 {} 条消息", messages.len());
-                let conversations = self.build_conversations(&req, messages, &query_range);
+                let conversations = self.build_conversations(&req, messages);
                 debug!("构建了 {} 个会话", conversations.len());
                 let total = conversations.len() as i32;
 
@@ -903,7 +903,7 @@ impl ChatRpcService {
     }
 
     /// 构建会话列表
-    fn build_conversations(&self, req: &GetConversationsRequest, messages: Vec<Msg>, range: &QueryRange) -> Vec<Conversation> {
+    fn build_conversations(&self, req: &GetConversationsRequest, messages: Vec<Msg>) -> Vec<Conversation> {
         if messages.is_empty() {
             return Vec::new();
         }
@@ -922,7 +922,7 @@ impl ChatRpcService {
                 // 按发送时间排序（最新的在后）
                 msgs.sort_by(|a, b| a.send_time.cmp(&b.send_time));
 
-                Some(self.create_conversation(conversation_id, msgs, range))
+                Some(self.create_conversation(conversation_id, msgs))
             })
             .collect();
 
@@ -961,7 +961,7 @@ impl ChatRpcService {
     }
 
     /// 创建会话对象
-    fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>, range: &QueryRange) -> Conversation {
+    fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>) -> Conversation {
         let conversation_type = if msgs[0].msg_type == MsgType::GroupMsg as i32 {
             "group"
         } else {
