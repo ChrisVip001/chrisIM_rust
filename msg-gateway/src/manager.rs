@@ -286,7 +286,7 @@ impl Manager {
                 if msg.send_id == msg.receiver_id {
                     msg.receiver_id.clone()
                 } else {
-                    msg.send_id.clone()
+                    msg.receiver_id.clone()
                 }
             },
             conversation_type: if msg.msg_type == MsgType::GroupMsg as i32 {
