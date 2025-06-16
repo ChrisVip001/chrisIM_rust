@@ -1461,7 +1461,10 @@
                 return;
             }
 
-            messagesContainer.innerHTML = messageList.map(msg => {
+            // 按时间升序排序，确保最新的消息在最后
+            const sortedMessages = [...messageList].sort((a, b) => a.send_time - b.send_time);
+
+            messagesContainer.innerHTML = sortedMessages.map(msg => {
                 const isSent = msg.send_id === currentUser.id;
                 const content = typeof msg.content === 'string' ? 
                     msg.content : 
