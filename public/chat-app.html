@@ -1087,7 +1087,32 @@
                 } else {
                     // JSON消息
                     const message = JSON.parse(event.data);
-                    handleIncomingMessage(message);
+                    if (message.conversations && Array.isArray(message.conversations)) {
+                        // 处理会话列表更新
+                        message.conversations.forEach(conversation => {
+                            // 更新会话列表
+                            const existingIndex = conversations.findIndex(c => c.conversation_id === conversation.conversation_id);
+                            if (existingIndex >= 0) {
+                                conversations[existingIndex] = conversation;
+                            } else {
+                                conversations.unshift(conversation);
+                            }
+                        });
+                        
+                        // 更新UI
+                        displayConversations();
+                        
+                        // 如果当前正在查看的会话有更新，则更新消息显示
+                        if (currentConversation && message.conversations.some(c => c.conversation_id === currentConversation.conversation_id)) {
+                            const updatedConversation = message.conversations.find(c => c.conversation_id === currentConversation.conversation_id);
+                            if (updatedConversation.recent_messages && updatedConversation.recent_messages.length > 0) {
+                                displayMessages(updatedConversation.recent_messages);
+                            }
+                        }
+                    } else {
+                        // 处理其他类型的消息
+                        handleIncomingMessage(message);
+                    }
                 }
             } catch (error) {
                 console.error('处理WebSocket消息失败:', error);

@@ -5,6 +5,7 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use base64::{Engine as _, engine::general_purpose};
+use axum::extract::ws::Message;
 
 pub(crate) use crate::client::Client;
 use cache::Cache;
@@ -140,7 +141,19 @@ impl Manager {
             
             // 设置is_self标识为true，因为这是发送给发送者自己的消息
             if let Some(obj) = json_msg.as_object_mut() {
-                obj.insert("is_self".to_string(), serde_json::Value::Bool(true));
+                if let Some(conversations) = obj.get_mut("conversations") {
+                    if let Some(conversation) = conversations.get_mut(0) {
+                        if let Some(conv_obj) = conversation.as_object_mut() {
+                            if let Some(messages) = conv_obj.get_mut("recent_messages") {
+                                if let Some(message) = messages.get_mut(0) {
+                                    if let Some(msg_obj) = message.as_object_mut() {
+                                        msg_obj.insert("is_self".to_string(), serde_json::Value::Bool(true));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // 序列化消息为JSON
@@ -210,7 +223,19 @@ impl Manager {
         
         // 设置is_self标识为false，因为这是发送给接收者的消息
         if let Some(obj) = json_msg.as_object_mut() {
-            obj.insert("is_self".to_string(), serde_json::Value::Bool(false));
+            if let Some(conversations) = obj.get_mut("conversations") {
+                if let Some(conversation) = conversations.get_mut(0) {
+                    if let Some(conv_obj) = conversation.as_object_mut() {
+                        if let Some(messages) = conv_obj.get_mut("recent_messages") {
+                            if let Some(message) = messages.get_mut(0) {
+                                if let Some(msg_obj) = message.as_object_mut() {
+                                    msg_obj.insert("is_self".to_string(), serde_json::Value::Bool(false));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         // 序列化为JSON
@@ -253,31 +278,37 @@ impl Manager {
     /// # 返回值
     /// 返回适合JSON序列化的消息对象
     fn prepare_message_for_json(&self, msg: &Msg) -> serde_json::Value {
-        let mut json_msg = serde_json::to_value(msg).unwrap_or_default();
-        
-        // 处理content字段
-        if let Some(content_value) = json_msg.get_mut("content") {
-            let content_str = match msg.msg_type {
-                // 文本消息类型，将字节数组转换为字符串
-                msg_type if msg_type == MsgType::SingleMsg as i32 
-                         || msg_type == MsgType::GroupMsg as i32 => {
-                    // 尝试将字节数组转换为UTF-8字符串
-                    match String::from_utf8(msg.content.clone()) {
-                        Ok(text) => text,
-                        Err(_) => {
-                            warn!("消息内容不是有效的UTF-8字符串，使用base64编码");
-                            general_purpose::STANDARD.encode(&msg.content)
-                        }
-                    }
+        // 创建一个Conversation对象
+        let conversation = common::proto::message::Conversation {
+            conversation_id: if msg.msg_type == MsgType::GroupMsg as i32 {
+                msg.group_id.clone()
+            } else {
+                if msg.send_id == msg.receiver_id {
+                    msg.receiver_id.clone()
+                } else {
+                    msg.send_id.clone()
                 }
-                // 其他消息类型，使用base64编码
-                _ => general_purpose::STANDARD.encode(&msg.content)
-            };
-            
-            *content_value = serde_json::Value::String(content_str);
-        }
-        
-        json_msg
+            },
+            conversation_type: if msg.msg_type == MsgType::GroupMsg as i32 {
+                "group".to_string()
+            } else {
+                "single".to_string()
+            },
+            recent_messages: vec![msg.clone()],
+            unread_count: if !msg.is_read && msg.receiver_id != msg.send_id { 1 } else { 0 },
+            last_active_time: msg.send_time,
+        };
+
+        // 创建GetConversationsResponse对象
+        let response = common::proto::message::GetConversationsResponse {
+            conversations: vec![conversation],
+            total: 1,
+            seq_max: msg.seq,
+            send_seq_max: msg.send_seq,
+        };
+
+        // 转换为JSON
+        serde_json::to_value(response).unwrap_or_default()
     }
 
     /// 注册客户端连接
