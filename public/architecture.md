@@ -1,8 +1,8 @@
-# RustIM 客户端架构设计文档（整合优化版）
+# RustIM 客户端架构设计文档
 
 ## 项目概述
 
-RustIM 是一套跨平台即时通讯客户端解决方案，支持：
+RustIM 是一套跨平台即时通讯客户端解决方案，堪为现代化架构设计中的典范，支持：
 
 - 📱 移动端：iOS / Android / 鸿蒙
 - 🖥️ 桌面端：Windows / macOS / Linux
@@ -52,7 +52,7 @@ rust-im/
 │   │   ├── storage/     # 本地存储：SQLite / IndexedDB
 │   │   ├── push/        # 推送 token 映射管理
 │   │   ├── sync/        # 多设备同步逻辑
-│   │   └── bus/         # 异步事件总线
+│   │   └── bus/         # 异步消息事件总线
 │   ├── migrations/      # sqlx schema migration
 │   └── Cargo.toml
 │
@@ -118,8 +118,9 @@ struct Message {
 - 游标拉取历史消息
 - 已读、撤回广播
 
-## 核心异步消息通道（推荐架构）
+## 核心异步消息通道
 
+- 使用 tokio::mpsc 构建异步消息总线
 ```rust
 pub enum AppEvent {
     MessageReceived(Message),
@@ -133,7 +134,8 @@ pub struct MessageBus {
 }
 ```
 
-- 所有 UI 层监听此通道获取事件（消息/网络/登录等）
+- 所有 UI 层监听此通道获取事件（消息/网络/登录等），不用关心底层实现
+- 支持队列缓存、节流、合并等，避免频繁触发 UI 更新
 - 消息解耦，便于多端适配
 
 ## 推送管理结构
@@ -187,4 +189,4 @@ im-core/
 - Markdown 渲染、引用、回复消息支持
 
 ---
-该文档为 RustIM 跨平台即时通讯项目的核心设计文档。
+该文档为 RustIM 跨平台即时通讯项目的核心设计文档，后期甚至可以用它开发 CLI 聊天工具、Bot 接口、桌面端插件等。
