@@ -68,15 +68,14 @@ enum MsgType {
   MsgTypeMsgRecResp = 24;     // 消息接收响应
   MsgTypeNotification = 25;   // 系统通知
   MsgTypeService = 26;        // 服务消息
-  MsgTypeFriendshipReceived = 27;  // 好友关系确认
+  MsgTypeHeartbeat = 27;      // 心跳消息
   /// 单聊消息
   MsgTypeSingleMsg = 28;
-  /// 撤回消息
+
   MsgTypeRevoke = 29;         // 撤回消息
-  /// 转发消息
   MsgTypeForward = 30;        // 转发消息
-  /// 回复消息
   MsgTypeReply = 31;          // 回复消息
+
 }
 
 /// 消息结构体

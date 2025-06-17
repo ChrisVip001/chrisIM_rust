@@ -15,6 +15,7 @@ use common::proto::message::{
     ContentType, GroupMemSeq, Msg, MsgType, PlatformType, SendMsgRequest
 };
 use common::service_discovery::LbWithServiceDiscovery;
+use common::types::msg::MsgType2;
 
 /// 用户ID类型别名
 type UserID = String;
@@ -137,7 +138,7 @@ impl Manager {
     async fn send_to_self(&self, id: &str, msg: &Msg) {
         if let Some(clients) = self.hub.get(id) {
             // 创建适合JSON序列化的消息副本
-            let mut json_msg = self.prepare_message_for_json(msg);
+            let mut json_msg = self.prepare_message_for_json(msg,  true);
             
             // 设置is_self标识为true，因为这是发送给发送者自己的消息
             if let Some(obj) = json_msg.as_object_mut() {
@@ -219,7 +220,7 @@ impl Manager {
         }
 
         // 创建适合JSON序列化的消息副本
-        let mut json_msg = self.prepare_message_for_json(msg);
+        let mut json_msg = self.prepare_message_for_json(msg,  false);
         
         // 设置is_self标识为false，因为这是发送给接收者的消息
         if let Some(obj) = json_msg.as_object_mut() {
@@ -277,23 +278,25 @@ impl Manager {
     /// 
     /// # 返回值
     /// 返回适合JSON序列化的消息对象
-    fn prepare_message_for_json(&self, msg: &Msg) -> serde_json::Value {
-        // 创建一个Conversation对象
-        let conversation = common::proto::message::Conversation {
-            conversation_id: if msg.msg_type == MsgType::GroupMsg as i32 {
-                msg.group_id.clone()
-            } else {
-                if msg.send_id == msg.receiver_id {
+    fn prepare_message_for_json(&self, msg: &Msg, is_self: bool) -> serde_json::Value {
+        let mt = MsgType::try_from(msg.msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
+        let mt2 = MsgType2::from(mt);
+        let conversation_id = match mt2 {
+            MsgType2::Friend | MsgType2::System => {
+                if is_self {
                     msg.receiver_id.clone()
                 } else {
-                    msg.receiver_id.clone()
+                    msg.send_id.clone()
                 }
             },
-            conversation_type: if msg.msg_type == MsgType::GroupMsg as i32 {
-                "group".to_string()
-            } else {
-                "single".to_string()
-            },
+            MsgType2::Group => {
+                msg.group_id.clone()
+            }
+        };
+        // 创建一个Conversation对象
+        let conversation = common::proto::message::Conversation {
+            conversation_id,
+            conversation_type: MsgType2::mt2_str(mt2),
             recent_messages: vec![msg.clone()],
             unread_count: if !msg.is_read && msg.receiver_id != msg.send_id { 1 } else { 0 },
             last_active_time: msg.send_time,

@@ -2,7 +2,7 @@ use tonic::Status;
 
 mod friend;
 mod group;
-mod msg;
+pub mod msg;
 mod user;
 
 pub trait Validator {
