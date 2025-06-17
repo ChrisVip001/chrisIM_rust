@@ -298,7 +298,7 @@ impl Manager {
             conversation_id,
             conversation_type: MsgType2::mt2_str(mt2),
             recent_messages: vec![msg.clone()],
-            unread_count: if !msg.is_read && msg.receiver_id != msg.send_id { 1 } else { 0 },
+            unread_count: if !msg.is_read && !is_self { 1 } else { 0 },
             last_active_time: msg.send_time,
         };
 

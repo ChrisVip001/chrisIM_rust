@@ -18,6 +18,7 @@ use common::proto::message::{MsgType, SendMsgRequest, Msg, MarkMessagesAsReadReq
 use msg_storage::{msg_rec_box_repo, message::MsgRecBoxRepo};
 use cache::Cache;
 use common::Error;
+use common::types::msg::MsgType2;
 
 /// 聊天消息RPC服务实现
 /// 
@@ -962,11 +963,8 @@ impl ChatRpcService {
 
     /// 创建会话对象
     fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>) -> Conversation {
-        let conversation_type = if msgs[0].msg_type == MsgType::GroupMsg as i32 {
-            "group"
-        } else {
-            "single"
-        }.to_string();
+        let mt = MsgType::try_from(msgs[0].msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
+        let mt2 = MsgType2::from(mt);
 
         // 计算未读消息数（只计算接收到的未读消息）
         let unread_count = msgs.iter()
@@ -977,7 +975,7 @@ impl ChatRpcService {
         
         Conversation {
             conversation_id,
-            conversation_type,
+            conversation_type: MsgType2::mt2_str(mt2),
             recent_messages: msgs,
             unread_count,
             last_active_time,
