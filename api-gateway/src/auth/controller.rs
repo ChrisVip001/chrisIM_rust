@@ -333,7 +333,7 @@ pub async fn refresh_token(
     let user_info = match jwt::verify_token(&refresh_req.refresh_token, jwt_config) {
         Ok(user_info) => user_info,
         Err(e) => {
-            return Ok(error_response(&format!("令牌验证失败: {:?}", e), StatusCode::INTERNAL_SERVER_ERROR))
+            return Ok(success_response(&format!("令牌验证失败: {:?}", e), StatusCode::UNAUTHORIZED))
         }
     };
 
@@ -344,14 +344,14 @@ pub async fn refresh_token(
     {
         Ok(Some(stored_token)) => {
             if stored_token != refresh_req.refresh_token {
-                return Ok(error_response(
+                return Ok(success_response(
                     "令牌已过期或已注销，请重新登录",
                     StatusCode::UNAUTHORIZED,
                 ));
             }
         }
         Ok(None) => {
-            return Ok(error_response(
+            return Ok(success_response(
                 "令牌已过期或已注销，请重新登录",
                 StatusCode::UNAUTHORIZED,
             ));
