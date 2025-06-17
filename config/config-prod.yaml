@@ -402,7 +402,6 @@ sms:
     secret_id: AKIDBXjhiYBboqtmTzLYaVHuStDcvJdrv0uf    # 替换为您的腾讯云SecretId
     secret_key: fBYv79yaClDVaR7f3GLH3c2FH6h9QZXH       # 替换为您的腾讯云SecretKey
     app_id: 1400971247                                 # 替换为您的腾讯云短信应用ID
-#    sign_name: 蚂蚁密信App                             # 替换为您的短信签名名称
     sign_name: 杭州聪熙商贸有限公司                      # 替换为您的短信签名名称
     template_id: 2381850                               # 替换为您的验证码短信模板ID
     expire_seconds: 300                                # 验证码有效期（秒）
