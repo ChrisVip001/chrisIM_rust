@@ -29,10 +29,9 @@ impl MsgStoreRepo for PostgresMessage {
             "INSERT INTO messages
              (local_id, server_id, send_id, receiver_id, msg_type, content_type, content, 
               send_time, platform, is_revoked, revoke_time, revoked_by, related_msg_id,
-              forward_comment, is_forwarded, is_reply, create_time, seq, send_seq, is_read,
-              group_id, avatar, nickname)
+              create_time, seq, send_seq, is_read, group_id, avatar, nickname)
              VALUES
-             ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+             ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
              ON CONFLICT (send_id, server_id, send_time) DO UPDATE SET
              is_revoked = EXCLUDED.is_revoked,
              revoke_time = EXCLUDED.revoke_time,
@@ -56,9 +55,6 @@ impl MsgStoreRepo for PostgresMessage {
         .bind(message.revoke_time)
         .bind(&message.revoked_by)
         .bind(message.related_msg_id.as_deref())
-        .bind(message.forward_comment.as_deref())
-        .bind(message.is_forwarded)
-        .bind(message.is_reply)
         .bind(message.create_time)
         .bind(message.seq)
         .bind(message.send_seq)
@@ -130,9 +126,6 @@ impl MsgStoreRepo for PostgresMessage {
                     revoke_time: row.get("revoke_time"),
                     revoked_by: row.get("revoked_by"),
                     related_msg_id: row.get("related_msg_id"),
-                    forward_comment: row.get("forward_comment"),
-                    is_forwarded: row.get("is_forwarded"),
-                    is_reply: row.get("is_reply"),
                     create_time: row.get("create_time"),
                     seq: row.get("seq"),
                     send_seq: row.get("send_seq"),

@@ -25,10 +25,7 @@ pub(crate) fn to_doc(msg: &Msg) -> Result<Document, Error> {
         "related_msg_id": msg.related_msg_id.as_deref().unwrap_or(""),
         "is_revoked": msg.is_revoked,
         "revoke_time": msg.revoke_time,
-        "revoked_by": &msg.revoked_by,
-        "forward_comment": msg.forward_comment.as_deref().unwrap_or(""),
-        "is_forwarded": msg.is_forwarded,
-        "is_reply": msg.is_reply,
+        "revoked_by": &msg.revoked_by
     };
 
     Ok(document)

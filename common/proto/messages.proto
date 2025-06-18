@@ -111,7 +111,7 @@ message Msg {
   string avatar = 17;      // 发送者头像URL
   string nickname = 18;    // 发送者昵称
 
-  // 关联消息ID（用于回复、引用、转发等功能）
+  // 关联消息ID（用于回复、引用等功能）
   optional string related_msg_id = 19;
 
   /// 发送序列号，用于发送者的消息排序
@@ -121,11 +121,7 @@ message Msg {
   bool is_revoked = 21;        // 是否已撤回
   int64 revoke_time = 22;      // 撤回时间戳
   string revoked_by = 23;      // 撤回者ID（通常是发送者，群聊中可能是管理员）
-  
-  /// 转发相关字段
-  optional string forward_comment = 25;      // 转发时的附加评论
-  bool is_forwarded = 26;                    // 是否为转发消息
-  bool is_reply = 27;                        // 是否为回复消息
+
 }
 
 /// 消息已读信息
@@ -283,8 +279,6 @@ service ChatService {
   /// 转发消息
   rpc ForwardMessage(ForwardMessageRequest) returns (ForwardMessageResponse);
   
-  /// 回复消息
-  rpc ReplyMessage(ReplyMessageRequest) returns (ReplyMessageResponse);
 }
 
 /// 消息内容（包含@提及功能）
@@ -432,19 +426,3 @@ message ForwardMessageResponse {
   string error = 4;                      // 错误信息（如果有）
 }
 
-/// 回复消息请求
-message ReplyMessageRequest {
-  string user_id = 1;              // 回复者用户ID
-  string original_message_id = 2;  // 要回复的原始消息ID
-  string reply_content = 3;        // 回复内容
-  ContentType content_type = 4;    // 回复内容类型
-  optional string conversation_id = 5; // 会话ID（单聊时是对方用户ID，群聊时是群组ID）
-}
-
-/// 回复消息响应
-message ReplyMessageResponse {
-  bool success = 1;           // 是否成功
-  string reply_message_id = 2; // 回复消息的ID
-  int64 send_time = 3;        // 发送时间
-  string error = 4;           // 错误信息（如果有）
-}

@@ -46,13 +46,6 @@ impl TryFrom<Document> for Msg {
             is_revoked: value.get_bool("is_revoked").unwrap_or_default(),
             revoke_time: value.get_i64("revoke_time").unwrap_or_default(),
             revoked_by: value.get_str("revoked_by").unwrap_or_default().to_string(),
-            forward_comment: value
-                .get_str("forward_comment")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(String::from),
-            is_forwarded: value.get_bool("is_forwarded").unwrap_or_default(),
-            is_reply: value.get_bool("is_reply").unwrap_or_default(),
         })
     }
 }

@@ -632,10 +632,7 @@ mod tests {
             related_msg_id: None,
             is_revoked: false,
             revoke_time: 0,
-            revoked_by: String::new(),
-            forward_comment: None,
-            is_forwarded: false,
-            is_reply: false,
+            revoked_by: String::new()
         }
     }
     #[tokio::test]
