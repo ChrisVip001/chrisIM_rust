@@ -152,18 +152,6 @@ impl GroupServiceGrpcClient {
         Ok(response.into_inner())
     }
 
-    /// 获取群组成员列表
-    pub async fn get_members(&mut self, group_id: &str) -> Result<GetMembersResponse> {
-        let request = Request::new(GetMembersRequest {
-            group_id: group_id.to_string(),
-            page: 1,
-            page_size: 20,
-        });
-
-        let response = self.service_client.get_members(request).await?;
-        Ok(response.into_inner())
-    }
-
     /// 获取群组成员列表（带分页）
     pub async fn get_members_with_params(
         &mut self,
