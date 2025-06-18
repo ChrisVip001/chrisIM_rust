@@ -1529,26 +1529,23 @@
             const localId = 'local_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             const isGroup = currentConversation.conversation_type === 'group';
             
+            // 使用新的参数结构
             const messageData = {
-                content: content,
-                contentType: 'Text',
-                localId: localId,
-                platform: 'Desktop'
+                receiverId: currentConversation.conversation_id, // 接收者id（用户/群id）
+                content: content, // 消息内容
+                contentType: 'Text', // 消息内容类型 文字：Text， 图片：Image， 表情：Emoji
+                msgType: isGroup ? 1 : 28, // 消息类型 单聊：28，群聊：1
+                localId: localId // 客户端消息id
+                // relatedMsgId: "server_msg_001" // 引用、回复的消息id（非必填）
             };
-
-            if (isGroup) {
-                messageData.groupId = currentConversation.conversation_id;
-            } else {
-                messageData.receiverId = currentConversation.conversation_id;
-            }
 
             // 清空输入框
             messageInput.value = '';
             sendBtn.disabled = true;
 
             try {
-                const endpoint = isGroup ? '/api/chat/sendGroup' : '/api/chat/send';
-                const response = await fetch(`http://${config.apiHost}:${config.apiPort}${endpoint}`, {
+                // 统一使用send接口，不再区分单聊和群聊
+                const response = await fetch(`http://${config.apiHost}:${config.apiPort}/api/chat/send`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
