@@ -801,13 +801,27 @@ impl UserService for UserServiceImpl {
 
 
         // 转换请求数据
-        let save_data = UserConfigData::from(req.clone());
+        let mut save_data = UserConfigData::from(req.clone());
 
         // 获取旧的配置，用于比较变更
         let old_config = match self.user_config_repository.get_user_config(&req.user_id).await {
             Ok(config) => Some(config),
             Err(_) => None,
         };
+
+        // 合并新旧配置，保存时只保存有变更的配置
+        if let Some(old_config) = old_config {
+            // 对于每个可选字段，如果新数据中的是None，则从旧配置中获取
+            save_data.allow_phone_search = save_data.allow_phone_search.or(old_config.allow_phone_search);
+            save_data.allow_id_search = save_data.allow_id_search.or(old_config.allow_id_search);
+            save_data.auto_load_video = save_data.auto_load_video.or(old_config.auto_load_video);
+            save_data.auto_load_pic = save_data.auto_load_pic.or(old_config.auto_load_pic);
+            save_data.msg_read_flag = save_data.msg_read_flag.or(old_config.msg_read_flag);
+            save_data.sound_enabled = save_data.sound_enabled.or(old_config.sound_enabled);
+            save_data.vibration_enabled = save_data.vibration_enabled.or(old_config.vibration_enabled);
+            save_data.show_phone = save_data.show_phone.or(old_config.show_phone);
+        }
+
 
         // 保存用户配置
         let user_config = match self.user_config_repository.save_user_config(&save_data).await {
