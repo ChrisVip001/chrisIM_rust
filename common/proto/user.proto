@@ -75,6 +75,7 @@ message CreateUserRequest {
 // 按ID获取用户请求
 message GetUserByIdRequest {
   string user_id = 1;
+  string current_user_id = 2;
 }
 
 // 按ID获取用户请求

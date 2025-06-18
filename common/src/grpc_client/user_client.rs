@@ -18,10 +18,11 @@ impl UserServiceGrpcClient {
     }
 
     /// 获取用户
-    pub async fn get_user(&mut self, user_id: &str) -> Result<UserResponse> {
+    pub async fn get_user(&mut self, current_user_id: String,user_id: &str) -> Result<UserResponse> {
 
         let request = Request::new(GetUserByIdRequest {
             user_id: user_id.to_string(),
+            current_user_id: current_user_id,
         });
 
         let response = self.service_client.get_user_by_id(request).await?;

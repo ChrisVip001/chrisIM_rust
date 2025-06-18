@@ -78,7 +78,7 @@ impl UserServiceImpl {
         
         // 根据show_phone配置决定是否显示手机号
         if let Some(show_phone) = user_config.show_phone {
-            if show_phone == 1 { // 1表示不显示手机号
+            if show_phone == 2 { // 2表示不显示手机号
                 // 将手机号处理为脱敏状态
                 if !user.phone.is_empty() {
                     // 保留前三位和后四位，中间用星号代替
@@ -476,9 +476,11 @@ impl UserService for UserServiceImpl {
             }
         };
 
+        let mut processed_user = user.clone();
         // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
-
+        if &req.current_user_id != &user.id {
+            processed_user = self.process_user_phone_display(user).await?;
+        }
         // 返回响应
         Ok(Response::new(UserResponse {
             user: Some(ProtoUser::from(processed_user)),
@@ -502,8 +504,11 @@ impl UserService for UserServiceImpl {
             }
         };
 
+        let mut processed_user = user.clone();
         // 处理用户信息时根据用户配置决定是否显示手机号
-        let processed_user = self.process_user_phone_display(user).await?;
+        if &req.current_user_id != &user.id {
+            processed_user = self.process_user_phone_display(user).await?;
+        }
 
         // 检查在线状态
         let is_online = self.check_user_online_status(&req.user_id).await.unwrap_or(false);

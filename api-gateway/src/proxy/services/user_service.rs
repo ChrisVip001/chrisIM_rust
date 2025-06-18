@@ -41,8 +41,9 @@ impl UserServiceHandler {
             // 用户查询
             (&Method::GET, "getUserById") | (&Method::GET, "getUser") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
 
-                let response = self.client.get_user(&user_id).await?;
+                let response = self.client.get_user(current_user_id,&user_id).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
                 Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
@@ -476,7 +477,7 @@ impl UserServiceHandler {
             (&Method::GET, "getUserInfo") => {
                 // 从JWT中获取用户ID
                 let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
-                let response = self.client.get_user(&current_user_id).await?;
+                let response = self.client.get_user(current_user_id.clone(),&current_user_id).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
                 Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
