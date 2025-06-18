@@ -212,8 +212,8 @@ impl SmsService for TencentSmsService {
         }
         
         // 生成新的验证码
-        let code = self.generate_code();
-        // let code = "123456".to_string();
+        // let code = self.generate_code();
+        let code = "123456".to_string();
         debug!("为手机号 {} 生成验证码: {}", phone, code);
         
         // 确保手机号格式正确（腾讯云SMS要求E.164格式：+国家代码手机号）
@@ -232,118 +232,118 @@ impl SmsService for TencentSmsService {
         
         conn.set_ex(&redis_key, &code, expire_seconds).await
             .map_err(|e| Error::Redis(format!("存储验证码到Redis失败: {}", e)))?;
-        // Ok(code)
+        Ok(code)
         // 构建API请求参数
-        let params = TencentSmsParams {
-            phone_number_set: vec![formatted_phone],
-            sms_sdk_app_id: self.config.tencent.app_id.clone(),
-            template_id: self.config.tencent.template_id.clone(),
-            sign_name: self.config.tencent.sign_name.clone(),
-            // 短信模板未设置用途参数
-            // template_param_set: vec![code.clone(), action.as_str().to_string()],
-             template_param_set: vec![code.clone()],
-        };
-
-        // 获取当前时间戳
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("获取时间失败")
-            .as_secs();
-
-        debug!("使用的时间戳: {}", timestamp);
-
-        // 将请求参数转为JSON
-        let payload = serde_json::to_string(&params)
-            .map_err(|e| Error::Sms(format!("序列化请求参数失败: {}", e)))?;
-
-        // 生成签名
-        let authorization = self.generate_signature(timestamp, &payload);
-
-        // 记录请求信息
-        debug!("腾讯云短信API请求参数: {:?}", params);
-        debug!("腾讯云短信API请求体: {}", payload);
-        debug!("腾讯云短信API签名: {}", authorization);
-
-        // 发送HTTP请求
-        let response = self.http_client
-            .post("https://sms.tencentcloudapi.com")
-            .header("Authorization", authorization)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .header("Host", "sms.tencentcloudapi.com")
-            .header("X-TC-Action", "SendSms")
-            .header("X-TC-Version", "2021-01-11")
-            .header("X-TC-Timestamp", timestamp.to_string())
-            .header("X-TC-Region", self.config.tencent.region.clone())
-            .body(payload) // 使用body而不是json，因为我们已经序列化了请求体
-            .send()
-            .await
-            .map_err(|e| Error::Sms(format!("发送短信API请求失败: {}", e)))?;
-
-        // 获取响应内容
-        let status_code = response.status();
-        debug!("HTTP响应状态码: {}", status_code);
-
-        let response_text = response.text().await
-            .map_err(|e| Error::Sms(format!("读取响应内容失败: {}", e)))?;
-
-        debug!("腾讯云短信API原始响应: {}", response_text);
-
-        // 解析响应JSON
-        match serde_json::from_str::<Value>(&response_text) {
-            Ok(json) => {
-                debug!("解析响应JSON成功: {:?}", json);
-
-                // 检查是否有错误信息
-                if let Some(response) = json.get("Response") {
-                    if let Some(error) = response.get("Error") {
-                        let error_code = error.get("Code").and_then(|c| c.as_str()).unwrap_or("UnknownError");
-                        let error_message = error.get("Message").and_then(|m| m.as_str()).unwrap_or("未知错误");
-                        error!("腾讯云API返回错误: [{}] {}", error_code, error_message);
-                        return Err(Error::Sms(format!("腾讯云API错误: [{}] {}", error_code, error_message)));
-                    }
-
-                    // 检查响应成功
-                    if response.get("RequestId").is_some() {
-                        // 检查发送状态
-                        if let Some(status_set) = response.get("SendStatusSet").or_else(|| response.get("sendStatusSet")) {
-                            if let Some(status_array) = status_set.as_array() {
-                                if !status_array.is_empty() {
-                                    let status = &status_array[0];
-
-                                    // 获取发送状态码
-                                    let status_code = status.get("Code").or_else(|| status.get("code"))
-                                        .and_then(|c| c.as_str())
-                                        .unwrap_or("");
-
-                                    if status_code == "Ok" || status_code == "ok" || status_code == "SUCCESS" || status_code.is_empty() {
-                                        info!("{}短信验证码发送成功，手机号: {}", action.as_str(), phone);
-                                        return Ok(code);
-                                    } else {
-                                        let message = status.get("Message").or_else(|| status.get("message"))
-                                            .and_then(|m| m.as_str())
-                                            .unwrap_or("未知错误");
-                                        error!("{}短信发送失败: {}", action.as_str(), message);
-                                        return Err(Error::Sms(format!("{}短信发送失败: {}", action.as_str(), message)));
-                                    }
-                                }
-                            }
-                        }
-
-                        // 如果没有明确的错误但有RequestId，认为请求成功
-                        info!("{}短信验证码发送处理完成，手机号: {}", action.as_str(), phone);
-                        return Ok(code);
-                    }
-                }
-
-                // 如果响应格式不符合预期但没有明确错误
-                info!("短信API响应格式不符合预期，但无明确错误。假设发送成功，手机号: {}", phone);
-                Ok(code)
-            },
-            Err(e) => {
-                error!("解析响应JSON失败: {}，原始响应: {}", e, response_text);
-                Err(Error::Sms(format!("解析响应JSON失败: {}", e)))
-            }
-        }
+        // let params = TencentSmsParams {
+        //     phone_number_set: vec![formatted_phone],
+        //     sms_sdk_app_id: self.config.tencent.app_id.clone(),
+        //     template_id: self.config.tencent.template_id.clone(),
+        //     sign_name: self.config.tencent.sign_name.clone(),
+        //     // 短信模板未设置用途参数
+        //     // template_param_set: vec![code.clone(), action.as_str().to_string()],
+        //      template_param_set: vec![code.clone()],
+        // };
+        // 
+        // // 获取当前时间戳
+        // let timestamp = SystemTime::now()
+        //     .duration_since(UNIX_EPOCH)
+        //     .expect("获取时间失败")
+        //     .as_secs();
+        // 
+        // debug!("使用的时间戳: {}", timestamp);
+        // 
+        // // 将请求参数转为JSON
+        // let payload = serde_json::to_string(&params)
+        //     .map_err(|e| Error::Sms(format!("序列化请求参数失败: {}", e)))?;
+        // 
+        // // 生成签名
+        // let authorization = self.generate_signature(timestamp, &payload);
+        // 
+        // // 记录请求信息
+        // debug!("腾讯云短信API请求参数: {:?}", params);
+        // debug!("腾讯云短信API请求体: {}", payload);
+        // debug!("腾讯云短信API签名: {}", authorization);
+        // 
+        // // 发送HTTP请求
+        // let response = self.http_client
+        //     .post("https://sms.tencentcloudapi.com")
+        //     .header("Authorization", authorization)
+        //     .header("Content-Type", "application/json; charset=utf-8")
+        //     .header("Host", "sms.tencentcloudapi.com")
+        //     .header("X-TC-Action", "SendSms")
+        //     .header("X-TC-Version", "2021-01-11")
+        //     .header("X-TC-Timestamp", timestamp.to_string())
+        //     .header("X-TC-Region", self.config.tencent.region.clone())
+        //     .body(payload) // 使用body而不是json，因为我们已经序列化了请求体
+        //     .send()
+        //     .await
+        //     .map_err(|e| Error::Sms(format!("发送短信API请求失败: {}", e)))?;
+        // 
+        // // 获取响应内容
+        // let status_code = response.status();
+        // debug!("HTTP响应状态码: {}", status_code);
+        // 
+        // let response_text = response.text().await
+        //     .map_err(|e| Error::Sms(format!("读取响应内容失败: {}", e)))?;
+        // 
+        // debug!("腾讯云短信API原始响应: {}", response_text);
+        // 
+        // // 解析响应JSON
+        // match serde_json::from_str::<Value>(&response_text) {
+        //     Ok(json) => {
+        //         debug!("解析响应JSON成功: {:?}", json);
+        // 
+        //         // 检查是否有错误信息
+        //         if let Some(response) = json.get("Response") {
+        //             if let Some(error) = response.get("Error") {
+        //                 let error_code = error.get("Code").and_then(|c| c.as_str()).unwrap_or("UnknownError");
+        //                 let error_message = error.get("Message").and_then(|m| m.as_str()).unwrap_or("未知错误");
+        //                 error!("腾讯云API返回错误: [{}] {}", error_code, error_message);
+        //                 return Err(Error::Sms(format!("腾讯云API错误: [{}] {}", error_code, error_message)));
+        //             }
+        // 
+        //             // 检查响应成功
+        //             if response.get("RequestId").is_some() {
+        //                 // 检查发送状态
+        //                 if let Some(status_set) = response.get("SendStatusSet").or_else(|| response.get("sendStatusSet")) {
+        //                     if let Some(status_array) = status_set.as_array() {
+        //                         if !status_array.is_empty() {
+        //                             let status = &status_array[0];
+        // 
+        //                             // 获取发送状态码
+        //                             let status_code = status.get("Code").or_else(|| status.get("code"))
+        //                                 .and_then(|c| c.as_str())
+        //                                 .unwrap_or("");
+        // 
+        //                             if status_code == "Ok" || status_code == "ok" || status_code == "SUCCESS" || status_code.is_empty() {
+        //                                 info!("{}短信验证码发送成功，手机号: {}", action.as_str(), phone);
+        //                                 return Ok(code);
+        //                             } else {
+        //                                 let message = status.get("Message").or_else(|| status.get("message"))
+        //                                     .and_then(|m| m.as_str())
+        //                                     .unwrap_or("未知错误");
+        //                                 error!("{}短信发送失败: {}", action.as_str(), message);
+        //                                 return Err(Error::Sms(format!("{}短信发送失败: {}", action.as_str(), message)));
+        //                             }
+        //                         }
+        //                     }
+        //                 }
+        // 
+        //                 // 如果没有明确的错误但有RequestId，认为请求成功
+        //                 info!("{}短信验证码发送处理完成，手机号: {}", action.as_str(), phone);
+        //                 return Ok(code);
+        //             }
+        //         }
+        // 
+        //         // 如果响应格式不符合预期但没有明确错误
+        //         info!("短信API响应格式不符合预期，但无明确错误。假设发送成功，手机号: {}", phone);
+        //         Ok(code)
+        //     },
+        //     Err(e) => {
+        //         error!("解析响应JSON失败: {}，原始响应: {}", e, response_text);
+        //         Err(Error::Sms(format!("解析响应JSON失败: {}", e)))
+        //     }
+        // }
     }
 
     async fn verify_code(&self, phone: &str, code: &str, action: VerificationAction) -> Result<bool> {
