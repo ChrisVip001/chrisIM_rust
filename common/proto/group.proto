@@ -221,6 +221,7 @@ message Member {
   google.protobuf.Timestamp joined_at = 8;      // 加入时间 (TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)
   bool is_muted = 9;                            // 是否被禁言
   optional MuteEntry mute_info = 10;            // 禁言详细信息（如果被禁言）
+  string remark = 11;                           // 群内昵称
 }
 
 message GetMemberReq {

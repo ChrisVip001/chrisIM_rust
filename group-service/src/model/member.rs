@@ -52,6 +52,7 @@ impl Member {
             joined_at: Some(prost_types::Timestamp::from(joined_system_time)),
             is_muted: false,
             mute_info: None,
+            remark: "".to_string(),
         }
     }
 }

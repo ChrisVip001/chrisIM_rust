@@ -3,7 +3,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 use std::collections::HashMap;
-
+use crate::model::group_mute::GroupMuteEntry;
 use crate::model::member_settings::MemberSettings;
 
 pub struct MemberSettingsRepository {
@@ -220,5 +220,38 @@ impl MemberSettingsRepository {
                 self.create_member_settings(default_settings).await
             }
         }
+    }
+
+    // 获取群组中所有成员的设置
+    pub async fn get_active_mutes_by_group_id(&self, group_id: String) -> Result<std::collections::HashMap<String, MemberSettings>> {
+
+        let rows = sqlx::query!(
+            r#"
+            SELECT group_id, user_id, mute_notifications, nickname_in_group, updated_at,created_at, remark, is_top, recall_notification, show_nickname
+            FROM group_member_settings
+            WHERE group_id = $1
+            "#,
+            group_id
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut settings_map = std::collections::HashMap::new();
+        for row in rows {
+            let settings = MemberSettings {
+                id: Uuid::new_v4().to_string(),
+                group_id: row.group_id,
+                user_id: row.user_id.clone(),
+                remark: row.remark.unwrap_or_default(),
+                is_top: row.is_top != 0,
+                recall_notification: row.recall_notification != 0,
+                show_nickname: row.show_nickname != 0,
+                mute_notifications: row.mute_notifications != 0,
+                nickname_in_group: row.nickname_in_group.unwrap_or_default(),
+                created_at: Utc.from_utc_datetime(&row.created_at),
+                updated_at: Utc.from_utc_datetime(&row.updated_at),
+            };
+            settings_map.insert(row.user_id, settings);
+        }
+        Ok(settings_map)
     }
 } 

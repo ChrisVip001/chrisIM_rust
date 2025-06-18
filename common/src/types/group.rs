@@ -94,6 +94,7 @@ impl FromRow<'_, PgRow> for Member {
             }),
             is_muted: false,
             mute_info: None,
+            remark: "".to_string(),
         })
     }
 }

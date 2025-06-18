@@ -567,6 +567,12 @@ impl GroupService for GroupServiceImpl {
                     error!("批量获取群组禁言状态失败: {}", e);
                     std::collections::HashMap::new() // 出错时使用空映射继续处理
                 });
+
+                // 批量获取群组中所有成员设置
+                let member_setting_map = self.member_settings_repository.get_active_mutes_by_group_id(group_id.clone()).await.unwrap_or_else(|e| {
+                    error!("批量获取群组禁言状态失败: {}", e);
+                    std::collections::HashMap::new() // 出错时使用空映射继续处理
+                });
                 
                 for member in members {
                     // 先创建基本的成员对象
@@ -577,6 +583,12 @@ impl GroupService for GroupServiceImpl {
                         // 设置禁言状态和详细信息
                         proto_member.is_muted = true;
                         proto_member.mute_info = Some(mute_entry.to_proto());
+                    }
+                    
+                    // 检查该成员是否在成员设置映射中
+                    if let Some(member_setting) = member_setting_map.get(&member.user_id) {
+                        // 设置成员群内昵称
+                        proto_member.remark = member_setting.nickname_in_group.clone();
                     }
                     
                     proto_members.push(proto_member);
