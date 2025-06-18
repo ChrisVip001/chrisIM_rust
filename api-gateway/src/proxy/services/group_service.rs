@@ -606,6 +606,7 @@ impl GroupServiceHandler {
             "isMuted":member.is_muted,
             "roleText": role_text,
             "joinedAt": timestamp_to_datetime_string(&member.joined_at),
+            "remark": member.remark,
         })
     }
 
