@@ -1,24 +1,26 @@
-use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
 use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse, GetFriendInGroupsRequest, GetFriendInGroupsResponse, GetPendingFriendRequestCountRequest, GetPendingFriendRequestCountResponse};
 use anyhow;
+use chrono::Utc;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 use common::config::ConfigLoader;
 use common::grpc_client::base::get_rpc_client;
-use common::grpc_client::UserServiceGrpcClient;
+use common::proto::message::chat_service_client::ChatServiceClient;
+use common::proto::message::SendMsgRequest;
 use common::proto::user::user_service_client::UserServiceClient;
-use common::proto::user::{UserConfigRequest, UserConfigResponse, UserConfig};
+use common::proto::user::{UserConfigResponse, UserConfig};
 use common::service_discovery::LbWithServiceDiscovery;
-use common::service_register_center::service_register_center;
 use crate::repository::friendship_repository::FriendshipRepository;
-use crate::model::friendship::{PotentialFriend, DetailedFriend};
-use crate::model::user_blacklist::UserBlacklist;
+use crate::model::friendship::PotentialFriend;
+use common::proto::message::{Msg, MsgType, ContentType, PlatformType};
+use uuid::Uuid;
 
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
     user_service_client: UserServiceClient<LbWithServiceDiscovery>,
+    chat_service_client: ChatServiceClient<LbWithServiceDiscovery>
 }
 
 impl FriendServiceImpl {
@@ -26,10 +28,12 @@ impl FriendServiceImpl {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
 
         let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
+        let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&*config, "chat".to_string()).await?;
 
         Ok(Self {
             repository: FriendshipRepository::new(pool),
             user_service_client,
+            chat_service_client
         })
     }
 
@@ -118,6 +122,67 @@ impl FriendServiceImpl {
             Err(e) => {
                 error!("设置好友置顶状态失败: {}", e);
                 Err(Status::internal("设置置顶状态失败"))
+            }
+        }
+    }
+
+    // 发送好友同意消息
+    async fn send_friendship_message(&self, friendship: crate::model::friendship::Friendship, friend_id: &str) {
+        // 创建好友申请响应消息
+        let friendship_msg = Msg {
+            send_id: friendship.user_id.clone(),
+            receiver_id: friend_id.to_string(),
+            msg_type: MsgType::FriendApplyResp as i32,
+            content_type: ContentType::Text as i32,
+            // 将Friendship对象序列化为二进制内容
+            content: friendship.message.as_bytes().to_vec(),
+            platform: PlatformType::Web as i32,
+            ..Default::default()
+        };
+
+        // 创建SendMsgRequest
+        let request = SendMsgRequest {
+            message: Some(friendship_msg),
+        };
+
+        // 调用chat服务发送消息
+        let mut chat_client = self.chat_service_client.clone();
+        match chat_client.send_msg(request).await {
+            Ok(response) => {
+                info!("好友申请响应消息发送成功: {:?}", response.into_inner());
+            }
+            Err(e) => {
+                error!("发送好友申请响应消息失败: {:?}", e);
+            }
+        }
+    }
+
+    // 发送好友申请提示消息
+    async fn send_friendship_flag(&self, from_user_id: &str, to_user_id: &str, message: &str) {
+        // 创建好友申请请求消息
+        let friendship_msg = Msg {
+            send_id: from_user_id.to_string(),
+            receiver_id: to_user_id.to_string(),
+            msg_type: MsgType::FriendApplyReq as i32,
+            content_type: ContentType::Text as i32,
+            content: message.as_bytes().to_vec(),
+            platform: PlatformType::Web as i32,
+            ..Default::default()
+        };
+
+        // 创建SendMsgRequest
+        let request = SendMsgRequest {
+            message: Some(friendship_msg),
+        };
+
+        // 调用chat服务发送消息
+        let mut chat_client = self.chat_service_client.clone();
+        match chat_client.send_msg(request).await {
+            Ok(response) => {
+                info!("好友申请提示消息发送成功: {:?}", response.into_inner());
+            }
+            Err(e) => {
+                error!("发送好友申请提示消息失败: {:?}", e);
             }
         }
     }
@@ -219,7 +284,7 @@ impl FriendService for FriendServiceImpl {
             }
         }
 
-        /**
+        /*
          * 好友请求处理逻辑流程：
          * 1. 检查是否存在历史好友请求记录
          * 2. 如果存在记录，根据请求方向和状态进行处理：
@@ -227,7 +292,6 @@ impl FriendService for FriendServiceImpl {
          *      * 已接受(1)：返回错误(已是好友) 改为 清理历史记录，允许创建新请求 (是否是好友关系在上面已经判断。这里如果再判断会出现已经是好友删除后添加会不让添加的情况)
          *      * 待处理(0)：返回错误(需先处理对方请求)
          *      * 已拒绝(2)/已过期(4)：清理历史记录，允许创建新请求
-         *      *
          *    - 自己发出的请求(user_id == user_id)：
          *      * 已接受(1)：返回错误(已是好友)  改为 清理历史记录，允许创建新请求 (是否是好友关系在上面已经判断。这里如果再判断会出现已经是好友删除后添加会不让添加的情况)
          *      * 其他状态(0/2/4)：清理历史记录，允许创建新请求
@@ -242,6 +306,8 @@ impl FriendService for FriendServiceImpl {
         {
             Ok(friendship) => {
                 info!("创建好友请求成功: {:?}", friendship);
+                //发送一条提示消息
+                self.send_friendship_flag(&user_id, &friend_id, "已发送好友请求").await;
                 Ok(Response::new(FriendshipResponse {
                     friendship: Some(friendship.to_proto()),
                 }))
@@ -275,6 +341,8 @@ impl FriendService for FriendServiceImpl {
         {
             Ok(friendship) => {
                 info!("接受好友请求成功，已建立双向好友关系: {:?}", friendship);
+                // 发送一条消息给新好友
+                self.send_friendship_message(friendship.clone(), &friendship.friend_id).await;
                 Ok(Response::new(FriendshipResponse {
                     friendship: Some(friendship.to_proto()),
                 }))

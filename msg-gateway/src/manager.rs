@@ -202,7 +202,9 @@ impl Manager {
         }
         
         // 向发送者的其他平台发送消息副本
-        self.send_to_self(&msg.send_id, msg).await;
+        if msg.msg_type != MsgType::FriendApplyReq as i32{ 
+            self.send_to_self(&msg.send_id, msg).await;
+        }
     }
 
     /// 向客户端连接发送消息
