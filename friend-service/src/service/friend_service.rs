@@ -1,6 +1,6 @@
 use std::future::Future;
 use common::proto::friend::friend_service_server::FriendService;
-use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse, GetFriendInGroupsRequest, GetFriendInGroupsResponse};
+use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse, GetFriendInGroupsRequest, GetFriendInGroupsResponse, GetPendingFriendRequestCountRequest, GetPendingFriendRequestCountResponse};
 use anyhow;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -400,6 +400,30 @@ impl FriendService for FriendServiceImpl {
             total,
             requests: request_protos,
         }))
+    }
+
+    // 获取待处理的好友请求数量
+    async fn get_pending_friend_request_count(
+        &self,
+        request: Request<GetPendingFriendRequestCountRequest>,
+    ) -> Result<Response<GetPendingFriendRequestCountResponse>, Status> {
+        let user_id = request.into_inner().user_id;
+        
+        // 检查用户是否存在
+        self.check_user_exists(&user_id).await?;
+        
+        // 获取待处理的好友请求数量
+        match self.repository.count_pending_friend_requests(&user_id).await {
+            Ok(count) => {
+                Ok(Response::new(GetPendingFriendRequestCountResponse {
+                    count,
+                }))
+            },
+            Err(e) => {
+                error!("获取待处理好友请求数量失败: {}", e);
+                Err(Status::internal("获取待处理好友请求数量失败"))
+            }
+        }
     }
 
     // 删除好友

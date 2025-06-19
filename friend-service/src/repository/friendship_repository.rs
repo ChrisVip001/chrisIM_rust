@@ -342,6 +342,40 @@ impl FriendshipRepository {
         Ok(result.count)
     }
 
+    /// 获取待处理的好友请求数量
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回
+    /// * `Result<i64>` - 待处理的好友请求数量
+    /// 
+    /// # 说明
+    /// 1. 只计算发送给当前用户且状态为Pending(0)的请求
+    /// 2. 排除已过期的请求（创建时间超过3天）
+    pub async fn count_pending_friend_requests(&self, user_id: &str) -> Result<i64> {
+        // 计算过期时间点（当前时间减去3天）
+        let now = Utc::now();
+        let three_days_ago = now - chrono::Duration::days(3);
+        let three_days_ago_naive = three_days_ago.naive_utc();
+        
+        let result = sqlx::query!(
+            r#"
+            SELECT COUNT(*) as "count!" 
+            FROM friendships 
+            WHERE friend_id = $1 
+            AND status = '0'
+            AND created_at > $2
+            "#,
+            user_id,
+            three_days_ago_naive
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(result.count)
+    }
+
     /// 获取好友请求列表
     /// 
     /// # 参数

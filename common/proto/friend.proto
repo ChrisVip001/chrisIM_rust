@@ -77,6 +77,9 @@ service FriendService {
   
   // 从分组中移除好友
   rpc RemoveFriendFromGroup(RemoveFriendFromGroupRequest) returns (RemoveFriendFromGroupResponse);
+  
+  // 获取待处理的好友请求数量
+  rpc GetPendingFriendRequestCount(GetPendingFriendRequestCountRequest) returns (GetPendingFriendRequestCountResponse);
 }
 
 // 发送好友请求
@@ -125,6 +128,16 @@ message GetFriendRequestsRequest {
 message GetFriendRequestsResponse {
   repeated Friendship requests = 1;
   int64 total = 2;        // 总条数
+}
+
+// 获取待处理的好友请求数量请求
+message GetPendingFriendRequestCountRequest {
+  string user_id = 1;     // 用户ID
+}
+
+// 获取待处理的好友请求数量响应
+message GetPendingFriendRequestCountResponse {
+  int64 count = 1;        // 待处理的好友请求数量
 }
 
 // 删除好友请求

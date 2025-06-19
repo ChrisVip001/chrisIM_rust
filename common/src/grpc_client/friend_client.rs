@@ -12,6 +12,7 @@ use crate::proto::friend::{
     GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse,
     GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, AddFriendToGroupRequest, 
     AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse,
+    GetPendingFriendRequestCountRequest, GetPendingFriendRequestCountResponse,
 };
 
 use crate::service_discovery::LbWithServiceDiscovery;
@@ -107,6 +108,16 @@ impl FriendServiceGrpcClient {
         });
 
         let response = self.service_client.get_friend_requests(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 获取待处理的好友请求数量
+    pub async fn get_pending_friend_request_count(&mut self, user_id: &str) -> Result<GetPendingFriendRequestCountResponse> {
+        let request = Request::new(GetPendingFriendRequestCountRequest {
+            user_id: user_id.to_string(),
+        });
+        
+        let response = self.service_client.get_pending_friend_request_count(request).await?;
         Ok(response.into_inner())
     }
 

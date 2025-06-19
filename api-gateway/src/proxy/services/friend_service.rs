@@ -116,6 +116,15 @@ impl FriendServiceHandler {
                     "total": response.total
                 }), StatusCode::OK))
             }
+            
+            // 获取待处理的好友请求数量
+            (&Method::GET, "getPendingRequestCount") => {
+                let response = self.client.get_pending_friend_request_count(&current_user_id).await?;
+                
+                Ok(success_response(json!({
+                    "count": response.count
+                }), StatusCode::OK))
+            }
 
             // 获取好友列表（包含详细信息）
             (&Method::POST, "getDetailList") | (&Method::GET, "getAllFriends") => {
