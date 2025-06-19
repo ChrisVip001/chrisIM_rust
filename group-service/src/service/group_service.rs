@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::repository::group_announcements_repository::GroupAnnouncementRepository;
 use crate::repository::group_blacklist_repository::GroupBlacklistRepository;
 use crate::repository::group_mutes_repository::GroupMutesRepository;
@@ -31,6 +32,7 @@ use common::service_discovery::LbWithServiceDiscovery;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, debug};
+use cache::Cache;
 
 pub struct GroupServiceImpl {
     group_repository: GroupRepository,
@@ -41,15 +43,16 @@ pub struct GroupServiceImpl {
     mutes_repository: GroupMutesRepository,
     member_settings_repository: MemberSettingsRepository,
     user_service_client: UserServiceClient<LbWithServiceDiscovery>,
-    friend_service_client: FriendServiceClient<LbWithServiceDiscovery>,
+    cache: Arc<dyn Cache>,
 }
 
 impl GroupServiceImpl {
     pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
-        let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
-        let friend_service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
-
+        let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config, "user".to_string()).await?;
+        // 初始化Redis缓存连接
+        // 用于缓存用户状态和序列号信息
+        let cache = cache::cache(&config).await;
         Ok(Self {
             group_repository: GroupRepository::new(pool.clone()),
             member_repository: MemberRepository::new(pool.clone()),
@@ -59,7 +62,7 @@ impl GroupServiceImpl {
             mutes_repository: GroupMutesRepository::new(pool.clone()),
             member_settings_repository: MemberSettingsRepository::new(pool.clone()),
             user_service_client,
-            friend_service_client,
+            cache: cache
         })
     }
 
@@ -265,10 +268,7 @@ impl GroupService for GroupServiceImpl {
         match self.group_repository.get_group(group_id.clone()).await {
             Ok(group) => {
                 // 获取成员数量
-                let member_count = match self.group_repository.get_member_count(group_id).await {
-                    Ok(count) => count,
-                    Err(_) => 0,
-                };
+                let member_count = self.group_repository.get_member_count(group_id).await.unwrap_or_else(|_| 0);
 
                 Ok(Response::new(GroupResponse {
                     group: Some(group.to_proto(member_count)),
@@ -296,10 +296,7 @@ impl GroupService for GroupServiceImpl {
         {
             Ok(group) => {
                 // 获取成员数量
-                let member_count = match self.group_repository.get_member_count(group_id).await {
-                    Ok(count) => count,
-                    Err(_) => 0,
-                };
+                let member_count = self.group_repository.get_member_count(group_id).await.unwrap_or_else(|_| 0);
 
                 info!("更新群组信息成功: {:?}", group);
                 Ok(Response::new(GroupResponse {
@@ -324,6 +321,8 @@ impl GroupService for GroupServiceImpl {
 
         match self.group_repository.delete_group(group_id.clone(), user_id).await {
             Ok(success) => {
+                //删除缓存
+                self.cache.del_group_members(&group_id).await?;
                 if success {
                     info!("删除群组成功: {}", group_id);
                     Ok(Response::new(DeleteGroupResponse { success }))
@@ -448,6 +447,10 @@ impl GroupService for GroupServiceImpl {
                 }
             }
         }
+        if added_count > 0 {
+            //删除缓存
+            self.cache.del_group_members(&group_id).await?;
+        }
         
         // 如果至少有一个成员添加成功，返回成功
         Ok(Response::new(AddMemberResponse { 
@@ -504,6 +507,8 @@ impl GroupService for GroupServiceImpl {
         
         // 如果至少有一个成员被成功移除，返回成功
         if success_count > 0 {
+            //删除缓存
+            self.cache.del_group_members(&group_id).await?;
             Ok(Response::new(RemoveMemberResponse { success: true }))
         } else {
             Err(Status::not_found("没有成功移除任何成员"))

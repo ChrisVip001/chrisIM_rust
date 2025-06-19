@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 common = { path = "../common" }
+cache = { path = "../cache" }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }

@@ -13,6 +13,11 @@ use msg_storage::{msg_rec_box_repo, DbRepo};
 use msg_storage::message::MsgRecBoxRepo;
 use crate::pusher::{push_service, Pusher};
 
+// 添加群组服务客户端相关导入
+use common::grpc_client::base::get_rpc_client;
+use common::proto::group::GetMembersRequest;
+use common::proto::group::group_service_client::GroupServiceClient;
+use common::service_discovery::LbWithServiceDiscovery;
 
 /// 消息消费者服务
 /// 
@@ -28,7 +33,10 @@ use crate::pusher::{push_service, Pusher};
 /// ## 工作流程
 /// 
 /// ```text
-/// Kafka队列 -> 消费消息 -> 解析消息 -> 分配序列号 -> 并行处理:
+/// Kafka队列 -> 消费消息 -> 解析消息 -> 分配序列号 -> 群组成员处理 -> 并行处理:
+///                                                      ↓
+///                                              查询/更新群组成员缓存
+///                                                      ↓
 ///                                                  ├─ 存储到数据库
 ///                                                  └─ 推送给用户
 /// ```
@@ -52,6 +60,10 @@ pub struct ConsumerService {
     /// 缓存接口
     /// 用于缓存用户序列号、在线状态等高频访问数据
     cache: Arc<dyn Cache>,
+    
+    /// 群组服务客户端
+    /// 用于查询群组成员信息、处理群组相关操作
+    group_client: GroupServiceClient<LbWithServiceDiscovery>,
     
     /// 序列号增长步长
     /// 每次为用户分配新序列号时的增量，用于性能优化
@@ -115,6 +127,9 @@ impl ConsumerService {
         // 用于存储离线消息和消息查询
         let msg_box = msg_rec_box_repo(config).await?;
 
+        // 初始化群组服务客户端
+        let group_client = get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(config, "group".to_string()).await?;
+
         info!("消息消费者服务初始化完成");
         
         Ok(Self {
@@ -123,6 +138,7 @@ impl ConsumerService {
             msg_box,
             pusher,
             cache,
+            group_client,
             seq_step,
         })
     }
@@ -144,32 +160,34 @@ impl ConsumerService {
         info!("开始消费Kafka消息...");
         
         loop {
-            match self.consumer.recv().await {
+            // 首先接收消息
+            let message = match self.consumer.recv().await {
                 Err(e) => {
                     error!("从Kafka接收消息失败: {}", e);
                     // 遇到接收错误时继续循环，不中断服务
                     continue;
                 }
-                Ok(m) => {
-                    // 尝试获取消息负载内容并处理
-                    if let Some(Ok(payload)) = m.payload_view::<str>() {
-                        debug!("收到Kafka消息，长度: {} 字节", payload.len());
-                        
-                        // 处理消息内容
-                        if let Err(e) = self.handle_msg(payload).await {
-                            error!("处理消息失败: {:?}, 消息内容: {}", e, payload);
-                            // 即使处理失败也要提交偏移量，避免重复消费
-                        }
-                        
-                        // 异步提交消息偏移量，确认消息已被处理
-                        // 使用异步模式提高性能，不等待确认
-                        if let Err(e) = self.consumer.commit_message(&m, CommitMode::Async) {
-                            error!("提交Kafka消息偏移量失败: {:?}", e);
-                        }
-                    } else {
-                        warn!("收到空消息或消息解码失败");
-                    }
+                Ok(m) => m,
+            };
+
+            // 提取消息负载并转换为拥有所有权的字符串，这样就不再借用message
+            let payload_result = message.payload_view::<str>().map(|result| result.map(|s| s.to_owned()));
+            
+            // 先提交偏移量，释放对message的借用
+            if let Err(e) = self.consumer.commit_message(&message, CommitMode::Async) {
+                error!("提交Kafka消息偏移量失败: {:?}", e);
+            }
+
+            // 现在处理消息内容（不再有借用冲突）
+            if let Some(Ok(payload)) = payload_result {
+                debug!("收到Kafka消息，长度: {} 字节", payload.len());
+                
+                // 处理消息内容（这里需要可变借用）
+                if let Err(e) = self.handle_msg(&payload).await {
+                    error!("处理消息失败: {:?}, 消息内容: {}", e, payload);
                 }
+            } else {
+                warn!("收到空消息或消息解码失败");
             }
         }
     }
@@ -188,7 +206,7 @@ impl ConsumerService {
     /// # 返回值
     /// * `Ok(())` - 消息处理成功
     /// * `Err(Error)` - 消息处理失败，包含详细错误信息
-    async fn handle_msg(&self, payload: &str) -> Result<(), Error> {
+    async fn handle_msg(&mut self, payload: &str) -> Result<(), Error> {
         debug!("开始处理消息: {}", payload);
 
         // 将JSON字符串反序列化为消息对象
@@ -306,12 +324,12 @@ impl ConsumerService {
     /// # 返回值
     /// * `Ok(Vec<String>)` - 群组成员ID列表
     /// * `Err(Error)` - 查询失败的错误信息
-    async fn get_members_id(&self, group_id: &str) -> Result<Vec<String>, Error> {
+    async fn get_members_id(&mut self, group_id: &str) -> Result<Vec<String>, Error> {
         match self.cache.query_group_members_id(group_id).await {
             Ok(list) if !list.is_empty() => Ok(list),
             Ok(_) => {
                 warn!("缓存中群组成员ID列表为空");
-                // 从数据库查询
+                // 从群组服务查询
                 self.query_group_members_id_from_db(group_id).await
             }
             Err(err) => {
@@ -395,7 +413,7 @@ impl ConsumerService {
     /// * `Ok(Vec<GroupMemSeq>)` - 群成员序列号列表
     /// * `Err(Error)` - 处理失败的错误信息
     async fn handle_group_seq(
-        &self,
+        &mut self,
         msg_type: &MsgType2,
         msg: &mut Msg,
     ) -> Result<Vec<GroupMemSeq>, Error> {
@@ -410,8 +428,6 @@ impl ConsumerService {
 
         // 为所有群成员增加序列号
         let seq = self.cache.incr_group_seq(members).await?;
-
-        // 我们应该将完整的列表发送到数据库模块，由数据库模块处理数据
 
         // 根据消息类型判断是否需要更新缓存
         // 如果是群解散，应该删除缓存数据
@@ -500,11 +516,10 @@ impl ConsumerService {
         Ok(())
     }
 
-    /// 从数据库查询群组成员ID
+    /// 从群组服务查询群组成员ID
     /// 并将结果设置到缓存中
     /// 
-    /// 当缓存中没有群组成员信息时，从数据库查询并更新缓存。
-    /// 注意：当前实现为TODO状态，需要实际的数据库查询逻辑。
+    /// 当缓存中没有群组成员信息时，从群组服务查询并更新缓存。
     /// 
     /// # 参数
     /// * `group_id` - 群组ID
@@ -512,21 +527,42 @@ impl ConsumerService {
     /// # 返回值
     /// * `Ok(Vec<String>)` - 群组成员ID列表
     /// * `Err(Error)` - 查询失败的错误信息
-    async fn query_group_members_id_from_db(&self, group_id: &str) -> Result<Vec<String>, Error> {
-        /// TODO 从数据库查询成员ID
-        // let members_id = self.db.group.query_group_members_id(group_id).await?;
-        let members_id = Vec::new();
+    async fn query_group_members_id_from_db(&mut self, group_id: &str) -> Result<Vec<String>, Error> {
+        info!("从群组服务查询群组成员ID: {}", group_id);
 
-        // 将查询结果保存到缓存
-        if let Err(e) = self
-            .cache
-            .save_group_members_id(group_id, members_id.clone())
-            .await
-        {
-            error!("保存群组成员ID到缓存失败: {:?}", e);
+        // 调用群组服务获取成员列表
+        let request = GetMembersRequest {
+            group_id: group_id.to_string(),
+            page: 1,
+            page_size: 5000,
+        };
+        match self.group_client.get_members(request).await {
+            Ok(response) => {
+                // 提取成员ID列表
+                let members_id: Vec<String> = response.into_inner().members
+                    .into_iter()
+                    .map(|member| member.user_id)
+                    .collect();
+                
+                info!("从群组服务查询到 {} 个成员ID", members_id.len());
+                
+                // 将查询结果保存到缓存
+                if let Err(e) = self
+                    .cache
+                    .save_group_members_id(group_id, members_id.clone())
+                    .await
+                {
+                    error!("保存群组成员ID到缓存失败: {:?}", e);
+                }
+        
+                Ok(members_id)
+            }
+            Err(e) => {
+                error!("从群组服务查询成员ID失败: {:?}", e);
+                // 查询失败时返回空列表，避免中断消息处理流程
+                Ok(Vec::new())
+            }
         }
-
-        Ok(members_id)
     }
 
     /// 处理单聊消息的存储
