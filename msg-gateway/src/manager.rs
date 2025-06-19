@@ -407,13 +407,23 @@ impl Manager {
     /// 处理单条消息
     /// 
     /// 执行消息处理的核心逻辑：
-    /// 1. 在缓存中增加发送序列号
-    /// 2. 通过gRPC将消息发送到msg-server
-    /// 3. 处理响应结果和错误情况
+    /// 1. 检查是否为心跳消息，心跳消息无需复杂处理
+    /// 2. 在缓存中增加发送序列号
+    /// 3. 通过gRPC将消息发送到msg-server
+    /// 4. 处理响应结果和错误情况
     /// 
     /// # 参数
     /// * `message` - 要处理的消息（可变引用，会被修改）
     async fn process_message(&mut self, message: &mut Msg) {
+        // 判断是否为心跳消息
+        if message.msg_type == MsgType::Heartbeat as i32 || message.msg_type == MsgType::MsgRecResp as i32 {
+            debug!("收到心跳消息，直接响应: user_id={}", message.send_id);
+            // 心跳消息直接设置为响应类型返回给客户端
+            message.msg_type = MsgType::MsgRecResp as i32;
+            message.content.clear(); // 清空内容
+            return;
+        }
+
         // 通过gRPC发送消息
         match self.send_rpc_message(message.clone()).await {
             Ok(response) => {

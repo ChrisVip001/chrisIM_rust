@@ -323,7 +323,8 @@ impl From<MsgType> for MsgType2 {
             MsgType::Read
             | MsgType::MsgRecResp
             | MsgType::Notification
-            | MsgType::Service => {
+            | MsgType::Service
+            | MsgType::Heartbeat => {
                 MsgType2::System
             }
             _ => {
@@ -391,15 +392,16 @@ impl MsgType2 {
             | MsgType::SingleCallInvite
             | MsgType::AgreeSingleCall
             | MsgType::SingleCallOffer
-            | MsgType::Candidate
-            | MsgType::Read
-            | MsgType::MsgRecResp
-            | MsgType::Notification
-            | MsgType::Service => {
+            | MsgType::Candidate => {
                 msg_type = MsgType2::Friend;
                 need_history = false;
             }
-            _ => {
+            MsgType::Heartbeat
+            | MsgType::Read
+            | MsgType::MsgRecResp
+            | MsgType::Notification
+            | MsgType::Service
+            | _ => {
                 // 其他消息类型，不需要增加序列号
                 msg_type = MsgType2::System;
                 need_history = false;
