@@ -250,8 +250,7 @@ impl ChatService for ChatRpcService {
         // 为特定类型的消息生成服务器ID
         // 某些系统消息（如群组解散、好友邀请等）可能已经有了服务器ID，无需重新生成
         if !(msg.msg_type == MsgType::GroupDismissOrExitReceived as i32
-            || msg.msg_type == MsgType::GroupInvitationReceived as i32
-            || msg.msg_type == MsgType::FriendApplyResp as i32)
+            || msg.msg_type == MsgType::GroupInvitationReceived as i32)
         {
             // 使用nanoid生成唯一消息ID, nanoid比UUID更短且更安全
             msg.server_id = nanoid!();
