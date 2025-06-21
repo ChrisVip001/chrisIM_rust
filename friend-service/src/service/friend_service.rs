@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use cache::Cache;
 use common::proto::friend::friend_service_server::FriendService;
 use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse, GetFriendInGroupsRequest, GetFriendInGroupsResponse, GetPendingFriendRequestCountRequest, GetPendingFriendRequestCountResponse};
 use anyhow;
@@ -20,7 +22,10 @@ use uuid::Uuid;
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
     user_service_client: UserServiceClient<LbWithServiceDiscovery>,
-    chat_service_client: ChatServiceClient<LbWithServiceDiscovery>
+    chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
+    /// 缓存接口
+    /// 用于缓存用户序列号、在线状态等高频访问数据
+    cache: Arc<dyn Cache>,
 }
 
 impl FriendServiceImpl {
@@ -30,10 +35,15 @@ impl FriendServiceImpl {
         let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
         let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&*config, "chat".to_string()).await?;
 
+        // 初始化Redis缓存连接
+        // 用于缓存用户状态和序列号信息
+        let cache = cache::cache(&config).await;
+        
         Ok(Self {
             repository: FriendshipRepository::new(pool),
             user_service_client,
-            chat_service_client
+            chat_service_client,
+            cache,
         })
     }
 
@@ -607,7 +617,12 @@ impl FriendService for FriendServiceImpl {
 
         match self.repository.block_user(&user_id, &blocked_user_id, reason).await {
             Ok(blacklist) => {
-                info!("用户 {} 成功拉黑用户 {}，好友关系状态已更新为拉黑（如果存在）", user_id, blocked_user_id);
+                // 添加到缓存黑名单
+                if let Err(e) = self.cache.add_user_to_blacklist(&user_id, &blocked_user_id).await {
+                    error!("缓存黑名单关系失败: {}", e);
+                    // 缓存操作失败不影响主流程
+                }
+                
                 Ok(Response::new(BlockUserResponse {
                     blacklist: Some(blacklist.to_proto()),
                 }))
@@ -643,10 +658,17 @@ impl FriendService for FriendServiceImpl {
 
         match self.repository.unblock_user(&user_id, &blocked_user_id).await {
             Ok(success) => {
-                info!("用户 {} 成功解除拉黑用户 {}，好友关系已自动恢复（如果之前存在）", user_id, blocked_user_id);
-                Ok(Response::new(UnblockUserResponse {
-                    success,
-                }))
+                if success {
+                    // 从缓存黑名单中移除
+                    if let Err(e) = self.cache.remove_user_from_blacklist(&user_id, &blocked_user_id).await {
+                        error!("从缓存黑名单中移除失败: {}", e);
+                        // 缓存操作失败不影响主流程
+                    }
+                    
+                    Ok(Response::new(UnblockUserResponse { success }))
+                } else {
+                    Err(Status::not_found("该用户不在黑名单中"))
+                }
             }
             Err(e) => {
                 error!("解除拉黑失败: {}", e);
@@ -1057,15 +1079,37 @@ impl FriendService for FriendServiceImpl {
 
         let user_id = req.user_id.clone();
         let blocked_user_id = req.blocked_user_id.clone();
-         match self.repository.is_user_blocked(&user_id, &blocked_user_id).await {
+        // 先从缓存中检查黑名单关系
+        match self.cache.is_user_in_blacklist(&user_id, &blocked_user_id).await {
             Ok(is_blocked) => {
-                Ok(Response::new(IsBlockedResponse {
-                    is_blocked,
-                }))
-            },
+                if is_blocked {
+                    // 缓存中存在黑名单关系，直接返回
+                    return Ok(Response::new(IsBlockedResponse { is_blocked: true }));
+                }
+                // 缓存中不存在，继续查询数据库
+            }
             Err(e) => {
-                error!("获取是否拉黑状态失败: {}", e);
-                Err(Status::internal("获取是否拉黑状态失败"))
+                // 缓存查询出错，记录日志但不影响主流程
+                error!("从缓存中检查黑名单关系失败: {}", e);
+            }
+        }
+
+        // 从数据库中检查黑名单关系
+        match self.repository.is_user_blocked(&user_id, &blocked_user_id).await {
+            Ok(is_blocked) => {
+                // 如果数据库中存在黑名单关系，更新缓存
+                if is_blocked {
+                    if let Err(e) = self.cache.add_user_to_blacklist(&user_id, &blocked_user_id).await {
+                        error!("更新黑名单缓存失败: {}", e);
+                        // 缓存操作失败不影响主流程
+                    }
+                }
+                
+                Ok(Response::new(IsBlockedResponse { is_blocked }))
+            }
+            Err(e) => {
+                error!("检查用户是否被拉黑失败: {}", e);
+                Err(Status::internal("检查用户是否被拉黑失败"))
             }
         }
         
