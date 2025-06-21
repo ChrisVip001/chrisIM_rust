@@ -608,7 +608,6 @@ impl ConsumerService {
             if message.msg_type == MsgType::GroupDismissOrExitReceived as i32
                 || message.msg_type == MsgType::GroupInvitationReceived as i32
                 || message.msg_type == MsgType::FriendApplyReq as i32
-                || message.msg_type == MsgType::FriendApplyResp as i32
             {
                 if let Err(e) = msg_box.delete_message(&message.server_id).await {
                     tracing::error!("从MongoDB删除消息失败: {}", e);
