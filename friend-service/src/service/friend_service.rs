@@ -319,7 +319,7 @@ impl FriendService for FriendServiceImpl {
             Ok(friendship) => {
                 info!("创建好友请求成功: {:?}", friendship);
                 //发送一条提示消息
-                self.send_friendship_flag(&user_id, &friend_id, "已发送好友请求").await;
+                let _ = self.send_friendship_flag(&user_id, &friend_id, "已发送好友请求");
                 Ok(Response::new(FriendshipResponse {
                     friendship: Some(friendship.to_proto()),
                 }))
@@ -354,7 +354,13 @@ impl FriendService for FriendServiceImpl {
             Ok(friendship) => {
                 info!("接受好友请求成功，已建立双向好友关系: {:?}", friendship);
                 // 发送一条消息给新好友
-                self.send_friendship_message(friendship.clone(), &friendship.friend_id).await;
+                let _ = self.send_friendship_message(friendship.clone(), &friendship.friend_id);
+                // 缓存好友关系
+                if let Err(e) = self.cache.save_bidirectional_friendship(&friendship.user_id, &friendship.friend_id).await {
+                    error!("缓存好友关系失败: {}", e);
+                    // 缓存操作失败不影响主流程
+                }
+
                 Ok(Response::new(FriendshipResponse {
                     friendship: Some(friendship.to_proto()),
                 }))
@@ -518,6 +524,12 @@ impl FriendService for FriendServiceImpl {
 
         match self.repository.delete_friend(&user_id, &friend_id).await {
             Ok(success) => {
+                // 删除好友关系缓存
+                if let Err(e) = self.cache.delete_bidirectional_friendship(&user_id, &friend_id).await {
+                    error!("删除好友关系缓存失败: {}", e);
+                    // 缓存操作失败不影响主流程
+                }
+
                 Ok(Response::new(DeleteFriendResponse {
                     success,
                 }))
