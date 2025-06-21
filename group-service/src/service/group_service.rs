@@ -159,7 +159,7 @@ impl GroupServiceImpl {
         // 创建好友申请请求消息
         let create_group_msg = Msg {
             send_id: owner_id.to_string(),
-            msg_type: MsgType::GroupMsg as i32,
+            msg_type: MsgType::GroupInviteNew as i32,
             content_type: ContentType::Text as i32,
             content: message.as_bytes().to_vec(),
             group_id: group_id.to_string(),
