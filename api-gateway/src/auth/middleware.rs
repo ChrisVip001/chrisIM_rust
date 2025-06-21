@@ -58,7 +58,7 @@ pub async fn auth_middleware(
     let user_info = match jwt::verify_token(&token, jwt_config) {
         Ok(user_info) => user_info,
         Err(e) => {
-            return success_response(&format!("令牌验证失败: {:?}", e), StatusCode::UNAUTHORIZED)
+            return error_response(&format!("令牌验证失败: {:?}", e), StatusCode::UNAUTHORIZED)
         }
     };
 
@@ -72,11 +72,11 @@ pub async fn auth_middleware(
     {
         Ok(Some(stored_token)) => {
             if stored_token != token {
-                return success_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
+                return error_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
             }
         }
         Ok(None) => {
-            return success_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
+            return error_response("令牌已过期或已注销，请重新登录", StatusCode::UNAUTHORIZED);
         }
         Err(e) => {
             error!("Redis查询失败: {:?}", e);
