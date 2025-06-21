@@ -137,6 +137,7 @@ impl FriendServiceImpl {
             // 将Friendship对象序列化为二进制内容
             content: friendship.message.as_bytes().to_vec(),
             platform: PlatformType::Web as i32,
+            create_time: Utc::now().timestamp_millis(),
             ..Default::default()
         };
 
@@ -167,6 +168,7 @@ impl FriendServiceImpl {
             content_type: ContentType::Text as i32,
             content: message.as_bytes().to_vec(),
             platform: PlatformType::Web as i32,
+            create_time: Utc::now().timestamp_millis(),
             ..Default::default()
         };
 
