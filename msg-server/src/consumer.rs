@@ -604,9 +604,11 @@ impl ConsumerService {
 
         // 任务2：保存消息到MongoDB
         let msg_rec_box_task = tokio::spawn(async move {
-            // 如果消息类型是群组操作确认，我们应该从MongoDB中删除它
+            // 如果消息类型是群组操作确认 好友请求 和好友请求确认，我们应该从MongoDB中删除它 
             if message.msg_type == MsgType::GroupDismissOrExitReceived as i32
                 || message.msg_type == MsgType::GroupInvitationReceived as i32
+                || message.msg_type == MsgType::FriendApplyReq as i32
+                || message.msg_type == MsgType::FriendApplyResp as i32
             {
                 if let Err(e) = msg_box.delete_message(&message.server_id).await {
                     tracing::error!("从MongoDB删除消息失败: {}", e);
