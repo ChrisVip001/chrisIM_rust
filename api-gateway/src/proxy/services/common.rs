@@ -157,18 +157,6 @@ pub fn get_platform_from_jwt(jwt_user_info: Option<&Claims>) -> Result<i32, anyh
         .platform)
 }
 
-/// 时间戳转换为RFC3339格式的字符串
-pub fn timestamp_to_rfc3339(timestamp: &Option<prost_types::Timestamp>) -> String {
-    timestamp
-        .as_ref()
-        .map(|ts| {
-            chrono::DateTime::<chrono::Utc>::from_timestamp(ts.seconds, ts.nanos as u32)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default()
-        })
-        .unwrap_or_default()
-}
-
 // Timestamp 转 DateTime<Utc>
 pub fn timestamp_to_datetime(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
     ts.map(|ts| {
@@ -176,14 +164,6 @@ pub fn timestamp_to_datetime(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
             .single()
             .unwrap_or_default()
     })
-}
-
-// DateTime<Utc> 转 Timestamp
-pub fn datetime_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
-    Timestamp {
-        seconds: dt.timestamp(),
-        nanos: dt.timestamp_subsec_nanos() as i32,
-    }
 }
 
 // 格式化显示时间(yyyy-MM-dd HH:mm:ss)
@@ -243,6 +223,62 @@ pub fn get_option_bool_param(body: &Value, param_name: &str, alt_name: Option<&s
                     Some(1) => Some(true),
                     Some(0) => Some(false),
                     _ => None,
+                }
+            } else {
+                None
+            }
+        })
+}
+
+/// 参数提取辅助函数 - 从JSON中提取字符串数组参数 （必填）
+pub fn extract_string_array_param(body: &Value, param_name: &str, alt_name: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+    body.get(param_name)
+        .or_else(|| alt_name.and_then(|alt| body.get(alt)))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s.to_string()),
+                    Value::Number(n) => Some(n.to_string()),
+                    Value::Bool(b) => Some(b.to_string()),
+                    _ => None
+                })
+                .collect::<Vec<String>>()
+        })
+        .filter(|arr| !arr.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("参数 {} 缺失、格式错误或为空数组", param_name))
+}
+
+/// 参数提取辅助函数 - 从JSON中提取可选字符串数组参数 （非必填）
+pub fn get_optional_string_array(body: &Value, param_name: &str, alt_name: Option<&str>) -> Option<Vec<String>> {
+    body.get(param_name)
+        .or_else(|| alt_name.and_then(|alt| body.get(alt)))
+        .and_then(|v| {
+            if v.is_null() {
+                None
+            } else if v.is_array() {
+                let result: Vec<String> = v.as_array()?
+                    .iter()
+                    .filter_map(|item| {
+                        if item.is_null() {
+                            None
+                        } else if item.is_string() {
+                            item.as_str().map(|s| s.to_string())
+                        } else if item.is_number() {
+                            Some(item.to_string())
+                        } else if item.is_boolean() {
+                            Some(item.as_bool().unwrap().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                
+                // 如果解析后数组为空，返回 None；否则返回解析结果
+                if result.is_empty() {
+                    None
+                } else {
+                    Some(result)
                 }
             } else {
                 None
