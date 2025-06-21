@@ -164,7 +164,8 @@ impl GroupServiceImpl {
             content_type: ContentType::Text as i32,
             content: message.as_bytes().to_vec(),
             group_id: group_id.to_string(),
-            send_time: Utc::now().timestamp_millis(),
+            create_time: Utc::now().timestamp_millis(),
+            receiver_id: group_id.to_string(),
             ..Default::default()
         };
         // 创建SendMsgRequest
@@ -257,7 +258,7 @@ impl GroupService for GroupServiceImpl {
         let mut members = Vec::new();
         let mut success_count = 0;
 
-        for user_id in all_member_ids {
+        for user_id in all_member_ids.clone() {
             let role = if user_id == owner_id {
                 MemberRole::Owner
             } else {
@@ -279,6 +280,15 @@ impl GroupService for GroupServiceImpl {
             }
         }
 
+        // 加入缓存
+        if let Err(e) = self
+            .cache
+            .save_group_members_id(&group.id.clone(), all_member_ids.clone())
+            .await
+        {
+            error!("保存群组成员ID到缓存失败: {:?}", e);
+        }
+        
         info!(
             "创建群组成功: {:?}, 成功添加成员数: {}",
             group, success_count
