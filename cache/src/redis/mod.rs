@@ -859,9 +859,9 @@ impl Cache for RedisCache {
             Error::Internal(format!("添加用户到黑名单失败: {}", e))
         })?;
         
-        // 如果两人之前是好友关系，需要同时删除好友关系
-        // 这确保了黑名单和好友列表的一致性
-        let _ = self.delete_bidirectional_friendship(user_id, blocked_user_id).await;
+        // // 如果两人之前是好友关系，需要同时删除好友关系
+        // // 这确保了黑名单和好友列表的一致性
+        // let _ = self.delete_bidirectional_friendship(user_id, blocked_user_id).await;
         
         Ok(())
     }
