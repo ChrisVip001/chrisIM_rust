@@ -167,6 +167,89 @@ pub trait Cache: Sync + Send + Debug {
     /// # 返回值
     /// * `Vec<UserOnlineStatus>` - 用户在线状态信息列表
     async fn batch_get_users_online_status(&self, user_ids: &[String]) -> Result<Vec<UserOnlineStatus>, Error>;
+    
+    /// 保存双向好友关系
+    /// 
+    /// 在缓存中存储两个用户之间的双向好友关系，便于快速查询
+    /// 
+    /// # 参数
+    /// * `user_id` - 第一个用户的ID
+    /// * `friend_id` - 第二个用户的ID
+    async fn save_bidirectional_friendship(&self, user_id: &str, friend_id: &str) -> Result<(), Error>;
+
+    /// 检查双向好友关系是否存在
+    /// 
+    /// 快速检查两个用户之间是否存在好友关系
+    /// 
+    /// # 参数
+    /// * `user_id` - 第一个用户的ID
+    /// * `friend_id` - 第二个用户的ID
+    /// 
+    /// # 返回值
+    /// * `bool` - 如果存在好友关系返回true，否则返回false
+    async fn check_friendship_exists(&self, user_id: &str, friend_id: &str) -> Result<bool, Error>;
+
+    /// 删除双向好友关系
+    /// 
+    /// 从缓存中删除两个用户之间的双向好友关系
+    /// 
+    /// # 参数
+    /// * `user_id` - 第一个用户的ID
+    /// * `friend_id` - 第二个用户的ID
+    async fn delete_bidirectional_friendship(&self, user_id: &str, friend_id: &str) -> Result<(), Error>;
+
+    /// 获取用户的所有好友ID
+    /// 
+    /// 从缓存中获取指定用户的所有好友ID列表
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `Vec<String>` - 好友ID列表
+    async fn get_all_friend_ids(&self, user_id: &str) -> Result<Vec<String>, Error>;
+    
+    /// 添加用户黑名单关系
+    /// 
+    /// 将指定用户添加到另一用户的黑名单中
+    /// 
+    /// # 参数
+    /// * `user_id` - 拉黑操作的发起用户ID
+    /// * `blocked_user_id` - 被拉黑的用户ID
+    async fn add_user_to_blacklist(&self, user_id: &str, blocked_user_id: &str) -> Result<(), Error>;
+    
+    /// 从黑名单中移除用户
+    /// 
+    /// 将指定用户从另一用户的黑名单中移除
+    /// 
+    /// # 参数
+    /// * `user_id` - 解除拉黑操作的发起用户ID
+    /// * `blocked_user_id` - 被解除拉黑的用户ID
+    async fn remove_user_from_blacklist(&self, user_id: &str, blocked_user_id: &str) -> Result<(), Error>;
+    
+    /// 检查用户是否在黑名单中
+    /// 
+    /// 检查一个用户是否被另一用户拉黑
+    /// 
+    /// # 参数
+    /// * `user_id` - 可能拉黑他人的用户ID
+    /// * `target_user_id` - 可能被拉黑的用户ID
+    /// 
+    /// # 返回值
+    /// * `bool` - 如果目标用户被拉黑则返回true，否则返回false
+    async fn is_user_in_blacklist(&self, user_id: &str, target_user_id: &str) -> Result<bool, Error>;
+    
+    /// 获取用户的黑名单列表
+    /// 
+    /// 获取指定用户拉黑的所有用户ID列表
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `Vec<String>` - 被拉黑的用户ID列表
+    async fn get_user_blacklist(&self, user_id: &str) -> Result<Vec<String>, Error>;
+    
 }
 
 /// 用户在线状态信息

@@ -36,6 +36,12 @@ const USER_ONLINE_SET: &str = "user_online_set";
 /// 用户平台在线状态前缀
 const USER_PLATFORM_ONLINE_PREFIX: &str = "user_platform_online";
 
+/// 用户好友集合前缀
+const USER_FRIENDS_SET_PREFIX: &str = "user_friends";
+
+/// 用户黑名单集合前缀
+const USER_BLACKLIST_PREFIX: &str = "user_blacklist";
+
 /// 默认序列号步长
 const DEFAULT_SEQ_STEP: i32 = 5000;
 
@@ -770,6 +776,136 @@ impl Cache for RedisCache {
         }
 
         Ok(results)
+    }
+
+    async fn save_bidirectional_friendship(&self, user_id: &str, friend_id: &str) -> Result<(), Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 创建两个用户的好友集合键
+        let key1 = format!("{}:{}", USER_FRIENDS_SET_PREFIX, user_id);
+        let key2 = format!("{}:{}", USER_FRIENDS_SET_PREFIX, friend_id);
+        
+        // 使用管道批量执行命令，提高效率
+        let mut pipeline = redis::pipe();
+        pipeline
+            .sadd(&key1, friend_id)
+            .sadd(&key2, user_id);
+        
+        // 执行管道命令
+        pipeline.query_async(&mut conn).await.map_err(|e| {
+            Error::Internal(format!("保存好友关系失败: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
+    async fn check_friendship_exists(&self, user_id: &str, friend_id: &str) -> Result<bool, Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 构建键
+        let key = format!("{}:{}", USER_FRIENDS_SET_PREFIX, user_id);
+        
+        // 检查集合中是否包含好友ID
+        let exists: bool = conn.sismember(&key, friend_id).await.map_err(|e| {
+            Error::Internal(format!("检查好友关系失败: {}", e))
+        })?;
+        
+        Ok(exists)
+    }
+    
+    async fn delete_bidirectional_friendship(&self, user_id: &str, friend_id: &str) -> Result<(), Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 创建两个用户的好友集合键
+        let key1 = format!("{}:{}", USER_FRIENDS_SET_PREFIX, user_id);
+        let key2 = format!("{}:{}", USER_FRIENDS_SET_PREFIX, friend_id);
+        
+        // 使用管道批量执行命令，提高效率
+        let mut pipeline = redis::pipe();
+        pipeline
+            .srem(&key1, friend_id)
+            .srem(&key2, user_id);
+        
+        // 执行管道命令
+        pipeline.query_async(&mut conn).await.map_err(|e| {
+            Error::Internal(format!("删除好友关系失败: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
+    async fn get_all_friend_ids(&self, user_id: &str) -> Result<Vec<String>, Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 构建键
+        let key = format!("{}:{}", USER_FRIENDS_SET_PREFIX, user_id);
+        
+        // 获取集合中的所有成员
+        let friends: Vec<String> = conn.smembers(&key).await.map_err(|e| {
+            Error::Internal(format!("获取好友列表失败: {}", e))
+        })?;
+        
+        Ok(friends)
+    }
+    
+    async fn add_user_to_blacklist(&self, user_id: &str, blocked_user_id: &str) -> Result<(), Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 构建键
+        let key = format!("{}:{}", USER_BLACKLIST_PREFIX, user_id);
+        
+        // 将被拉黑用户ID添加到黑名单集合
+        conn.sadd(&key, blocked_user_id).await.map_err(|e| {
+            Error::Internal(format!("添加用户到黑名单失败: {}", e))
+        })?;
+        
+        // 如果两人之前是好友关系，需要同时删除好友关系
+        // 这确保了黑名单和好友列表的一致性
+        let _ = self.delete_bidirectional_friendship(user_id, blocked_user_id).await;
+        
+        Ok(())
+    }
+    
+    async fn remove_user_from_blacklist(&self, user_id: &str, blocked_user_id: &str) -> Result<(), Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 构建键
+        let key = format!("{}:{}", USER_BLACKLIST_PREFIX, user_id);
+        
+        // 从黑名单集合中移除用户ID
+        conn.srem(&key, blocked_user_id).await.map_err(|e| {
+            Error::Internal(format!("从黑名单中移除用户失败: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
+    async fn is_user_in_blacklist(&self, user_id: &str, target_user_id: &str) -> Result<bool, Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 构建键
+        let key = format!("{}:{}", USER_BLACKLIST_PREFIX, user_id);
+        
+        // 检查目标用户ID是否在黑名单集合中
+        let is_blocked: bool = conn.sismember(&key, target_user_id).await.map_err(|e| {
+            Error::Internal(format!("检查用户是否在黑名单中失败: {}", e))
+        })?;
+        
+        Ok(is_blocked)
+    }
+    
+    async fn get_user_blacklist(&self, user_id: &str) -> Result<Vec<String>, Error> {
+        let mut conn = self.get_connection().await?;
+        
+        // 构建键
+        let key = format!("{}:{}", USER_BLACKLIST_PREFIX, user_id);
+        
+        // 获取黑名单集合中的所有成员
+        let blacklist: Vec<String> = conn.smembers(&key).await.map_err(|e| {
+            Error::Internal(format!("获取用户黑名单失败: {}", e))
+        })?;
+        
+        Ok(blacklist)
     }
 }
 
