@@ -73,9 +73,6 @@ enum MsgType {
   MsgTypeSingleMsg = 28;
 
   MsgTypeRevoke = 29;         // 撤回消息
-  MsgTypeForward = 30;        // 转发消息
-  MsgTypeReply = 31;          // 回复消息
-
 }
 
 /// 消息结构体

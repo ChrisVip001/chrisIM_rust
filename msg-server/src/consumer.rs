@@ -249,7 +249,7 @@ impl ConsumerService {
         let mut tasks = Vec::with_capacity(2);
         
         // 判断是否需要存储到数据库
-        if Self::get_send_to_db_flag(&mt) {
+        if Self::get_send_to_db_flag(&mt) && !msg.is_revoked {
             let cloned_msg = msg.clone();
             let cloned_type = msg_type.clone();
             let cloned_members = members.clone();
@@ -471,6 +471,7 @@ impl ConsumerService {
                 | MsgType::Candidate
                 | MsgType::SingleCallOffer
                 | MsgType::SingleCallInvite
+                | MsgType::FriendApplyReq
         )
     }
 
@@ -607,7 +608,6 @@ impl ConsumerService {
             // 如果消息类型是群组操作确认 好友请求 和好友请求确认，我们应该从MongoDB中删除它 
             if message.msg_type == MsgType::GroupDismissOrExitReceived as i32
                 || message.msg_type == MsgType::GroupInvitationReceived as i32
-                || message.msg_type == MsgType::FriendApplyReq as i32
             {
                 if let Err(e) = msg_box.delete_message(&message.server_id).await {
                     tracing::error!("从MongoDB删除消息失败: {}", e);
