@@ -452,9 +452,12 @@ impl ChatServiceHandler {
         debug!("转发消息请求: {}", body);
 
         // 解析请求参数
-        let original_message_id = body["messageId"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("缺少原始消息ID"))?;
+        let message_ids: Vec<String> = body["messageIds"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
 
         let target_user_ids: Vec<String> = body["targetUserIds"]
             .as_array()
@@ -473,7 +476,7 @@ impl ChatServiceHandler {
         let forward_comment = body["comment"].as_str().map(|s| s.to_string());
 
         // 验证参数
-        if original_message_id.is_empty() {
+        if message_ids.is_empty() {
             return Ok(error_response("原始消息ID不能为空", StatusCode::BAD_REQUEST));
         }
 
@@ -484,7 +487,7 @@ impl ChatServiceHandler {
         // 构建gRPC请求
         let request = ForwardMessageRequest {
             user_id: user_id.to_string(),
-            original_message_id: original_message_id.to_string(),
+            message_ids,
             target_user_ids,
             target_group_ids,
             forward_comment,

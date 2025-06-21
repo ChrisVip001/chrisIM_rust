@@ -174,7 +174,18 @@ impl MsgRecBoxRepo for MsgBox {
             None => Ok(None),
         }
     }
-
+    
+    /// 根据消息ID获取消息（多条）
+    async fn get_messages(&self, message_ids: &Vec<String>) -> Result<Vec<Msg>, Error> {
+        let query = doc! {"server_id": {"$in": message_ids}};
+        let mut cursor = self.mb.find(query).await?;
+        let mut messages = Vec::new();
+        while let Some(result) = cursor.next().await {
+            messages.push(Msg::try_from(result?)?);
+        }
+        Ok(messages)
+    }
+    
     /// 获取用户消息流
     /// 使用流式处理，适合处理大量消息数据
     async fn get_messages_stream(
@@ -228,30 +239,6 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(rx)
     }
 
-    /// 获取用户消息列表（已废弃）
-    /// 建议使用 get_messages_stream 方法
-    async fn get_messages(&self, user_id: &str, start: i64, end: i64) -> Result<Vec<Msg>, Error> {
-        let query = doc! {
-            "receiver_id": user_id,
-            "seq": {
-                "$gte": start,
-                "$lte": end
-            }
-        };
-
-        // 按序列号排序
-        let option = FindOptions::builder().sort(doc! {"seq": 1}).build();
-
-        // 执行查询
-        let mut cursor = self.mb.find(query).with_options(option).await?;
-        let mut messages = Vec::with_capacity((end - start) as usize);
-        while let Some(result) = cursor.next().await {
-            let msg = Msg::try_from(result?)?;
-            messages.push(msg)
-        }
-
-        Ok(messages)
-    }
 
     /// 获取用户的发送和接收消息
     /// 支持分别指定发送消息和接收消息的序列号范围

@@ -61,9 +61,8 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
         end: i64,
     ) -> Result<mpsc::Receiver<Result<Msg, Error>>, Error>;
 
-    #[deprecated]
-    /// 获取消息列表（已废弃，建议使用流式接口）
-    async fn get_messages(&self, user_id: &str, start: i64, end: i64) -> Result<Vec<Msg>, Error>;
+    /// 根据消息ID获取消息列表
+    async fn get_messages(&self, message_ids: &Vec<String>) -> Result<Vec<Msg>, Error>;
 
     /// 获取用户的发送和接收消息
     /// 支持分别指定发送消息和接收消息的序列号范围

@@ -672,12 +672,12 @@ impl ChatService for ChatRpcService {
     ) -> Result<tonic::Response<ForwardMessageResponse>, tonic::Status> {
         let req = request.into_inner();
         debug!(
-            "转发消息请求: user_id={}, original_message_id={}, targets={:?}/{:?}",
-            req.user_id, req.original_message_id, req.target_user_ids, req.target_group_ids
+            "转发消息请求: user_id={}, message_ids={:?}, targets={:?}/{:?}",
+            req.user_id, req.message_ids, req.target_user_ids, req.target_group_ids
         );
 
         // 验证参数
-        if req.user_id.is_empty() || req.original_message_id.is_empty() {
+        if req.user_id.is_empty() || req.message_ids.is_empty() {
             return Err(tonic::Status::invalid_argument(
                 "用户ID和原始消息ID不能为空",
             ));
@@ -687,109 +687,115 @@ impl ChatService for ChatRpcService {
             return Err(tonic::Status::invalid_argument("必须指定转发目标"));
         }
 
-        // 获取原始消息
-        let original_msg = match self.msg_storage.get_message(&req.original_message_id).await {
-            Ok(Some(msg)) => msg,
-            Ok(None) => return Err(tonic::Status::not_found("原始消息不存在")),
-            Err(e) => {
-                error!("获取原始消息失败: {}", e);
-                return Err(tonic::Status::internal("获取原始消息失败"));
-            }
+        // 获取原始消息列表
+        let original_messages = match self.msg_storage.get_messages(&req.message_ids).await {
+            Ok(messages) => messages,
+            Err(e) => return Err(tonic::Status::internal(format!("获取原始消息失败: {}", e))),
         };
+
+        if original_messages.is_empty() {
+            return Err(tonic::Status::not_found("未找到要转发的消息"));
+        }
 
         let mut forwarded_message_ids = Vec::new();
         let mut success_count = 0;
 
         // 转发给单聊用户
         for target_user_id in &req.target_user_ids {
-            let forward_msg = Msg {
-                send_id: req.user_id.clone(),
-                receiver_id: target_user_id.clone(),
-                local_id: format!("forward_{}", nanoid::nanoid!()),
-                server_id: nanoid::nanoid!(),
-                create_time: chrono::Utc::now().timestamp_millis(),
-                send_time: chrono::Utc::now().timestamp_millis(),
-                seq: 0,
-                send_seq: 0,
-                msg_type: MsgType::SingleMsg as i32,
-                content_type: original_msg.content_type,
-                content: original_msg.content.clone(),
-                is_read: false,
-                group_id: String::new(),
-                platform: original_msg.platform,
-                avatar: String::new(),
-                nickname: String::new(),
-                related_msg_id: None,
-                is_revoked: false,
-                revoke_time: 0,
-                revoked_by: String::new(),
-            };
+            // 为每条原始消息创建转发消息
+            for original_msg in &original_messages {
+                let forward_msg = Msg {
+                    send_id: req.user_id.clone(),
+                    receiver_id: target_user_id.clone(),
+                    local_id: format!("forward_{}", nanoid::nanoid!()),
+                    server_id: nanoid::nanoid!(),
+                    create_time: chrono::Utc::now().timestamp_millis(),
+                    send_time: chrono::Utc::now().timestamp_millis(),
+                    seq: 0,
+                    send_seq: 0,
+                    msg_type: MsgType::SingleMsg as i32,
+                    content_type: original_msg.content_type,
+                    content: original_msg.content.clone(),
+                    is_read: false,
+                    group_id: String::new(),
+                    platform: original_msg.platform,
+                    avatar: String::new(),
+                    nickname: String::new(),
+                    related_msg_id: None,
+                    is_revoked: false,
+                    revoke_time: 0,
+                    revoked_by: String::new(),
+                };
 
-            // 发送转发消息到Kafka
-            let payload = serde_json::to_string(&forward_msg).unwrap();
-            let record: FutureRecord<'_, (), String> =
-                FutureRecord::to(&self.topic).payload(&payload);
+                // 发送转发消息到Kafka
+                let payload = serde_json::to_string(&forward_msg).unwrap();
+                let record: FutureRecord<'_, (), String> =
+                    FutureRecord::to(&self.topic).payload(&payload);
 
-            match self.kafka.send(record, Duration::from_secs(10)).await {
-                Ok(_) => {
-                    forwarded_message_ids.push(forward_msg.server_id.clone());
-                    success_count += 1;
-                    debug!(
-                        "转发消息成功: {} -> {}",
-                        req.original_message_id, forward_msg.server_id
-                    );
-                }
-                Err((kafka_error, _)) => {
-                    error!("转发消息到Kafka失败: {}", kafka_error);
+                match self.kafka.send(record, Duration::from_secs(10)).await {
+                    Ok(_) => {
+                        forwarded_message_ids.push(forward_msg.server_id.clone());
+                        success_count += 1;
+                        debug!(
+                            "转发消息成功: {} -> {}",
+                            original_msg.server_id, forward_msg.server_id
+                        );
+                    }
+                    Err((kafka_error, _)) => {
+                        error!("转发消息到Kafka失败: {}", kafka_error);
+                    }
                 }
             }
         }
 
         // 转发给群组
         for target_group_id in &req.target_group_ids {
-            let forward_msg = Msg {
-                send_id: req.user_id.clone(),
-                receiver_id: target_group_id.clone(),
-                local_id: format!("forward_{}", nanoid::nanoid!()),
-                server_id: nanoid::nanoid!(),
-                create_time: chrono::Utc::now().timestamp_millis(),
-                send_time: chrono::Utc::now().timestamp_millis(),
-                seq: 0,
-                send_seq: 0,
-                msg_type: MsgType::GroupMsg as i32,
-                content_type: original_msg.content_type,
-                content: original_msg.content.clone(),
-                is_read: false,
-                group_id: target_group_id.clone(),
-                platform: original_msg.platform,
-                avatar: String::new(),
-                nickname: String::new(),
-                related_msg_id: None,
-                is_revoked: false,
-                revoke_time: 0,
-                revoked_by: String::new(),
-            };
+            // 为每条原始消息创建转发消息
+            for original_msg in &original_messages {
+                let forward_msg = Msg {
+                    send_id: req.user_id.clone(),
+                    receiver_id: target_group_id.clone(),
+                    local_id: String::new(),
+                    server_id: nanoid::nanoid!(),
+                    create_time: chrono::Utc::now().timestamp_millis(),
+                    send_time: chrono::Utc::now().timestamp_millis(),
+                    seq: 0,
+                    send_seq: 0,
+                    msg_type: MsgType::GroupMsg as i32,
+                    content_type: original_msg.content_type,
+                    content: original_msg.content.clone(),
+                    is_read: false,
+                    group_id: target_group_id.clone(),
+                    platform: original_msg.platform,
+                    avatar: String::new(),
+                    nickname: String::new(),
+                    related_msg_id: None,
+                    is_revoked: false,
+                    revoke_time: 0,
+                    revoked_by: String::new(),
+                };
 
-            // 发送转发消息到Kafka
-            let payload = serde_json::to_string(&forward_msg).unwrap();
-            let record: FutureRecord<'_, (), String> =
-                FutureRecord::to(&self.topic).payload(&payload);
+                // 发送转发消息到Kafka
+                let payload = serde_json::to_string(&forward_msg).unwrap();
+                let record: FutureRecord<'_, (), String> =
+                    FutureRecord::to(&self.topic).payload(&payload);
 
-            match self
-                .kafka
-                .send(record, std::time::Duration::from_secs(10))
-                .await
-            {
-                Ok(_) => {
-                    forwarded_message_ids.push(forward_msg.server_id.clone());
-                    success_count += 1;
-                    debug!(
-                        "转发群组消息成功: {} -> {}",
-                        req.original_message_id, forward_msg.server_id
-                    );
-                }
-                Err((kafka_error, _)) => {
-                    error!("转发群组消息到Kafka失败: {}", kafka_error);
+                match self
+                    .kafka
+                    .send(record, std::time::Duration::from_secs(10))
+                    .await
+                {
+                    Ok(_) => {
+                        forwarded_message_ids.push(forward_msg.server_id.clone());
+                        success_count += 1;
+                        debug!(
+                            "转发群组消息成功: {} -> {}",
+                            original_msg.server_id, forward_msg.server_id
+                        );
+                    }
+                    Err((kafka_error, _)) => {
+                        error!("转发群组消息到Kafka失败: {}", kafka_error);
+                    }
                 }
             }
         }
