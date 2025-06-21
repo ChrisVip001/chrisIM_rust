@@ -141,7 +141,6 @@ impl MsgRecBoxRepo for MsgBox {
         // 查询条件：消息ID匹配且发送者是当前用户
         let query = doc! {
             "server_id": message_id,
-            "send_id": user_id
         };
         
         // 更新字段：标记为已撤回，设置撤回时间和撤回者

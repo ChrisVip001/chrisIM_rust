@@ -20,7 +20,7 @@ use common::proto::message::{
     ForwardMessageResponse, GetConversationsRequest, GetConversationsResponse,
     GetDbMessagesRequest, GetMessageHistoryResponse, MarkConversationAsReadRequest,
     MarkMessagesAsReadRequest, MarkMessagesAsReadResponse, Msg, MsgType, RevokeMessageRequest,
-    RevokeMessageResponse, SendMsgRequest,
+    RevokeMessageResponse, SendMsgRequest, ContentType,
 };
 use common::types::msg::MsgType2;
 use common::Error;
@@ -553,9 +553,28 @@ impl ChatService for ChatRpcService {
                 {
                     Ok(()) => {
                         debug!("消息撤回成功: {}", req.message_id);
+                        
+                        // 发送一条撤回通知消息到Kafka，让其他用户知道消息被撤回了
+                        let mut revoke_notification = msg.clone(); // 直接克隆原消息
+                        // 更新撤回相关字段
+                        revoke_notification.is_revoked = true;
+                        revoke_notification.revoke_time = now;
+                        revoke_notification.revoked_by = req.user_id.clone();
 
-                        // TODO: 发送撤回通知给相关用户
-                        // 这里可以发送一条撤回通知消息到Kafka，让其他用户知道消息被撤回了
+                        // 将撤回后的消息发送到Kafka
+                        let revoke_payload = serde_json::to_string(&revoke_notification).unwrap();
+                        let revoke_record: FutureRecord<'_, (), String> = 
+                            FutureRecord::to(&self.topic).payload(&revoke_payload);
+
+                        match self.kafka.send(revoke_record, Duration::from_secs(10)).await {
+                            Ok(_) => {
+                                debug!("撤回消息状态已发送到Kafka: {}", revoke_notification.server_id);
+                            }
+                            Err((kafka_error, _)) => {
+                                error!("发送撤回消息状态到Kafka失败: {}", kafka_error);
+                                // 即使通知发送失败，撤回操作也已经成功，不应该返回错误
+                            }
+                        }
 
                         Ok(tonic::Response::new(RevokeMessageResponse {
                             success: true,

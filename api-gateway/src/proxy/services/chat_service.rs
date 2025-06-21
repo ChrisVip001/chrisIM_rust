@@ -101,6 +101,8 @@ impl ChatServiceHandler {
         
         // 提取可选参数
         let related_msg_id = get_optional_string(&body, "relatedMsgId", Some("related_msg_id"));
+        let avatar = get_optional_string(&body, "avatar", Some("avatar"));
+        let nickname = get_optional_string(&body, "nickname", Some("nickname"));
 
         if content.trim().is_empty() {
             return Ok(error_response("消息内容不能为空", StatusCode::BAD_REQUEST));
@@ -133,8 +135,8 @@ impl ChatServiceHandler {
             is_read: false,
             group_id: if msg_type == 1 { receiver_id.clone() } else { String::new() },
             platform,
-            avatar: String::new(),   // 可以从用户信息中获取
-            nickname: String::new(), // 可以从用户信息中获取
+            avatar: avatar.map_or_else(|| String::new(), |s| s),
+            nickname: nickname.map_or_else(|| String::new(), |s| s),
             related_msg_id,
             send_seq: 0,
             is_revoked: false,
