@@ -6,10 +6,8 @@ use crate::repository::group_repository::GroupRepository;
 use crate::repository::group_settings_repository::GroupSettingsRepository;
 use crate::repository::member_repository::MemberRepository;
 use crate::repository::member_settings_repository::MemberSettingsRepository;
-use crate::model::member::Member;
 use common::config::ConfigLoader;
 use common::grpc_client::base::get_rpc_client;
-use common::proto::friend::friend_service_client::FriendServiceClient;
 use common::proto::group::group_service_server::GroupService;
 use common::proto::group::{
     AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse,
@@ -33,6 +31,9 @@ use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, debug};
 use cache::Cache;
+use common::proto::message::chat_service_client::ChatServiceClient;
+use common::proto::message::{ContentType, Msg, MsgType, PlatformType, SendMsgRequest};
+use common::proto::message::msg_service_client::MsgServiceClient;
 
 pub struct GroupServiceImpl {
     group_repository: GroupRepository,
@@ -43,6 +44,7 @@ pub struct GroupServiceImpl {
     mutes_repository: GroupMutesRepository,
     member_settings_repository: MemberSettingsRepository,
     user_service_client: UserServiceClient<LbWithServiceDiscovery>,
+    chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
     cache: Arc<dyn Cache>,
 }
 
@@ -50,6 +52,7 @@ impl GroupServiceImpl {
     pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
         let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config, "user".to_string()).await?;
+        let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&config, "chat".to_string()).await?;
         // 初始化Redis缓存连接
         // 用于缓存用户状态和序列号信息
         let cache = cache::cache(&config).await;
@@ -62,6 +65,7 @@ impl GroupServiceImpl {
             mutes_repository: GroupMutesRepository::new(pool.clone()),
             member_settings_repository: MemberSettingsRepository::new(pool.clone()),
             user_service_client,
+            chat_service_client,
             cache: cache
         })
     }
@@ -149,6 +153,34 @@ impl GroupServiceImpl {
             }
         }
     }
+    
+    // 创建群聊消息
+    async fn send_create_group_message(&self, owner_id: &str, group_id: &str, message: &str) {
+        // 创建好友申请请求消息
+        let create_group_msg = Msg {
+            send_id: owner_id.to_string(),
+            msg_type: MsgType::GroupMsg as i32,
+            content_type: ContentType::Text as i32,
+            content: message.as_bytes().to_vec(),
+            group_id: group_id.to_string(),
+            ..Default::default()
+        };
+        // 创建SendMsgRequest
+        let request = SendMsgRequest {
+            message: Some(create_group_msg),
+        };
+
+        // 调用chat服务发送消息
+        let mut chat_client = self.chat_service_client.clone();
+        match chat_client.send_msg(request).await {
+            Ok(response) => {
+                info!("创建群聊提示消息发送成功: {:?}", response.into_inner());
+            }
+            Err(e) => {
+                error!("创建群聊提示消息发送失败: {:?}", e);
+            }
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -163,7 +195,7 @@ impl GroupService for GroupServiceImpl {
 
         match self
             .group_repository
-            .create_group(req.name, req.description, req.avatar_url, owner_id.clone())
+            .create_group(req.name.clone(), req.description, req.avatar_url, owner_id.clone())
             .await
         {
             Ok(group) => {
@@ -245,7 +277,8 @@ impl GroupService for GroupServiceImpl {
 
                 info!("创建群组成功: {:?}, 初始成员数: {}", group, member_count);
                 
-              
+                self.send_create_group_message(&owner_id, &group.id, format!("{}群组创建成功",req.name.clone()).as_str()).await;
+                
                 Ok(Response::new(GroupResponse {
                     group: Some(group.to_proto(member_count)),
                 }))
