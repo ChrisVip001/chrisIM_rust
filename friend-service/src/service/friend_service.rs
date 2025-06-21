@@ -319,7 +319,7 @@ impl FriendService for FriendServiceImpl {
             Ok(friendship) => {
                 info!("创建好友请求成功: {:?}", friendship);
                 //发送一条提示消息
-                let _ = self.send_friendship_flag(&user_id, &friend_id, "已发送好友请求");
+                self.send_friendship_flag(&user_id, &friend_id, "已发送好友请求").await;
                 Ok(Response::new(FriendshipResponse {
                     friendship: Some(friendship.to_proto()),
                 }))
@@ -354,7 +354,7 @@ impl FriendService for FriendServiceImpl {
             Ok(friendship) => {
                 info!("接受好友请求成功，已建立双向好友关系: {:?}", friendship);
                 // 发送一条消息给新好友
-                let _ = self.send_friendship_message(friendship.clone(), &friendship.friend_id);
+                self.send_friendship_message(friendship.clone(), &friendship.friend_id).await;
                 // 缓存好友关系
                 if let Err(e) = self.cache.save_bidirectional_friendship(&friendship.user_id, &friendship.friend_id).await {
                     error!("缓存好友关系失败: {}", e);
