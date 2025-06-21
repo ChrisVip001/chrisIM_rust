@@ -548,7 +548,7 @@ impl ChatService for ChatRpcService {
                 // 执行撤回操作
                 match self
                     .msg_storage
-                    .revoke_message(&req.user_id, &req.message_id)
+                    .revoke_message(&req.message_id, &req.user_id)
                     .await
                 {
                     Ok(()) => {
