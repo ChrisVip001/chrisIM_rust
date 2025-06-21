@@ -238,6 +238,8 @@ pub trait Cache: Sync + Send + Debug {
     /// # 返回值
     /// * `bool` - 如果目标用户被拉黑则返回true，否则返回false
     async fn is_user_in_blacklist(&self, user_id: &str, target_user_id: &str) -> Result<bool, Error>;
+
+    // 双向检查黑名单
     
     /// 获取用户的黑名单列表
     /// 
@@ -250,6 +252,17 @@ pub trait Cache: Sync + Send + Debug {
     /// * `Vec<String>` - 被拉黑的用户ID列表
     async fn get_user_blacklist(&self, user_id: &str) -> Result<Vec<String>, Error>;
     
+    /// 双向检查黑名单关系
+    /// 
+    /// 检查两个用户之间是否存在任意方向的黑名单关系
+    /// 
+    /// # 参数
+    /// * `user_id1` - 第一个用户的ID
+    /// * `user_id2` - 第二个用户的ID
+    /// 
+    /// # 返回值
+    /// * `BlacklistCheckResult` - 黑名单检查结果，包含是否存在黑名单关系及关系方向
+    async fn check_bidirectional_blacklist(&self, user_id1: &str, user_id2: &str) -> Result<BlacklistCheckResult, Error>;
 }
 
 /// 用户在线状态信息
@@ -274,6 +287,29 @@ impl UserOnlineStatus {
             is_online,
             online_platforms,
             platform_count,
+        }
+    }
+}
+
+/// 黑名单检查结果
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlacklistCheckResult {
+    /// 是否存在黑名单关系
+    pub has_blacklist: bool,
+    /// 用户1是否将用户2加入黑名单
+    pub user1_blocked_user2: bool,
+    /// 用户2是否将用户1加入黑名单
+    pub user2_blocked_user1: bool,
+}
+
+impl BlacklistCheckResult {
+    /// 创建新的黑名单检查结果
+    pub fn new(user1_blocked_user2: bool, user2_blocked_user1: bool) -> Self {
+        let has_blacklist = user1_blocked_user2 || user2_blocked_user1;
+        Self {
+            has_blacklist,
+            user1_blocked_user2,
+            user2_blocked_user1,
         }
     }
 }

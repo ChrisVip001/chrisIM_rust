@@ -907,6 +907,17 @@ impl Cache for RedisCache {
         
         Ok(blacklist)
     }
+    
+    async fn check_bidirectional_blacklist(&self, user_id1: &str, user_id2: &str) -> Result<crate::BlacklistCheckResult, Error> {
+        // 检查用户1是否将用户2加入黑名单
+        let user1_blocked_user2 = self.is_user_in_blacklist(user_id1, user_id2).await?;
+        
+        // 检查用户2是否将用户1加入黑名单
+        let user2_blocked_user1 = self.is_user_in_blacklist(user_id2, user_id1).await?;
+        
+        // 创建并返回黑名单检查结果
+        Ok(crate::BlacklistCheckResult::new(user1_blocked_user2, user2_blocked_user1))
+    }
 }
 
 /// 测试模块
