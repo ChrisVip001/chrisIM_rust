@@ -272,4 +272,30 @@ impl MemberRepository {
             None => Ok((false, None)),
         }
     }
+
+    // 移除全部群组成员
+    pub async fn delete_group_members(
+        &self,
+        group_id: String,
+        user_id: String,
+    ) -> Result<bool> {
+        // 验证移除权限
+        let member_role = self.get_member_role(group_id.clone(), user_id.clone()).await?;
+        if member_role != 2 {
+            return Err(anyhow::anyhow!("用户不是群主，无法移除成员"));
+        }
+
+        let rows_affected = sqlx::query!(
+            r#"
+            DELETE FROM group_members
+            WHERE group_id = $1 
+            "#,
+            group_id,
+        )
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
 }
