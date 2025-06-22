@@ -133,6 +133,13 @@ impl MsgRecBoxRepo for MsgBox {
         Ok(())
     }
 
+    /// 删除群组消息
+    async fn delete_group_messages(&self, group_id: &str) -> Result<i64, Error> {
+        let query = doc! {"group_id": group_id};
+        let result = self.mb.delete_many(query).await?;
+        Ok(result.deleted_count as i64)
+    }
+
     /// 撤回消息
     /// 将指定消息标记为已撤回状态，并设置撤回时间和撤回者
     async fn revoke_message(&self, message_id: &str, user_id: &str) -> Result<(), Error> {

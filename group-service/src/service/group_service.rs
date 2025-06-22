@@ -35,6 +35,7 @@ use cache::Cache;
 use common::proto::message::chat_service_client::ChatServiceClient;
 use common::proto::message::{ContentType, Msg, MsgType, PlatformType, SendMsgRequest};
 use common::proto::message::msg_service_client::MsgServiceClient;
+use msg_storage::{MsgStoreRepo, MsgRecBoxRepo};
 
 pub struct GroupServiceImpl {
     group_repository: GroupRepository,
@@ -46,6 +47,7 @@ pub struct GroupServiceImpl {
     member_settings_repository: MemberSettingsRepository,
     user_service_client: UserServiceClient<LbWithServiceDiscovery>,
     chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
+    msg_rec_box: Arc<dyn MsgRecBoxRepo>,
     cache: Arc<dyn Cache>,
 }
 
@@ -54,6 +56,10 @@ impl GroupServiceImpl {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
         let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config, "user".to_string()).await?;
         let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&config, "chat".to_string()).await?;
+        
+        // 初始化消息存储
+        let msg_rec_box = msg_storage::msg_rec_box_repo(&config).await?;
+        
         // 初始化Redis缓存连接
         // 用于缓存用户状态和序列号信息
         let cache = cache::cache(&config).await;
@@ -67,6 +73,7 @@ impl GroupServiceImpl {
             member_settings_repository: MemberSettingsRepository::new(pool.clone()),
             user_service_client,
             chat_service_client,
+            msg_rec_box,
             cache: cache
         })
     }
@@ -407,8 +414,19 @@ impl GroupService for GroupServiceImpl {
                     return Err(Status::permission_denied("只有群主可以解散群组"));
                 }
                 self.send_group_dismiss_message(&user_id, &group_id).await;
-                //休眠0.5秒
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // 删除群组消息记录
+                info!("开始删除群组消息记录: {}", group_id);
+                // 删除MongoDB中的群组消息
+                match self.msg_rec_box.delete_group_messages(&group_id).await {
+                    Ok(deleted_count) => {
+                        info!("成功删除MongoDB中的群组消息: {} 条", deleted_count);
+                    }
+                    Err(e) => {
+                        error!("删除MongoDB中的群组消息失败: {}", e);
+                    }
+                }
+                //休眠0.3秒
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             }
             Err(e) => {
                 error!("获取群组信息失败: {}", e);

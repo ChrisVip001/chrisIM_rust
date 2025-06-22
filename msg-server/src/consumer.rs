@@ -688,10 +688,17 @@ impl ConsumerService {
         });
 
         // 任务2：保存消息到MongoDB
+        // 检查消息类型，群解散消息不保存到MongoDB
+        let should_save_to_mongodb = message.msg_type != MsgType::GroupDismiss as i32;
+        
         let msg_rec_box_task = tokio::spawn(async move {
-            if let Err(e) = msg_box.save_group_msg(message, members).await {
-                tracing::error!("保存消息到MongoDB失败: {}", e);
-                return Err(e);
+            if should_save_to_mongodb {
+                if let Err(e) = msg_box.save_group_msg(message, members).await {
+                    tracing::error!("保存消息到MongoDB失败: {}", e);
+                    return Err(e);
+                }
+            } else {
+                tracing::info!("群解散消息不保存到MongoDB: server_id={}", message.server_id);
             }
             Ok(())
         });

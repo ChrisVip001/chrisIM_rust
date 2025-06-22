@@ -12,7 +12,7 @@ pub mod seq;
 
 use std::sync::Arc;
 use ::sqlx::PgPool;
-use message::{MsgRecBoxCleaner, MsgRecBoxRepo, MsgStoreRepo};
+pub use message::{MsgRecBoxCleaner, MsgRecBoxRepo, MsgStoreRepo};
 
 /// 数据库仓库结构体，用于管理消息存储和序列号相关的数据库操作
 /// 包含消息存储仓库和序列号仓库的实例

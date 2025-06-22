@@ -44,6 +44,10 @@ pub trait MsgRecBoxRepo: Sync + Send + Debug {
     /// 根据用户ID和消息序列号批量删除消息
     async fn delete_messages(&self, user_id: &str, msg_seq: Vec<i64>) -> Result<(), Error>;
 
+    /// 删除群组消息
+    /// 从MongoDB中删除指定群组的所有消息
+    async fn delete_group_messages(&self, group_id: &str) -> Result<i64, Error>;
+
     /// 撤回消息
     /// 将指定消息标记为已撤回状态，并设置撤回时间和撤回者
     async fn revoke_message(&self, message_id: &str, user_id: &str) -> Result<(), Error>;
