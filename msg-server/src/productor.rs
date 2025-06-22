@@ -292,10 +292,6 @@ impl ChatRpcService {
                 let is_blocked = response.into_inner().is_blocked;
                 if is_blocked {
                     debug!("用户 {} 已被 {} 拉黑（RPC确认），无法发送消息", send_id, receiver_id);
-                    // 更新缓存
-                    if let Err(e) = self.cache.add_user_to_blacklist(receiver_id, send_id).await {
-                        debug!("更新拉黑缓存失败: {}", e);
-                    }
                     return Ok(false);
                 }
             }
@@ -315,10 +311,6 @@ impl ChatRpcService {
                 let friendship_status = response.into_inner().status;
                 if friendship_status == FriendRelationType::IsFriend as i32 {
                     debug!("用户 {} 和 {} 是好友关系（RPC确认）", send_id, receiver_id);
-                    // 更新缓存
-                    if let Err(e) = self.cache.save_bidirectional_friendship(send_id, receiver_id).await {
-                        debug!("更新好友关系缓存失败: {}", e);
-                    }
                     Ok(true)
                 } else {
                     debug!("用户 {} 和 {} 不是好友关系，好友状态: {}", send_id, receiver_id, friendship_status);
@@ -369,17 +361,7 @@ impl ChatRpcService {
         }).await {
             Ok(response) => {
                 let membership = response.into_inner();
-                if membership.is_member {
-                    debug!("用户 {} 是群组 {} 的成员（RPC确认）", user_id, group_id);
-                    // 更新缓存 - 将用户添加到群组成员列表
-                    if let Err(e) = self.cache.add_group_member_id(user_id, group_id).await {
-                        debug!("更新群组成员缓存失败: {}", e);
-                    }
-                    Ok(true)
-                } else {
-                    debug!("用户 {} 不是群组 {} 的成员（RPC确认）", user_id, group_id);
-                    Ok(false)
-                }
+                Ok(membership.is_member)
             }
             Err(e) => {
                 error!("检查群组成员身份失败: {}", e);
@@ -422,10 +404,6 @@ impl ChatRpcService {
                 let is_blocked = response.into_inner().is_blocked;
                 if is_blocked {
                     debug!("用户 {} 已被 {} 拉黑（RPC确认）", target_user_id, user_id);
-                    // 更新缓存
-                    if let Err(e) = self.cache.add_user_to_blacklist(user_id, target_user_id).await {
-                        debug!("更新拉黑缓存失败: {}", e);
-                    }
                 }
                 Ok(is_blocked)
             }
@@ -480,17 +458,17 @@ impl ChatRpcService {
             }
 
             // 群组相关消息需要校验群组成员身份
-            MsgType::GroupInvitation | MsgType::GroupInviteNew | MsgType::GroupUpdate => {
-                let group_id = if !msg.group_id.is_empty() && msg.group_id != ""{
-                    &msg.group_id
-                } else {
-                    &msg.receiver_id
-                };
-                
-                if !self.check_group_membership(&msg.send_id, group_id).await? {
-                    return Err(tonic::Status::permission_denied("无法发送消息：用户不是群组成员"));
-                }
-            }
+            // MsgType::GroupInvitation | MsgType::GroupInviteNew | MsgType::GroupUpdate => {
+            //     let group_id = if !msg.group_id.is_empty() && msg.group_id != ""{
+            //         &msg.group_id
+            //     } else {
+            //         &msg.receiver_id
+            //     };
+            //     
+            //     if !self.check_group_membership(&msg.send_id, group_id).await? {
+            //         return Err(tonic::Status::permission_denied("无法发送消息：用户不是群组成员"));
+            //     }
+            // }
 
             // 通话相关消息需要校验好友关系
             MsgType::SingleCallInvite | MsgType::RejectSingleCall | MsgType::AgreeSingleCall |
