@@ -176,9 +176,65 @@ impl MsgRecBoxRepo for MsgBox {
     }
     
     /// 根据消息ID获取消息（多条）
+    /// 在写扩散模型中，会对重复消息进行去重，只返回发送者副本
     async fn get_messages(&self, message_ids: &Vec<String>) -> Result<Vec<Msg>, Error> {
-        let query = doc! {"server_id": {"$in": message_ids}};
-        let mut cursor = self.mb.find(query).await?;
+        // 使用聚合管道进行去重
+        let pipeline = vec![
+            // 匹配指定的消息ID
+            doc! {
+                "$match": {
+                    "server_id": {"$in": message_ids}
+                }
+            },
+            // 按server_id分组，优先选择发送者副本（send_seq > 0）
+            doc! {
+                "$group": {
+                    "_id": "$server_id",
+                    "message": {
+                        "$first": {
+                            "$cond": {
+                                "if": {"$gt": ["$send_seq", 0]}, // 发送者副本的send_seq > 0
+                                "then": "$$ROOT",
+                                "else": "$$ROOT"
+                            }
+                        }
+                    },
+                    // 备选方案：如果没有发送者副本，选择第一个
+                    "all_messages": {"$push": "$$ROOT"}
+                }
+            },
+            // 替换根文档
+            doc! {
+                "$replaceRoot": {
+                    "newRoot": {
+                        "$cond": {
+                            "if": {
+                                "$anyElementTrue": {
+                                    "$map": {
+                                        "input": "$all_messages",
+                                        "in": {"$gt": ["$$this.send_seq", 0]}
+                                    }
+                                }
+                            },
+                            "then": {
+                                "$arrayElemAt": [
+                                    {
+                                        "$filter": {
+                                            "input": "$all_messages",
+                                            "cond": {"$gt": ["$$this.send_seq", 0]}
+                                        }
+                                    },
+                                    0
+                                ]
+                            },
+                            "else": {"$arrayElemAt": ["$all_messages", 0]}
+                        }
+                    }
+                }
+            }
+        ];
+        
+        let mut cursor = self.mb.aggregate(pipeline).await?;
         let mut messages = Vec::new();
         while let Some(result) = cursor.next().await {
             messages.push(Msg::try_from(result?)?);
