@@ -610,6 +610,14 @@ impl GroupService for GroupServiceImpl {
         if added_count > 0 {
             //删除缓存
             self.cache.del_group_members(&group_id).await?;
+            
+            // 发送添加成员消息通知
+            let message = if added_count == 1 {
+                "新成员加入群聊".to_string()
+            } else {
+                format!("{} 位新成员加入群聊", added_count)
+            };
+            self.send_create_group_message(&added_by_id, &group_id, &message).await;
         }
         
         // 如果至少有一个成员添加成功，返回成功
