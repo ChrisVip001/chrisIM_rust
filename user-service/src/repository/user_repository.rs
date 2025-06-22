@@ -522,7 +522,7 @@ impl UserRepository {
             // 用户名做唯一校验
             if let Ok(existing_user) = self.get_user_by_username(&username).await {
                 if existing_user.id != id {
-                    return Err(Error::BadRequest(format!("custom_id {} 已被使用", username)));
+                    return Err(Error::BadRequest(format!("ID {} 已被使用", username)));
                 }
             }
             
@@ -570,7 +570,7 @@ impl UserRepository {
             // 用户名做唯一校验
             if let Ok(existing_user) = self.get_user_by_custom_id(&custom_id).await {
                 if existing_user.id != id {
-                    return Err(Error::BadRequest(format!("custom_id {} 已被使用", custom_id)));
+                    return Err(Error::BadRequest(format!("ID {} 已被使用", custom_id)));
                 }
             }
             
