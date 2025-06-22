@@ -328,6 +328,51 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// 根据用户名查询用户
+    pub async fn get_user_by_custom_id(&self, custom_id: &str) -> Result<User> {
+        let row = sqlx::query!(
+            r#"
+            SELECT id, username, email, password, nickname, avatar_url, created_at, updated_at,
+            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id, sign
+            FROM users
+            WHERE custom_id = $1
+            "#,
+            custom_id
+        )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|err| {
+                if let sqlx::Error::RowNotFound = &err {
+                    Error::NotFound(format!("用户未找到: {}", custom_id))
+                } else {
+                    error!("查询用户失败: {}", err);
+                    Error::Database(err)
+                }
+            })?;
+
+        let user = User {
+            id: row.id,
+            username: row.username.unwrap_or_default(),
+            email: row.email,
+            password: row.password,
+            nickname: row.nickname,
+            avatar_url: row.avatar_url,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            phone: row.phone,
+            address: row.address,
+            head_image: row.head_image,
+            head_image_thumb: row.head_image_thumb,
+            sex: row.sex,
+            user_stat: row.user_stat.unwrap_or_default() as i32,
+            tenant_id: row.tenant_id.unwrap_or_default(),
+            last_login_time: row.last_login_time,
+            custom_id: row.custom_id,
+            sign: row.sign,
+        };
+        Ok(user)
+    }
+    
     /// 根据用户名或手机号查询用户
     pub async fn get_user_by_username_phone(&self, username: &str) -> Result<User> {
         let row = sqlx::query!(
@@ -474,6 +519,13 @@ impl UserRepository {
         let mut builder = QueryBuilder::new(" UPDATE users SET ");
         let mut first = true;
         if let Some(username) = data.username {
+            // 用户名做唯一校验
+            if let Ok(existing_user) = self.get_user_by_username(&username).await {
+                if existing_user.id != id {
+                    return Err(Error::BadRequest(format!("custom_id {} 已被使用", username)));
+                }
+            }
+            
             if !first { builder.push(","); }
             builder.push(" username = COALESCE(" ).push_bind(username).push(", username) ");
             first = false;
@@ -514,6 +566,14 @@ impl UserRepository {
             first = false;
         }
         if let Some(custom_id) = data.custom_id {
+            // custom_id做唯一校验
+            // 用户名做唯一校验
+            if let Ok(existing_user) = self.get_user_by_custom_id(&custom_id).await {
+                if existing_user.id != id {
+                    return Err(Error::BadRequest(format!("custom_id {} 已被使用", custom_id)));
+                }
+            }
+            
             if !first { builder.push(","); }
             builder.push(" custom_id = COALESCE( ").push_bind(custom_id).push(", custom_id) ");
             first = false;
