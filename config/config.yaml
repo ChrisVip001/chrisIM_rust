@@ -161,7 +161,7 @@ component: all # all, api, ws, rpc, db, pusher
 # 日志配置
 log:
   level: "debug"      # 全局日志级别: trace, debug, info, warn, error
-  output: "file"      # 日志输出位置: console(控制台), file(文件，需配置rolling)
+  output: "console"      # 日志输出位置: console(控制台), file(文件，需配置rolling)
   format: "json"      # 日志格式: plain(纯文本), json(JSON格式，便于ELK等日志系统收集)
   sqlx_level: "info"  # SQL查询日志级别，控制数据库操作日志的详细程度
   rolling:
