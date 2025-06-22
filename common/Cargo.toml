@@ -40,6 +40,7 @@ base64 = "0.21.5"
 
 # 链路追踪和日志
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 # 分布式链路追踪依赖，可选
 opentelemetry = { version = "0.20", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.13", features = ["http-proto", "tonic"] }

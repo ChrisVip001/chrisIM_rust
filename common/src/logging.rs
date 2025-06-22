@@ -1,11 +1,11 @@
 use anyhow::Result;
-use tracing::{info, Level};
+use tracing::{info, warn, Level};
 use tracing_subscriber::{fmt, EnvFilter,fmt::time::FormatTime,fmt::format::Writer};
 use std::env;
 use std::path::Path;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs::{self};
 use chrono::Local;
+use tracing_appender::{non_blocking, rolling};
 // 新增导入，用于链路追踪
 #[cfg(feature = "telemetry")]
 use opentelemetry::global;
@@ -205,12 +205,17 @@ fn ensure_log_dir(dir_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// 获取日志文件路径
-fn get_log_file_path(service_name: &str) -> String {
-    let date = Local::now().format("%Y-%m-%d").to_string();
-    
-    // 首先尝试从环境变量获取日志目录
-    let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| {
+/// 获取日志目录路径（统一的目录选择逻辑）
+fn get_log_directory(rolling_config: Option<&crate::configs::LogRollingConfig>) -> String {
+    // 优先级: 环境变量 LOG_DIR > 滚动配置中的目录 > 环境判断默认值
+    std::env::var("LOG_DIR").unwrap_or_else(|_| {
+        // 如果有滚动配置且指定了目录，优先使用
+        if let Some(config) = rolling_config {
+            if let Some(dir) = &config.directory {
+                return dir.clone();
+            }
+        }
+        
         // 检查是否在生产环境
         if let Ok(env) = std::env::var("ENVIRONMENT") {
             if env == "production" || env == "staging" {
@@ -224,15 +229,141 @@ fn get_log_file_path(service_name: &str) -> String {
             // 默认使用相对路径
             "logs".to_string()
         }
-    });
-    
+    })
+}
+
+/// 创建日志滚动写入器
+fn create_rolling_appender(
+    rolling_config: &crate::configs::LogRollingConfig,
+    service_name: &str,
+) -> Result<(tracing_appender::non_blocking::NonBlocking, tracing_appender::non_blocking::WorkerGuard)> {
+    // 使用统一的目录选择逻辑
+    let directory = get_log_directory(Some(rolling_config));
+
+    let filename_prefix = if rolling_config.filename_prefix().is_empty() {
+        service_name.to_string()
+    } else {
+        format!("{}-{}", rolling_config.filename_prefix(), service_name)
+    };
+
     // 确保日志目录存在
-    if let Err(e) = ensure_log_dir(&log_dir) {
-        eprintln!("创建日志目录失败: {}", e);
+    ensure_log_dir(&directory)?;
+    
+    // 根据配置的滚动策略创建appender（默认使用本地时间）
+    let appender = match rolling_config.rotation_type() {
+        "daily" => create_local_time_daily_appender(&directory, &filename_prefix)?,
+        "hourly" => create_local_time_hourly_appender(&directory, &filename_prefix)?,
+        "never" => rolling::never(&directory, format!("{}.log", filename_prefix)),
+        _ => {
+            info!("未知的滚动策略: {}, 使用daily作为默认值", rolling_config.rotation_type());
+            create_local_time_daily_appender(&directory, &filename_prefix)?
+        }
+    };
+    
+    // 清理旧的日志文件，保持最大文件数限制
+    cleanup_old_log_files(&directory, &filename_prefix, rolling_config.max_files())?;
+    
+    // 创建非阻塞写入器
+    let (non_blocking, guard) = non_blocking(appender);
+    
+    info!(
+        "日志滚动配置已启用 - 目录: {}, 前缀: {}, 策略: {}, 最大文件数: {}（使用本地时间）",
+        directory,
+        filename_prefix,
+        rolling_config.rotation_type(),
+        rolling_config.max_files()
+    );
+    
+    Ok((non_blocking, guard))
+}
+
+/// 清理旧的日志文件，保持最大文件数限制
+fn cleanup_old_log_files(directory: &str, filename_prefix: &str, max_files: usize) -> Result<()> {
+    use std::collections::BTreeMap;
+    
+    let dir_path = Path::new(directory);
+    if !dir_path.exists() {
+        return Ok(());
     }
     
-    // 文件格式：logs/服务名-日期.log
-    format!("{}/{}-{}.log", log_dir, service_name, date)
+    // 读取目录中的所有文件
+    let entries = std::fs::read_dir(dir_path)?;
+    let mut log_files: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
+    
+    // 收集匹配前缀的日志文件
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        
+        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+            // 检查文件名是否匹配我们的日志文件模式
+            if file_name.starts_with(filename_prefix) {
+                // 提取时间戳部分用于排序
+                if let Some(timestamp_part) = file_name.strip_prefix(&format!("{}.", filename_prefix)) {
+                    // 只处理我们的日志文件格式（YYYY-MM-DD 或 YYYY-MM-DD-HH）
+                    if timestamp_part.len() >= 10 && timestamp_part.chars().nth(4) == Some('-') {
+                        log_files.insert(timestamp_part.to_string(), path);
+                    }
+                }
+            }
+        }
+    }
+    
+    // 如果文件数量超过限制，删除最旧的文件
+    if log_files.len() > max_files {
+        let files_to_remove = log_files.len() - max_files;
+        let mut removed_count = 0;
+        
+        // BTreeMap 是有序的，最旧的文件在前面
+        for (timestamp, file_path) in log_files.iter() {
+            if removed_count >= files_to_remove {
+                break;
+            }
+            
+            match std::fs::remove_file(file_path) {
+                Ok(()) => {
+                    info!("已删除旧日志文件: {}", file_path.display());
+                    removed_count += 1;
+                }
+                Err(e) => {
+                    warn!("删除旧日志文件失败: {} - {}", file_path.display(), e);
+                }
+            }
+        }
+        
+        if removed_count > 0 {
+            info!("清理完成，删除了 {} 个旧日志文件，保留最新的 {} 个文件", removed_count, max_files);
+        }
+    }
+    
+    Ok(())
+}
+
+/// 创建使用本地时间的每日滚动appender
+fn create_local_time_daily_appender(
+    directory: &str, 
+    filename_prefix: &str
+) -> Result<tracing_appender::rolling::RollingFileAppender> {
+    let now = Local::now();
+    let date_str = now.format("%Y-%m-%d").to_string();
+    let filename = format!("{}.{}", filename_prefix, date_str);
+    let file_path = Path::new(directory).join(&filename);
+    
+    // 使用never策略创建，因为我们已经在文件名中包含了日期
+    Ok(rolling::never(directory, filename))
+}
+
+/// 创建使用本地时间的每小时滚动appender  
+fn create_local_time_hourly_appender(
+    directory: &str,
+    filename_prefix: &str
+) -> Result<tracing_appender::rolling::RollingFileAppender> {
+    let now = Local::now();
+    let datetime_str = now.format("%Y-%m-%d-%H").to_string();
+    let filename = format!("{}.{}", filename_prefix, datetime_str);
+    
+    // 使用never策略创建，因为我们已经在文件名中包含了时间
+    Ok(rolling::never(directory, filename))
 }
 
 /// 从配置初始化日志系统
@@ -323,121 +454,145 @@ pub fn init_from_config(config: &crate::config::AppConfig,service_name: &str) ->
                 .init();
         }
         (LogFormat::Plain, LogOutput::File) => {
-            // 获取日志文件路径
-            let log_file_path = get_log_file_path(&service_name);
-            
-            // 尝试打开文件，如果失败则回退到控制台
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file_path) 
-            {
-                Ok(file) => {
-                    // 创建控制台输出层
-                    let console_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .with_ansi(true) // 控制台使用ANSI颜色
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true); // 显示行号
-                    
-                    // 创建文件输出层
-                    let file_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .with_ansi(false) // 文件中不使用ANSI颜色
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true) // 显示行号
-                        .with_writer(file);
-                    
-                    // 注册两个输出层
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(console_layer)
-                        .with(file_layer)
-                        .init();
-                    
-                    // 日志初始化信息同时显示在控制台
-                    info!("日志系统初始化成功，同时输出到控制台和文件: {}", log_file_path);
+            // 检查是否有日志滚动配置
+            if let Some(rolling_config) = config.log.rolling() {
+                // 使用滚动日志
+                match create_rolling_appender(rolling_config, service_name) {
+                    Ok((non_blocking, _guard)) => {
+                        // 创建控制台输出层
+                        let console_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .with_ansi(true)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true);
+                        
+                        // 创建滚动文件输出层
+                        let file_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .with_ansi(false)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true)
+                            .with_writer(non_blocking);
+                        
+                        tracing_subscriber::registry()
+                            .with(env_filter)
+                            .with(console_layer)
+                            .with(file_layer)
+                            .init();
+                        
+                        info!("日志系统初始化成功，使用滚动日志文件");
+                        
+                        // 将guard保存在全局变量中（这里简化处理，实际应用中可能需要更复杂的生命周期管理）
+                        std::mem::forget(_guard);
+                    }
+                    Err(e) => {
+                        eprintln!("创建滚动日志失败: {}，回退到控制台输出", e);
+                        fmt()
+                            .with_env_filter(env_filter)
+                            .with_timer(LocalTimer)
+                            .with_ansi(true)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true)
+                            .init();
+                    }
                 }
-                Err(e) => {
-                    // 无法打开日志文件，回退到控制台
-                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
-                    fmt()
-                        .with_env_filter(env_filter)
-                        .with_timer(LocalTimer)
-                        .with_ansi(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true) // 显示行号
-                        .init();
-                }
+            } else {
+                // 没有滚动配置，使用控制台输出
+                fmt()
+                    .with_env_filter(env_filter)
+                    .with_timer(LocalTimer)
+                    .with_ansi(true)
+                    .with_thread_names(true)
+                    .with_target(true)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .init();
+                
+                info!("日志系统初始化成功，使用控制台输出（未配置滚动日志）");
             }
         }
         (LogFormat::Json, LogOutput::File) => {
-            // 获取日志文件路径
-            let log_file_path = get_log_file_path(&service_name);
-            
-            // 尝试打开文件，如果失败则回退到控制台
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file_path) 
-            {
-                Ok(file) => {
-                    // 创建控制台输出层 (使用JSON格式)
-                    let console_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .json()
-                        .with_current_span(true)
-                        .with_span_list(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true); // 显示行号
-                    
-                    // 创建JSON文件输出层
-                    let json_file_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .json()
-                        .with_current_span(true)
-                        .with_span_list(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true) // 显示行号
-                        .with_writer(file);
-                    
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(console_layer)
-                        .with(json_file_layer)
-                        .init();
-                    
-                    // 日志初始化信息同时显示在控制台
-                    info!("日志系统初始化成功，同时输出到控制台(JSON格式)和文件(JSON格式): {}", log_file_path);
+            // 检查是否有日志滚动配置
+            if let Some(rolling_config) = config.log.rolling() {
+                // 使用滚动日志
+                match create_rolling_appender(rolling_config, service_name) {
+                    Ok((non_blocking, _guard)) => {
+                        // 创建控制台输出层 (使用JSON格式)
+                        let console_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .json()
+                            .with_current_span(true)
+                            .with_span_list(true)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true);
+                        
+                        // 创建JSON滚动文件输出层
+                        let json_file_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .json()
+                            .with_current_span(true)
+                            .with_span_list(true)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true)
+                            .with_writer(non_blocking);
+                        
+                        tracing_subscriber::registry()
+                            .with(env_filter)
+                            .with(console_layer)
+                            .with(json_file_layer)
+                            .init();
+                        
+                        info!("日志系统初始化成功，使用JSON格式的滚动日志文件");
+                        
+                        // 将guard保存在全局变量中
+                        std::mem::forget(_guard);
+                    }
+                    Err(e) => {
+                        eprintln!("创建滚动日志失败: {}，回退到控制台输出", e);
+                        let json_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .json()
+                            .with_current_span(true)
+                            .with_span_list(true)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true);
+                        
+                        tracing_subscriber::registry()
+                            .with(env_filter)
+                            .with(json_layer)
+                            .init();
+                    }
                 }
-                Err(e) => {
-                    // 无法打开日志文件，回退到控制台
-                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
-                    let json_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .json()
-                        .with_current_span(true)
-                        .with_span_list(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true); // 显示行号
-                    
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(json_layer)
-                        .init();
-                }
+            } else {
+                // 没有滚动配置，使用控制台输出
+                let json_layer = fmt::layer()
+                    .with_timer(LocalTimer)
+                    .json()
+                    .with_current_span(true)
+                    .with_span_list(true)
+                    .with_thread_names(true)
+                    .with_target(true)
+                    .with_file(true)
+                    .with_line_number(true);
+                
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(json_layer)
+                    .init();
+                
+                info!("日志系统初始化成功，使用JSON格式控制台输出（未配置滚动日志）");
             }
         }
     }
@@ -608,129 +763,162 @@ pub fn init_telemetry(config: &crate::config::AppConfig, service_name: &str) -> 
                 .init();
         }
         (LogFormat::Plain, LogOutput::File) => {
-            // 获取日志文件路径
-            let log_file_path = get_log_file_path(service_name);
-            
-            // 尝试打开文件，如果失败则回退到控制台
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file_path) 
-            {
-                Ok(file) => {
-                    // 创建控制台输出层
-                    let console_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .with_ansi(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true); // 显示行号
-                    
-                    // 创建文件输出层
-                    let file_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .with_ansi(false)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true) // 显示行号
-                        .with_writer(file);
-                    
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(console_layer)
-                        .with(file_layer)
-                        .with(telemetry)
-                        .init();
-                    
-                    // 日志初始化信息同时显示在控制台
-                    info!("日志系统初始化成功（带分布式链路追踪），同时输出到控制台和文件: {}", log_file_path);
-                    info!("链路追踪数据发送至: {}", jaeger_endpoint);
+            // 检查是否有日志滚动配置
+            if let Some(rolling_config) = config.log.rolling() {
+                // 使用滚动日志
+                match create_rolling_appender(rolling_config, service_name) {
+                    Ok((non_blocking, _guard)) => {
+                        // 创建控制台输出层
+                        let console_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .with_ansi(true)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true);
+                        
+                        // 创建滚动文件输出层
+                        let file_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .with_ansi(false)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true)
+                            .with_writer(non_blocking);
+                        
+                        tracing_subscriber::registry()
+                            .with(env_filter)
+                            .with(console_layer)
+                            .with(file_layer)
+                            .with(telemetry)
+                            .init();
+                        
+                        info!("日志系统初始化成功（带分布式链路追踪），使用滚动日志文件");
+                        info!("链路追踪数据发送至: {}", jaeger_endpoint);
+                        
+                        // 将guard保存在全局变量中
+                        std::mem::forget(_guard);
+                    }
+                    Err(e) => {
+                        eprintln!("创建滚动日志失败: {}，回退到控制台输出", e);
+                        let fmt_layer = fmt::layer()
+                            .with_timer(LocalTimer)
+                            .with_ansi(true)
+                            .with_thread_names(true)
+                            .with_target(true)
+                            .with_file(true)
+                            .with_line_number(true);
+                        
+                        tracing_subscriber::registry()
+                            .with(env_filter)
+                            .with(fmt_layer)
+                            .with(telemetry)
+                            .init();
+                    }
                 }
-                Err(e) => {
-                    // 无法打开日志文件，回退到控制台
-                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
-                    let fmt_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .with_ansi(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true); // 显示行号
-                    
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(fmt_layer)
-                        .with(telemetry)
-                        .init();
-                }
+            } else {
+                // 没有滚动配置，使用控制台输出
+                let fmt_layer = fmt::layer()
+                    .with_timer(LocalTimer)
+                    .with_ansi(true)
+                    .with_thread_names(true)
+                    .with_target(true)
+                    .with_file(true)
+                    .with_line_number(true);
+                
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(fmt_layer)
+                    .with(telemetry)
+                    .init();
+                
+                info!("日志系统初始化成功（带分布式链路追踪），使用控制台输出（未配置滚动日志）");
+                info!("链路追踪数据发送至: {}", jaeger_endpoint);
             }
         }
         (LogFormat::Json, LogOutput::File) => {
-            // 获取日志文件路径
-            let log_file_path = get_log_file_path(service_name);
-            
-            // 尝试打开文件，如果失败则回退到控制台
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file_path) 
-            {
-                Ok(file) => {
-                    // 创建控制台输出层 (使用JSON格式)
-                    let console_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .json()
-                        .with_current_span(true)
-                        .with_span_list(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true); // 显示行号
-                    
-                    // 创建JSON文件输出层
-                    let json_file_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .json()
-                        .with_current_span(true)
-                        .with_span_list(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true) // 显示行号
-                        .with_writer(file);
-                    
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(console_layer)
-                        .with(json_file_layer)
-                        .with(telemetry)
-                        .init();
-                    
-                    // 日志初始化信息同时显示在控制台
-                    info!("日志系统初始化成功（带分布式链路追踪），同时输出到控制台(JSON格式)和文件(JSON格式): {}", log_file_path);
-                    info!("链路追踪数据发送至: {}", jaeger_endpoint);
-                }
-                Err(e) => {
-                    // 无法打开日志文件，回退到控制台
-                    eprintln!("无法打开日志文件 {}: {}，回退到控制台输出", log_file_path, e);
-                    let json_layer = fmt::layer()
-                        .with_timer(LocalTimer)
-                        .json()
-                        .with_current_span(true)
-                        .with_span_list(true)
-                        .with_thread_names(true)
-                        .with_target(true) // 显示目标模块路径
-                        .with_file(true) // 显示文件名
-                        .with_line_number(true); // 显示行号
-                    
-                    tracing_subscriber::registry()
-                        .with(env_filter)
-                        .with(json_layer)
-                        .with(telemetry)
-                        .init();
-                }
+            // 检查是否有日志滚动配置
+            if let Some(rolling_config) = config.log.rolling() {
+                // 使用滚动日志
+                    match create_rolling_appender(rolling_config, service_name) {
+                        Ok((non_blocking, _guard)) => {
+                            // 创建控制台输出层 (使用JSON格式)
+                            let console_layer = fmt::layer()
+                                .with_timer(LocalTimer)
+                                .json()
+                                .with_current_span(true)
+                                .with_span_list(true)
+                                .with_thread_names(true)
+                                .with_target(true)
+                                .with_file(true)
+                                .with_line_number(true);
+                            
+                            // 创建JSON滚动文件输出层
+                            let json_file_layer = fmt::layer()
+                                .with_timer(LocalTimer)
+                                .json()
+                                .with_current_span(true)
+                                .with_span_list(true)
+                                .with_thread_names(true)
+                                .with_target(true)
+                                .with_file(true)
+                                .with_line_number(true)
+                                .with_writer(non_blocking);
+                            
+                            tracing_subscriber::registry()
+                                .with(env_filter)
+                                .with(console_layer)
+                                .with(json_file_layer)
+                                .with(telemetry)
+                                .init();
+                            
+                            info!("日志系统初始化成功（带分布式链路追踪），使用JSON格式的滚动日志文件");
+                            info!("链路追踪数据发送至: {}", jaeger_endpoint);
+                            
+                            // 将guard保存在全局变量中
+                            std::mem::forget(_guard);
+                        }
+                        Err(e) => {
+                            eprintln!("创建滚动日志失败: {}，回退到控制台输出", e);
+                            let json_layer = fmt::layer()
+                                .with_timer(LocalTimer)
+                                .json()
+                                .with_current_span(true)
+                                .with_span_list(true)
+                                .with_thread_names(true)
+                                .with_target(true)
+                                .with_file(true)
+                                .with_line_number(true);
+                            
+                            tracing_subscriber::registry()
+                                .with(env_filter)
+                                .with(json_layer)
+                                .with(telemetry)
+                                .init();
+                        }
+                    }
+
+            } else {
+                // 没有滚动配置，使用控制台输出
+                let json_layer = fmt::layer()
+                    .with_timer(LocalTimer)
+                    .json()
+                    .with_current_span(true)
+                    .with_span_list(true)
+                    .with_thread_names(true)
+                    .with_target(true)
+                    .with_file(true)
+                    .with_line_number(true);
+                
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(json_layer)
+                    .with(telemetry)
+                    .init();
+                
+                info!("日志系统初始化成功（带分布式链路追踪），使用JSON格式控制台输出（未配置滚动日志）");
+                info!("链路追踪数据发送至: {}", jaeger_endpoint);
             }
         }
     }

@@ -164,6 +164,11 @@ log:
   output: "file"  # 日志输出位置: console, file
   format: "json"     # 日志格式: plain, json (使用json格式便于ELK收集)
   sqlx_level: "info" # SQL查询日志级别
+  rolling:
+    rotation: "daily"             # 滚动策略:- hourly: 每小时生成一个新文件 - daily: 每天生成一个新文件（推荐）- never: 不滚动，所有日志写入同一文件
+    max_files: 7                  # 最大保留文件数量，超过此数量会自动删除最旧的文件
+    directory: "/var/log/rustim"  # 日志文件存储目录
+    filename_prefix: ""           # 日志文件名前缀 最终文件名格式: {prefix}-{service_name}.{timestamp}或{service_name}.{timestamp}
   # 各组件的日志级别配置
   components:
     tower: "warn"    # HTTP中间件
