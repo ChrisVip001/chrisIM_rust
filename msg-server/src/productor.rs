@@ -964,7 +964,10 @@ impl ChatService for ChatRpcService {
 
         // 获取原始消息列表
         let original_messages = match self.msg_storage.get_messages(&req.message_ids).await {
-            Ok(messages) => messages,
+            Ok(messages) => {
+                debug!("获取原始消息成功: {:?}", messages);
+                messages
+            },
             Err(e) => return Err(tonic::Status::internal(format!("获取原始消息失败: {}", e))),
         };
 
