@@ -1,4 +1,4 @@
-use super::common::{error_response, extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
+use super::common::{error_response, extract_i64_param, extract_string_array_param, extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
 use axum::{body::Body, http::{Method, Response, StatusCode}};
 use chrono::Utc;
 use common::proto::message::chat_service_client::ChatServiceClient;
@@ -252,34 +252,13 @@ impl ChatServiceHandler {
         debug!("获取消息历史请求: {}", body);
 
         // 提取必需参数
-        let conversation_id = get_optional_string(&body, "conversationId", Some("conversation_id"))
-            .ok_or_else(|| anyhow::anyhow!("conversationId参数是必需的"))?;
+        let conversation_id = extract_string_param(&body, "conversationId", Some("conversation_id"))?;
 
         // 提取序列号范围参数
-        let send_seq_start = body.get("sendSeqStart")
-            .or_else(|| body.get("send_seq_start"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        
-        let send_seq_end = body.get("sendSeqEnd")
-            .or_else(|| body.get("send_seq_end"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-            
-        let seq_start = body.get("seqStart")
-            .or_else(|| body.get("seq_start"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-            
-        let seq_end = body.get("seqEnd")
-            .or_else(|| body.get("seq_end"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-
-        // 验证参数
-        if conversation_id.is_empty() {
-            return Ok(error_response("会话ID不能为空", StatusCode::BAD_REQUEST));
-        }
+        let send_seq_start = extract_i64_param(&body, "sendSeqStart", Some("send_seq_start"))?;
+        let send_seq_end = extract_i64_param(&body, "sendSeqEnd", Some("send_seq_end"))?;
+        let seq_start = extract_i64_param(&body, "seqStart", Some("seq_start"))?;
+        let seq_end = extract_i64_param(&body, "seqEnd", Some("seq_end"))?;
 
         if send_seq_start < 0 || send_seq_end < 0 || seq_start < 0 || seq_end < 0 {
             return Ok(error_response("序列号不能为负数", StatusCode::BAD_REQUEST));
@@ -400,15 +379,7 @@ impl ChatServiceHandler {
         debug!("删除消息请求: {}", body);
 
         // 提取消息ID列表或序列号列表
-        let message_ids = body
-            .get("messageIds")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or_default();
+        let message_ids = extract_string_array_param(&body, "messageIds", Some("message_ids"))?;
 
         let message_seqs = body
             .get("messageSeqs")
@@ -452,28 +423,13 @@ impl ChatServiceHandler {
         debug!("转发消息请求: {}", body);
 
         // 解析请求参数
-        let original_message_id = body["messageId"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("缺少原始消息ID"))?;
-
-        let target_user_ids: Vec<String> = body["targetUserIds"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect();
-
-        let target_group_ids: Vec<String> = body["targetGroupIds"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect();
-
-        let forward_comment = body["comment"].as_str().map(|s| s.to_string());
+        let message_ids: Vec<String> = extract_string_array_param(&body, "messageIds", Some("message_ids"))?;
+        let target_user_ids: Vec<String> = extract_string_array_param(&body, "targetUserIds", Some("target_user_ids"))?;
+        let target_group_ids: Vec<String> = extract_string_array_param(&body, "targetGroupIds", Some("target_group_ids"))?;
+        let forward_comment = get_optional_string(&body, "comment", Some("comment"));
 
         // 验证参数
-        if original_message_id.is_empty() {
+        if message_ids.is_empty() {
             return Ok(error_response("原始消息ID不能为空", StatusCode::BAD_REQUEST));
         }
 
@@ -484,7 +440,7 @@ impl ChatServiceHandler {
         // 构建gRPC请求
         let request = ForwardMessageRequest {
             user_id: user_id.to_string(),
-            original_message_id: original_message_id.to_string(),
+            message_ids,
             target_user_ids,
             target_group_ids,
             forward_comment,

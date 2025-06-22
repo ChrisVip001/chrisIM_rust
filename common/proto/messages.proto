@@ -409,7 +409,7 @@ message DeleteMessagesResponse {
 /// 转发消息请求
 message ForwardMessageRequest {
   string user_id = 1;                    // 转发者用户ID
-  string original_message_id = 2;        // 要转发的原始消息ID
+  repeated string message_ids = 2;        // 要转发的原始消息ID
   repeated string target_user_ids = 3;   // 转发给的用户ID列表（单聊）
   repeated string target_group_ids = 4;  // 转发给的群组ID列表（群聊）
   optional string forward_comment = 5;   // 转发时的附加评论

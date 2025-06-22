@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use chrono::Utc;
 use crate::repository::group_announcements_repository::GroupAnnouncementRepository;
 use crate::repository::group_blacklist_repository::GroupBlacklistRepository;
 use crate::repository::group_mutes_repository::GroupMutesRepository;
@@ -163,6 +164,8 @@ impl GroupServiceImpl {
             content_type: ContentType::Text as i32,
             content: message.as_bytes().to_vec(),
             group_id: group_id.to_string(),
+            create_time: Utc::now().timestamp_millis(),
+            receiver_id: group_id.to_string(),
             ..Default::default()
         };
         // 创建SendMsgRequest
@@ -181,6 +184,44 @@ impl GroupServiceImpl {
             }
         }
     }
+
+    /// 添加群组成员的辅助方法
+    /// 
+    /// 统一处理添加成员和创建默认设置的逻辑
+    async fn add_group_member(
+        &self,
+        group_id: &str,
+        user_id: &str,
+        role: MemberRole,
+        user_info_map: &std::collections::HashMap<String, common::proto::user::User>,
+    ) -> Result<crate::model::member::Member, Status> {
+        // 添加成员到群组
+        let member = self
+            .member_repository
+            .add_member(
+                group_id.to_string(),
+                user_id.to_string(),
+                None,
+                None,
+                None,
+                role,
+            )
+            .await
+            .map_err(|e| {
+                error!("添加成员到群组失败: {}", e);
+                Status::internal("添加成员失败")
+            })?;
+
+        // 为成员创建默认设置
+        self.create_default_member_settings(
+            group_id,
+            user_id,
+            user_info_map.get(user_id),
+        )
+        .await?;
+
+        Ok(member)
+    }
 }
 
 #[tonic::async_trait]
@@ -193,101 +234,76 @@ impl GroupService for GroupServiceImpl {
         let req = request.into_inner();
         let owner_id = req.owner_id.clone();
 
-        match self
+        // 创建群组
+        let group = match self
             .group_repository
             .create_group(req.name.clone(), req.description, req.avatar_url, owner_id.clone())
             .await
         {
-            Ok(group) => {
-                let mut members = Vec::new();
-                let mut member_count = 0;
-                // 收集所有需要添加的成员ID（包括群主）
-                let mut all_member_ids = vec![owner_id.clone()];
-                all_member_ids.extend(req.members.clone());
-                
-                // 批量获取用户信息
-                let user_info_map = self.fetch_users_info(all_member_ids).await?;
+            Ok(group) => group,
+            Err(e) => {
+                error!("创建群组失败: {}", e);
+                return Err(Status::internal("创建群组失败"));
+            }
+        };
 
-                // 添加群主
-                match self
-                    .member_repository
-                    .add_member(
-                        group.id.clone(),
-                        owner_id.clone(),
-                        None, 
-                        None,
-                        None,
-                        MemberRole::Owner,
-                    )
-                    .await
-                {
-                    Ok(member) => {
-                        members.push(member);
-                        member_count += 1;
-                        
-                        // 为群主创建默认设置
-                        self.create_default_member_settings(
-                            &group.id, 
-                            &owner_id,
-                            user_info_map.get(&owner_id)
-                        ).await?;
-                    }
-                    Err(e) => {
-                        error!("添加群主失败: {}", e);
+        // 收集所有需要添加的成员ID（包括群主）
+        let mut all_member_ids = vec![owner_id.clone()];
+        all_member_ids.extend(req.members.clone());
+        
+        // 批量获取用户信息
+        let user_info_map = self.fetch_users_info(all_member_ids.clone()).await?;
+
+        // 批量添加成员
+        let mut members = Vec::new();
+        let mut success_count = 0;
+
+        for user_id in all_member_ids.clone() {
+            let role = if user_id == owner_id {
+                MemberRole::Owner
+            } else {
+                MemberRole::Member
+            };
+
+            match self.add_group_member(&group.id, &user_id, role, &user_info_map).await {
+                Ok(member) => {
+                    members.push(member);
+                    success_count += 1;
+                }
+                Err(e) => {
+                    error!("添加成员 {} 失败: {}", user_id, e);
+                    // 如果是群主添加失败，则整个创建失败
+                    if user_id == owner_id {
                         return Err(Status::internal("创建群组后添加群主失败"));
                     }
                 }
-
-                // 添加其他初始成员
-                for user_id in req.members {
-                    // 跳过群主，因为已经添加过了
-                    if user_id == owner_id {
-                        continue;
-                    }
-
-                    match self
-                        .member_repository
-                        .add_member(
-                            group.id.clone(),
-                            user_id.clone(),
-                            None,
-                            None,
-                            None,
-                            MemberRole::Member, // 默认使用普通成员角色
-                        )
-                        .await
-                    {
-                        Ok(member) => {
-                            members.push(member);
-                            member_count += 1;
-                            
-                            // 为成员创建默认设置
-                            self.create_default_member_settings(
-                                &group.id, 
-                                &user_id,
-                                user_info_map.get(&user_id)
-                            ).await?;
-                        }
-                        Err(e) => {
-                            error!("添加初始成员失败: {}", e);
-                            // 继续添加其他成员，不中断整个过程
-                        }
-                    }
-                }
-
-                info!("创建群组成功: {:?}, 初始成员数: {}", group, member_count);
-                
-                self.send_create_group_message(&owner_id, &group.id, format!("{}群组创建成功",req.name.clone()).as_str()).await;
-                
-                Ok(Response::new(GroupResponse {
-                    group: Some(group.to_proto(member_count)),
-                }))
-            }
-            Err(e) => {
-                error!("创建群组失败: {}", e);
-                Err(Status::internal("创建群组失败"))
             }
         }
+
+        // 加入缓存
+        if let Err(e) = self
+            .cache
+            .save_group_members_id(&group.id.clone(), all_member_ids.clone())
+            .await
+        {
+            error!("保存群组成员ID到缓存失败: {:?}", e);
+        }
+        
+        info!(
+            "创建群组成功: {:?}, 成功添加成员数: {}",
+            group, success_count
+        );
+        
+        // 发送群组创建成功消息
+        self.send_create_group_message(
+            &owner_id, 
+            &group.id, 
+            &format!("{}群组创建成功", req.name)
+        ).await;
+        
+        Ok(Response::new(GroupResponse {
+            group: Some(group.to_proto(success_count)),
+        }))
     }
 
     // 获取群组信息
