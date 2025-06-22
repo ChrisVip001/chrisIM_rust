@@ -27,7 +27,7 @@ use common::Error;
 use common::proto::friend::friend_service_client::FriendServiceClient;
 use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest, FriendRelationType};
 use common::proto::group::group_service_client::GroupServiceClient;
-use common::proto::group::CheckMembershipRequest;
+use common::proto::group::{CheckMembershipRequest, GetGroupRequest};
 use common::service_discovery::LbWithServiceDiscovery;
 use common::grpc_client::base::get_rpc_client;
 use msg_storage::{message::MsgRecBoxRepo, msg_rec_box_repo};
@@ -435,8 +435,13 @@ impl ChatRpcService {
                 }
             }
 
-            // 群聊消息需要校验群组成员身份
+            // 群聊消息需要校验群是否存在和群组成员身份
             MsgType::GroupMsg => {
+                // 检查群组是否存在
+                if !self.check_group_exists(&msg.group_id).await? {
+                    return Err(tonic::Status::permission_denied("无法发送消息：群组不存在"));
+                }
+
                 // 对于群聊消息，receiver_id 应该是群组ID
                 let group_id = if !msg.group_id.is_empty() && msg.group_id != "" {
                     &msg.group_id
@@ -487,6 +492,37 @@ impl ChatRpcService {
         }
 
         Ok(())
+    }
+
+    /// 检查群组是否存在
+    ///
+    /// # 参数
+    /// * `group_id` - 群组ID
+    ///
+    /// # 返回值
+    /// * `Ok(true)` - 群组存在
+    /// * `Ok(false)` - 群组不存在
+    /// * `Err(Status)` - 检查失败
+    async fn check_group_exists(&self, group_id: &str) -> Result<bool, tonic::Status> {
+        // 使用RPC调用检查群组是否存在
+        let mut group_client = self.group_client.clone();
+        match group_client.get_group(GetGroupRequest {
+            group_id: group_id.to_string(),
+        }).await {
+            Ok(_) => {
+                debug!("群组 {} 存在（RPC确认）", group_id);
+                Ok(true)
+            }
+            Err(e) => {
+                if e.code() == tonic::Code::NotFound {
+                    debug!("群组 {} 不存在（RPC确认）", group_id);
+                    Ok(false)
+                } else {
+                    error!("检查群组存在性失败: {}", e);
+                    Err(tonic::Status::internal("检查群组存在性失败"))
+                }
+            }
+        }
     }
 }
 
