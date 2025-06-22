@@ -635,7 +635,7 @@ impl FriendshipRepository {
         user_id: &str,
         search_term: &str,
     ) -> Result<Vec<(String, String, Option<String>, Option<String>, Option<String>, i32, Option<String>, String)>> {
-        // 构建SQL查询，自动匹配custom_id或手机号
+        // 构建SQL查询，自动匹配custom_id或手机号或用户名（前端把密信id当做用户名）
         let query = r#"
             SELECT 
                 u.id, 
@@ -651,7 +651,7 @@ impl FriendshipRepository {
             LEFT JOIN 
                 friend_relation fr ON (fr.user_id = $1 AND fr.friend_id = u.id)
             WHERE 
-                u.id != $1 AND (u.custom_id = $2 OR u.phone = $2)
+                u.id != $1 AND (u.custom_id = $2 OR u.phone = $2 or u.username = $2)
             ORDER BY 
                 u.id
         "#;
