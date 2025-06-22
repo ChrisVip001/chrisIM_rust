@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
+use tonic::{Response, Status};
 use tonic::transport::Server;
 use tracing::{debug, error, info};
 
@@ -25,7 +27,7 @@ use common::proto::message::{
 use common::types::msg::MsgType2;
 use common::Error;
 use common::proto::friend::friend_service_client::FriendServiceClient;
-use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest, FriendRelationType};
+use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest, FriendRelationType, IsBlockedResponse};
 use common::proto::group::group_service_client::GroupServiceClient;
 use common::proto::group::{CheckMembershipRequest, GetGroupRequest};
 use common::service_discovery::LbWithServiceDiscovery;
@@ -268,6 +270,17 @@ impl ChatRpcService {
                 debug!("从缓存检查拉黑状态失败: {}，将使用RPC调用", e);
             }
         }
+        match self.cache.is_user_in_blacklist(send_id, receiver_id).await {
+            Ok(is_blocked) => {
+                if is_blocked {
+                    debug!("用户 {} 已被 {} 拉黑（缓存命中），无法发送消息", receiver_id, send_id);
+                    return Ok(false);
+                }
+            }
+            Err(e) => {
+                debug!("从缓存检查拉黑状态失败: {}，将使用RPC调用", e);
+            }
+        }
 
         // 检查缓存中的好友关系
         match self.cache.check_friendship_exists(send_id, receiver_id).await {
@@ -299,6 +312,19 @@ impl ChatRpcService {
                 error!("检查拉黑状态失败: {}", e);
                 return Err(tonic::Status::internal("检查拉黑状态失败"));
             }
+        }
+        match friend_client.is_blocked(IsBlockedRequest {
+            blocked_user_id: receiver_id.to_string(),
+            user_id: send_id.to_string(),
+        }).await {
+            Ok(response) => {
+                let is_blocked = response.into_inner().is_blocked;
+                if is_blocked {
+                    debug!("用户 {} 已被 {} 拉黑（RPC确认），无法发送消息", receiver_id, send_id);
+                    return Ok(false);
+                }
+            }
+            Err(e) => {}
         }
 
         // 使用RPC调用检查好友关系
@@ -523,6 +549,71 @@ impl ChatRpcService {
                 }
             }
         }
+    }
+
+    /// 检查消息是否允许转发
+    async fn is_message_forwardable(&self, msg: &Msg) -> Result<bool, tonic::Status> {
+        let msg_type = MsgType::try_from(msg.msg_type)
+            .map_err(|_| tonic::Status::invalid_argument("无效的消息类型"))?;
+
+        // 检查消息类型是否允许转发
+        match msg_type {
+            // 允许转发的消息类型
+            MsgType::SingleMsg | MsgType::GroupMsg => {
+                // 检查消息是否已被撤回
+                if msg.is_revoked {
+                    return Ok(false);
+                }
+                Ok(true)
+            }
+            
+            // 不允许转发的消息类型
+            MsgType::FriendApplyReq | MsgType::FriendApplyResp |
+            MsgType::GroupInvitation | MsgType::GroupDismiss |
+            MsgType::GroupMemberExit | MsgType::GroupRemoveMember |
+            MsgType::SingleCallInvite | MsgType::RejectSingleCall |
+            MsgType::AgreeSingleCall | MsgType::SingleCallInviteNotAnswer |
+            MsgType::SingleCallInviteCancel | MsgType::SingleCallOffer |
+            MsgType::Hangup | MsgType::ConnectSingleCall | MsgType::Candidate |
+            MsgType::Read => {
+                Ok(false)
+            }
+            
+            // 其他消息类型默认不允许转发
+            _ => {
+                debug!("消息类型 {:?} 默认不允许转发", msg_type);
+                Ok(false)
+            }
+        }
+    }
+
+    /// 检查转发到用户的权限
+    async fn check_forward_to_user_permission(&self, sender_id: &str, target_user_id: &str) -> Result<(), tonic::Status> {
+        // 检查好友关系
+        if !self.check_friend_relation(sender_id, target_user_id).await? {
+            return Err(tonic::Status::permission_denied("无法转发：用户不是好友或已被拉黑"));
+        }
+        Ok(())
+    }
+
+    /// 检查转发到群组的权限
+    async fn check_forward_to_group_permission(&self, sender_id: &str, target_group_id: &str) -> Result<(), tonic::Status> {
+        // 检查群组是否存在
+        if !self.check_group_exists(target_group_id).await? {
+            return Err(tonic::Status::permission_denied("无法转发：群组不存在"));
+        }
+
+        // 检查用户是否是群组成员
+        if !self.check_group_membership(sender_id, target_group_id).await? {
+            return Err(tonic::Status::permission_denied("无法转发：用户不是群组成员"));
+        }
+
+        // TODO: 可以添加更多群组权限检查，如：
+        // - 检查用户是否被禁言
+        // - 检查群组是否允许转发消息
+        // - 检查群组设置等
+
+        Ok(())
     }
 }
 
@@ -1011,12 +1102,28 @@ impl ChatService for ChatRpcService {
             return Err(tonic::Status::not_found("未找到要转发的消息"));
         }
 
+        // 检查原始消息是否允许转发
+        for original_msg in &original_messages {
+            if !self.is_message_forwardable(original_msg).await? {
+                return Err(tonic::Status::permission_denied(
+                    format!("消息 {} 不允许转发", original_msg.server_id)
+                ));
+            }
+        }
+
         let mut forwarded_message_ids = Vec::new();
         let mut success_count = 0;
+        let mut error_messages = Vec::new();
 
         if !req.target_user_ids.is_empty() {
             // 转发给单聊用户
             for target_user_id in &req.target_user_ids {
+                // 检查转发到单聊的权限
+                if let Err(e) = self.check_forward_to_user_permission(&req.user_id, target_user_id).await {
+                    error_messages.push(format!("无法转发给用户 {}: {}", target_user_id, e));
+                    continue;
+                }
+
                 // 为每条原始消息创建转发消息
                 for original_msg in &original_messages {
                     let forward_msg = Msg {
@@ -1058,6 +1165,7 @@ impl ChatService for ChatRpcService {
                         }
                         Err((kafka_error, _)) => {
                             error!("转发消息到Kafka失败: {}", kafka_error);
+                            error_messages.push(format!("转发消息到Kafka失败: {}", kafka_error));
                         }
                     }
                 }
@@ -1067,6 +1175,12 @@ impl ChatService for ChatRpcService {
         if !req.target_group_ids.is_empty() {
             // 转发给群组
             for target_group_id in &req.target_group_ids {
+                // 检查转发到群组的权限
+                if let Err(e) = self.check_forward_to_group_permission(&req.user_id, target_group_id).await {
+                    error_messages.push(format!("无法转发给群组 {}: {}", target_group_id, e));
+                    continue;
+                }
+
                 // 为每条原始消息创建转发消息
                 for original_msg in &original_messages {
                     let forward_msg = Msg {
@@ -1112,21 +1226,28 @@ impl ChatService for ChatRpcService {
                         }
                         Err((kafka_error, _)) => {
                             error!("转发群组消息到Kafka失败: {}", kafka_error);
+                            error_messages.push(format!("转发群组消息到Kafka失败: {}", kafka_error));
                         }
                     }
                 }
             }
         }
 
+        let error_message = if error_messages.is_empty() {
+            if success_count == 0 {
+                "所有转发都失败了".to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            error_messages.join("; ")
+        };
+
         Ok(tonic::Response::new(ForwardMessageResponse {
             success: success_count > 0,
             forwarded_message_ids,
             forward_count: success_count,
-            error: if success_count == 0 {
-                "所有转发都失败了".to_string()
-            } else {
-                String::new()
-            },
+            error: error_message,
         }))
     }
 }
@@ -1321,3 +1442,4 @@ impl ChatRpcService {
         }
     }
 }
+
