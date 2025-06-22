@@ -227,15 +227,6 @@ impl GroupServiceImpl {
 
     // 发送群组更新消息通知
     async fn send_group_update_message(&self, group: Group) {
-        // 将群组信息转换为JSON格式的消息内容
-        let group_update_content = serde_json::json!({
-            "id": group.id,
-            "name": group.name,
-            "description": group.description,
-            "avatar_url": group.avatar_url,
-            "owner_id": group.owner_id,
-            "updated_at": group.updated_at.to_rfc3339()
-        });
         
         // 创建群组更新消息
         let update_msg = Msg {
@@ -243,7 +234,7 @@ impl GroupServiceImpl {
             receiver_id: group.id.clone(),
             msg_type: MsgType::GroupUpdate as i32,
             content_type: ContentType::Text as i32,
-            content: group_update_content.to_string().as_bytes().to_vec(),
+            content: "群头像，昵称，群公告，xxx，等发生变化".to_string().as_bytes().to_vec(),
             group_id: group.id.clone(),
             create_time: Utc::now().timestamp_millis(),
             ..Default::default()
