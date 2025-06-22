@@ -368,8 +368,14 @@ impl GroupService for GroupServiceImpl {
         let group_id = req.group_id.clone();
         let user_id = req.user_id.clone();
 
-        match self.group_repository.delete_group(group_id.clone(), user_id).await {
+        match self.group_repository.delete_group(group_id.clone(), user_id.clone()).await {
             Ok(success) => {
+                // 删除群成员
+                if let Err(e) = self.member_repository.delete_group_members(group_id.clone(), user_id.clone()).await {
+                    error!("删除群成员失败: {}", e);
+                    // 即使删除成员失败，也继续删除群组，因为群组已经被标记为删除
+                }
+                
                 //删除缓存
                 self.cache.del_group_members(&group_id).await?;
                 if success {
