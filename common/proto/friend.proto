@@ -160,6 +160,7 @@ message CheckFriendshipRequest {
 // 检查好友关系响应
 message CheckFriendshipResponse {
   FriendRelationType status = 1;
+  optional string request_id =2;// 如果好友请求为待处理、返回好友请求ID
 }
 
 // 好友关系响应

@@ -284,6 +284,7 @@ message EnhancedUserResponse {
   FriendshipStatus friend_status = 3; // 好友状态
   bool is_online = 4;               // 在线状态
   optional FriendRelation friend_relation =5;     // 好友关系
+  optional string request_id =6;// 如果好友请求为待处理、返回好友请求ID
 }
 
 // 好友关系状态枚举

@@ -562,6 +562,7 @@ impl FriendService for FriendServiceImpl {
                 if exists {
                     // 已是好友关系，返回状态1
                     return Ok(Response::new(CheckFriendshipResponse {
+                        request_id: None,
                         status: FriendRelationType::IsFriend as i32,
                     }));
                 }
@@ -577,13 +578,15 @@ impl FriendService for FriendServiceImpl {
             Ok(Some(request)) => {
                 if request.status == FriendshipStatus::Pending as i32 {
                     if request.friend_id == user_id {
-                        // 对方发送的好友请求，待处理状态是2
+                        // 对方发送的好友请求，待处理状态是2 (返回request_id)
                         return Ok(Response::new(CheckFriendshipResponse {
+                            request_id: Some(request.id),
                             status: FriendRelationType::PendingRequest as i32,
                         }));
                     } else if request.user_id == user_id {
                         // 自己发送的好友请求，已申请状态是3
                         return Ok(Response::new(CheckFriendshipResponse {
+                            request_id: None,
                             status: FriendRelationType::Applied as i32,
                         }));
                     }
@@ -600,6 +603,7 @@ impl FriendService for FriendServiceImpl {
         
         // 没有任何好友关系或请求，返回状态0 (没有好友状态)
         Ok(Response::new(CheckFriendshipResponse {
+            request_id: None,
             status: FriendRelationType::NoFriend as i32,
         }))
     }
