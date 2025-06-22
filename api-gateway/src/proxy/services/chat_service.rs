@@ -154,7 +154,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("消息发送失败: {}", err),
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ))
             }
         }
@@ -197,7 +197,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("标记消息已读失败: {}", err),
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ))
             }
         }
@@ -236,7 +236,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("标记会话已读失败: {}", err),
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ))
             }
         }
@@ -312,7 +312,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("获取消息历史失败: {}", err),
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ))
             }
         }
@@ -356,7 +356,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("获取会话列表失败: {}", err),
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ))
             }
         }
@@ -385,7 +385,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("撤回消息失败: {}", err),
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ))
             }
         }
@@ -437,7 +437,7 @@ impl ChatServiceHandler {
                 error!("调用聊天服务失败: {}", err);
                 Ok(error_response(
                     &format!("删除消息失败: {}", err),
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 ))
             }
         }
@@ -495,7 +495,7 @@ impl ChatServiceHandler {
             Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
             Err(e) => {
                 error!("转发消息失败: {}", e);
-                Ok(error_response("转发消息失败", StatusCode::SERVICE_UNAVAILABLE))
+                Ok(error_response("转发消息失败", StatusCode::INTERNAL_SERVER_ERROR))
             }
         }
     }
