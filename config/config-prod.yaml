@@ -161,12 +161,12 @@ component: all # all, api, ws, rpc, db, pusher
 # 日志配置
 log:
   level: "debug"      # 全局日志级别: trace, debug, info, warn, error
-  output: "file"  # 日志输出位置: console, file
-  format: "json"     # 日志格式: plain, json (使用json格式便于ELK收集)
-  sqlx_level: "info" # SQL查询日志级别
+  output: "file"      # 日志输出位置: console(控制台), file(文件，需配置rolling)
+  format: "json"      # 日志格式: plain(纯文本), json(JSON格式，便于ELK等日志系统收集)
+  sqlx_level: "info"  # SQL查询日志级别，控制数据库操作日志的详细程度
   rolling:
-    rotation: "daily"             # 滚动策略:- hourly: 每小时生成一个新文件 - daily: 每天生成一个新文件（推荐）- never: 不滚动，所有日志写入同一文件
-    max_files: 7                  # 最大保留文件数量，超过此数量会自动删除最旧的文件
+    rotation: "daily"             # 滚动策略:-minutely: 每分钟 - hourly: 每小时 - daily: 每天- never: 不滚动，所有日志写入同一文件
+    max_files: 7                  # 最大保留文件数量，超过此数量会自动删除最旧的文件(每次重启时删除)
     directory: "/var/log/rustim"  # 日志文件存储目录
     filename_prefix: ""           # 日志文件名前缀 最终文件名格式: {prefix}-{service_name}.{timestamp}或{service_name}.{timestamp}
   # 各组件的日志级别配置

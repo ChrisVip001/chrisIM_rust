@@ -1,11 +1,5 @@
 use anyhow::Result;
-use tracing::{info, warn, Level};
-use tracing_subscriber::{fmt, EnvFilter,fmt::time::FormatTime,fmt::format::Writer};
-use std::env;
-use std::path::Path;
-use std::fs::{self};
 use chrono::Local;
-use tracing_appender::{non_blocking, rolling};
 // 新增导入，用于链路追踪
 #[cfg(feature = "telemetry")]
 use opentelemetry::global;
@@ -13,8 +7,14 @@ use opentelemetry::global;
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 #[cfg(feature = "telemetry")]
 use opentelemetry_otlp::WithExportConfig;
+use std::env;
+use std::fs::{self};
+use std::path::Path;
+use tracing::{info, warn, Level};
+use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, fmt::format::Writer, fmt::time::FormatTime, EnvFilter};
 
 
 // 日志输出时间格式
@@ -251,12 +251,13 @@ fn create_rolling_appender(
     
     // 根据配置的滚动策略创建appender（默认使用本地时间）
     let appender = match rolling_config.rotation_type() {
-        "daily" => create_local_time_daily_appender(&directory, &filename_prefix)?,
-        "hourly" => create_local_time_hourly_appender(&directory, &filename_prefix)?,
+        "daily" => rolling::daily(&directory, format!("{}.log", filename_prefix)),
+        "hourly" => rolling::hourly(&directory, format!("{}.log", filename_prefix)),
+        "minutely" => rolling::minutely(&directory, format!("{}.log", filename_prefix)),
         "never" => rolling::never(&directory, format!("{}.log", filename_prefix)),
         _ => {
             info!("未知的滚动策略: {}, 使用daily作为默认值", rolling_config.rotation_type());
-            create_local_time_daily_appender(&directory, &filename_prefix)?
+            rolling::daily(&directory, format!("{}.log", filename_prefix))
         }
     };
     
@@ -339,32 +340,7 @@ fn cleanup_old_log_files(directory: &str, filename_prefix: &str, max_files: usiz
     Ok(())
 }
 
-/// 创建使用本地时间的每日滚动appender
-fn create_local_time_daily_appender(
-    directory: &str, 
-    filename_prefix: &str
-) -> Result<tracing_appender::rolling::RollingFileAppender> {
-    let now = Local::now();
-    let date_str = now.format("%Y-%m-%d").to_string();
-    let filename = format!("{}.{}", filename_prefix, date_str);
-    let file_path = Path::new(directory).join(&filename);
-    
-    // 使用never策略创建，因为我们已经在文件名中包含了日期
-    Ok(rolling::never(directory, filename))
-}
 
-/// 创建使用本地时间的每小时滚动appender  
-fn create_local_time_hourly_appender(
-    directory: &str,
-    filename_prefix: &str
-) -> Result<tracing_appender::rolling::RollingFileAppender> {
-    let now = Local::now();
-    let datetime_str = now.format("%Y-%m-%d-%H").to_string();
-    let filename = format!("{}.{}", filename_prefix, datetime_str);
-    
-    // 使用never策略创建，因为我们已经在文件名中包含了时间
-    Ok(rolling::never(directory, filename))
-}
 
 /// 从配置初始化日志系统
 /// 
