@@ -1119,8 +1119,8 @@ impl ChatService for ChatRpcService {
             // 转发给单聊用户
             for target_user_id in &req.target_user_ids {
                 // 检查转发到单聊的权限
-                if let Err(e) = self.check_forward_to_user_permission(&req.user_id, target_user_id).await {
-                    error_messages.push(format!("无法转发给用户 {}: {}", target_user_id, e));
+                if let Err(_) = self.check_forward_to_user_permission(&req.user_id, target_user_id).await {
+                    error_messages.push(format!("无法转发给用户 {}", target_user_id));
                     continue;
                 }
 
