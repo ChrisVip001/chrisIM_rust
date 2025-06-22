@@ -185,6 +185,37 @@ impl GroupServiceImpl {
         }
     }
 
+    // 发送群解散消息通知
+    async fn send_group_dismiss_message(&self, dismisser_id: &str, group_id: &str) {
+        // 创建群解散消息
+        let dismiss_msg = Msg {
+            send_id: dismisser_id.to_string(),
+            receiver_id: group_id.to_string(),
+            msg_type: MsgType::GroupDismiss as i32,
+            content_type: ContentType::Text as i32,
+            content: "群组已被解散".to_string().as_bytes().to_vec(),
+            group_id: group_id.to_string(),
+            create_time: Utc::now().timestamp_millis(),
+            ..Default::default()
+        };
+        
+        // 创建SendMsgRequest
+        let request = SendMsgRequest {
+            message: Some(dismiss_msg),
+        };
+
+        // 调用chat服务发送消息
+        let mut chat_client = self.chat_service_client.clone();
+        match chat_client.send_msg(request).await {
+            Ok(response) => {
+                debug!("群解散消息响应: {:?}", response.into_inner());
+            }
+            Err(e) => {
+                error!("群解散消息发送失败: group_id={}, error={:?}", group_id, e);
+            }
+        }
+    }
+
     /// 添加群组成员的辅助方法
     /// 
     /// 统一处理添加成员和创建默认设置的逻辑
@@ -368,6 +399,23 @@ impl GroupService for GroupServiceImpl {
         let group_id = req.group_id.clone();
         let user_id = req.user_id.clone();
 
+        // 获取群组信息，同时验证用户权限
+        match self.group_repository.get_group(group_id.clone()).await {
+            Ok(group) => {
+                // 直接通过owner_id判断是否为群主
+                if group.owner_id != user_id {
+                    return Err(Status::permission_denied("只有群主可以解散群组"));
+                }
+                self.send_group_dismiss_message(&user_id, &group_id).await;
+                //休眠0.5秒
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            Err(e) => {
+                error!("获取群组信息失败: {}", e);
+                return Err(Status::not_found("群组不存在"));
+            }
+        };
+
         match self.group_repository.delete_group(group_id.clone(), user_id.clone()).await {
             Ok(success) => {
                 // 删除群成员
@@ -377,7 +425,10 @@ impl GroupService for GroupServiceImpl {
                 }
                 
                 //删除缓存
-                self.cache.del_group_members(&group_id).await?;
+                if let Err(e) = self.cache.del_group_members(&group_id).await {
+                    error!("删除群组缓存失败: {}", e);
+                }
+
                 if success {
                     info!("删除群组成功: {}", group_id);
                     Ok(Response::new(DeleteGroupResponse { success }))
