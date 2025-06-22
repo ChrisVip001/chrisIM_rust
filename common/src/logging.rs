@@ -297,14 +297,25 @@ fn cleanup_old_log_files(directory: &str, filename_prefix: &str, max_files: usiz
         let path = entry.path();
         
         if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-            // 检查文件名是否匹配我们的日志文件模式
-            if file_name.starts_with(filename_prefix) {
+            // 检查文件名是否匹配我们的日志文件模式: {prefix}.log.{timestamp}
+            let expected_start = format!("{}.log.", filename_prefix);
+            if file_name.starts_with(&expected_start) {
                 // 提取时间戳部分用于排序
-                if let Some(timestamp_part) = file_name.strip_prefix(&format!("{}.", filename_prefix)) {
-                    // 只处理我们的日志文件格式（YYYY-MM-DD 或 YYYY-MM-DD-HH）
+                if let Some(timestamp_part) = file_name.strip_prefix(&expected_start) {
+                    // 只处理我们的日志文件格式（YYYY-MM-DD 或 YYYY-MM-DD-HH 或 YYYY-MM-DD-HH-MM）
                     if timestamp_part.len() >= 10 && timestamp_part.chars().nth(4) == Some('-') {
-                        log_files.insert(timestamp_part.to_string(), path);
+                        log_files.insert(timestamp_part.to_string(), path.clone());
+                        info!("找到匹配的日志文件: {} -> {}", file_name, timestamp_part);
+                    } else {
+                        info!("时间戳格式不匹配，忽略文件: {} (时间戳部分: {})", file_name, timestamp_part);
                     }
+                } else {
+                    info!("无法提取时间戳，忽略文件: {}", file_name);
+                }
+            } else {
+                // 调试信息：输出不匹配的文件名
+                if file_name.contains(filename_prefix) {
+                    info!("文件名包含前缀但格式不匹配: {} (期望开头: {})", file_name, expected_start);
                 }
             }
         }
@@ -335,6 +346,8 @@ fn cleanup_old_log_files(directory: &str, filename_prefix: &str, max_files: usiz
         if removed_count > 0 {
             info!("清理完成，删除了 {} 个旧日志文件，保留最新的 {} 个文件", removed_count, max_files);
         }
+    } else {
+        info!("文件数量 {} 未超过限制 {}，无需清理", log_files.len(), max_files);
     }
     
     Ok(())

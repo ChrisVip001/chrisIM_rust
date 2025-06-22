@@ -264,8 +264,8 @@ impl UserServiceImpl {
         Ok(is_online)
     }
 
-    /// 检查用户好友和拉黑状态
-    async fn check_friend_and_blacklist_status(&self, current_user_id: &str, target_user_id: &str) -> Result<(i32, bool), Status> {
+    /// 检查用户好友和拉黑状态 ()
+    async fn check_friend_and_blacklist_status(&self, current_user_id: &str, target_user_id: &str) -> Result<(i32, bool, Option<String>), Status> {
         let check_friendship_request =  CheckFriendshipRequest {
             user_id: current_user_id.to_string(),
             friend_id: target_user_id.to_string(),
@@ -277,7 +277,7 @@ impl UserServiceImpl {
             blocked_user_id: target_user_id.to_string(),
         };
         let is_blocked = self.friend_service_client.clone().is_blocked(check_block_request).await?.into_inner().is_blocked;
-        Ok((friend_status.status, is_blocked))
+        Ok((friend_status.status, is_blocked,friend_status.request_id))
     }
 }
 
@@ -514,7 +514,7 @@ impl UserService for UserServiceImpl {
         let is_online = self.check_user_online_status(&req.user_id).await.unwrap_or(false);
 
         // 检查好友关系和拉黑状态
-        let (friend_status, is_blocked) = self.check_friend_and_blacklist_status(&req.current_user_id, &req.user_id).await?;
+        let (friend_status, is_blocked,request_id) = self.check_friend_and_blacklist_status(&req.current_user_id, &req.user_id).await?;
 
         // 如果是好友关系，查找对应的好友关系列表
         if friend_status == 1 {
@@ -553,6 +553,7 @@ impl UserService for UserServiceImpl {
                 user: Some(ProtoUser::from(processed_user)),
                 is_blocked,
                 friend_status: friend_status as i32,
+                request_id,
                 is_online,
                 friend_relation: friend_relation_resp.friend.map(|f| common::proto::user::FriendRelation {
                     remark: f.remark,
@@ -568,6 +569,7 @@ impl UserService for UserServiceImpl {
                 user: Some(ProtoUser::from(processed_user)),
                 is_blocked,
                 friend_status: friend_status as i32,
+                request_id,
                 is_online,
                 friend_relation: None,
             }))

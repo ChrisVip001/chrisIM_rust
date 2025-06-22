@@ -63,6 +63,7 @@ impl UserServiceHandler {
                     "user": self.convert_user_to_json(&user),
                     "isBlocked": response.is_blocked,
                     "friendStatus": response.friend_status,
+                    "requestId": response.request_id.unwrap_or_default(),
                     "isOnline": response.is_online,
                     "isStarred": false,
                     "isTop": false,
