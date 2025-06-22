@@ -1,4 +1,4 @@
-use super::common::{error_response, extract_i64_param, extract_string_array_param, extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
+use super::common::{error_response, extract_i64_param, extract_string_array_param, get_optional_string_array,extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
 use axum::{body::Body, http::{Method, Response, StatusCode}};
 use chrono::Utc;
 use common::proto::message::chat_service_client::ChatServiceClient;
@@ -424,8 +424,8 @@ impl ChatServiceHandler {
 
         // 解析请求参数
         let message_ids: Vec<String> = extract_string_array_param(&body, "messageIds", Some("message_ids"))?;
-        let target_user_ids: Vec<String> = extract_string_array_param(&body, "targetUserIds", Some("target_user_ids"))?;
-        let target_group_ids: Vec<String> = extract_string_array_param(&body, "targetGroupIds", Some("target_group_ids"))?;
+        let target_user_ids: Option<Vec<String>> = get_optional_string_array(&body, "targetUserIds", Some("target_user_ids"));
+        let target_group_ids: Option<Vec<String>> = get_optional_string_array(&body, "targetGroupIds", Some("target_group_ids"));
         let forward_comment = get_optional_string(&body, "comment", Some("comment"));
 
         // 验证参数
@@ -433,9 +433,11 @@ impl ChatServiceHandler {
             return Ok(error_response("原始消息ID不能为空", StatusCode::BAD_REQUEST));
         }
 
-        if target_user_ids.is_empty() && target_group_ids.is_empty() {
+        if target_user_ids.is_none() && target_group_ids.is_none() {
             return Ok(error_response("必须指定转发目标", StatusCode::BAD_REQUEST));
         }
+        let target_user_ids= target_user_ids.unwrap_or_default();
+        let target_group_ids= target_group_ids.unwrap_or_default();
 
         // 构建gRPC请求
         let request = ForwardMessageRequest {
