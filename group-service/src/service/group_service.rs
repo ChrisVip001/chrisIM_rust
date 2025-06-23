@@ -294,6 +294,66 @@ impl GroupServiceImpl {
 
         Ok(member)
     }
+
+    // 发送添加群组成员消息通知
+    async fn send_add_member_message(&self, added_by_id: &str, group_id: &str, message: &str) {
+        // 创建添加成员消息
+        let add_member_msg = Msg {
+            send_id: added_by_id.to_string(),
+            msg_type: MsgType::GroupInviteNew as i32,  // 使用邀请新成员消息类型
+            content_type: ContentType::Text as i32,
+            content: message.as_bytes().to_vec(),
+            group_id: group_id.to_string(),
+            create_time: Utc::now().timestamp_millis(),
+            receiver_id: group_id.to_string(),
+            ..Default::default()
+        };
+
+        // 创建SendMsgRequest并发送消息
+        let request = SendMsgRequest {
+            message: Some(add_member_msg),
+        };
+
+        let mut chat_client = self.chat_service_client.clone();
+        match chat_client.send_msg(request).await {
+            Ok(response) => {
+                info!("添加群组成员消息发送成功: {:?}", response.into_inner());
+            }
+            Err(e) => {
+                error!("添加群组成员消息发送失败: group_id={}, error={:?}", group_id, e);
+            }
+        }
+    }
+
+    // 发送移除群组成员消息通知
+    async fn send_remove_member_message(&self, removed_by_id: &str, group_id: &str, message: &str) {
+        // 创建移除成员消息
+        let remove_member_msg = Msg {
+            send_id: removed_by_id.to_string(),
+            msg_type: MsgType::GroupMemberExit as i32,  // 使用退出群成员消息类型
+            content_type: ContentType::Text as i32,
+            content: message.as_bytes().to_vec(),
+            group_id: group_id.to_string(),
+            create_time: Utc::now().timestamp_millis(),
+            receiver_id: group_id.to_string(),
+            ..Default::default()
+        };
+
+        // 创建SendMsgRequest并发送消息
+        let request = SendMsgRequest {
+            message: Some(remove_member_msg),
+        };
+
+        let mut chat_client = self.chat_service_client.clone();
+        match chat_client.send_msg(request).await {
+            Ok(response) => {
+                info!("退出群组成员消息发送成功: {:?}", response.into_inner());
+            }
+            Err(e) => {
+                error!("退出群组成员消息发送失败: group_id={}, error={:?}", group_id, e);
+            }
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -617,7 +677,7 @@ impl GroupService for GroupServiceImpl {
             } else {
                 format!("{} 位新成员加入群聊", added_count)
             };
-            self.send_create_group_message(&added_by_id, &group_id, &message).await;
+            self.send_add_member_message(&added_by_id, &group_id, &message).await;
         }
         
         // 如果至少有一个成员添加成功，返回成功
@@ -677,6 +737,15 @@ impl GroupService for GroupServiceImpl {
         if success_count > 0 {
             //删除缓存
             self.cache.del_group_members(&group_id).await?;
+            
+            // 发送移除成员消息通知
+            let message = if success_count == 1 {
+                "成员已退出群聊".to_string()
+            } else {
+                format!("{} 位成员已退出群聊", success_count)
+            };
+            self.send_remove_member_message(&removed_by_id, &group_id, &message).await;
+            
             Ok(Response::new(RemoveMemberResponse { success: true }))
         } else {
             Err(Status::not_found("没有成功移除任何成员"))
