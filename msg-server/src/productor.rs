@@ -247,7 +247,7 @@ impl ChatRpcService {
         }
     }
 
-    /// 检查好友关系和拉黑状态（基于缓存优化）
+    /// 检查好友关系和拉黑状态
     ///
     /// # 参数
     /// * `send_id` - 发送者ID
@@ -258,44 +258,6 @@ impl ChatRpcService {
     /// * `Ok(false)` - 不能发送消息（被拉黑或非好友）
     /// * `Err(Status)` - 检查失败
     async fn check_friend_relation(&self, send_id: &str, receiver_id: &str) -> Result<bool, tonic::Status> {
-        // 先检查缓存中的拉黑状态
-        match self.cache.is_user_in_blacklist(receiver_id, send_id).await {
-            Ok(is_blocked) => {
-                if is_blocked {
-                    debug!("用户 {} 已被 {} 拉黑（缓存命中），无法发送消息", send_id, receiver_id);
-                    return Ok(false);
-                }
-            }
-            Err(e) => {
-                debug!("从缓存检查拉黑状态失败: {}，将使用RPC调用", e);
-            }
-        }
-        match self.cache.is_user_in_blacklist(send_id, receiver_id).await {
-            Ok(is_blocked) => {
-                if is_blocked {
-                    debug!("用户 {} 已被 {} 拉黑（缓存命中），无法发送消息", receiver_id, send_id);
-                    return Ok(false);
-                }
-            }
-            Err(e) => {
-                debug!("从缓存检查拉黑状态失败: {}，将使用RPC调用", e);
-            }
-        }
-
-        // 检查缓存中的好友关系
-        match self.cache.check_friendship_exists(send_id, receiver_id).await {
-            Ok(is_friend) => {
-                if is_friend {
-                    debug!("好友关系缓存命中：用户 {} 和 {} 是好友", send_id, receiver_id);
-                    return Ok(true);
-                }
-            }
-            Err(e) => {
-                debug!("从缓存检查好友关系失败: {}，将使用RPC调用", e);
-            }
-        }
-
-        // 缓存未命中，使用RPC调用检查拉黑状态
         let mut friend_client = self.friend_client.clone();
         match friend_client.is_blocked(IsBlockedRequest {
             user_id: receiver_id.to_string(),
@@ -350,7 +312,7 @@ impl ChatRpcService {
         }
     }
 
-    /// 检查群组成员身份（基于缓存优化）
+    /// 检查群组成员身份
     ///
     /// # 参数
     /// * `user_id` - 用户ID
@@ -361,25 +323,6 @@ impl ChatRpcService {
     /// * `Ok(false)` - 用户不是群组成员
     /// * `Err(Status)` - 检查失败
     async fn check_group_membership(&self, user_id: &str, group_id: &str) -> Result<bool, tonic::Status> {
-        // 先检查缓存中的群组成员列表
-        match self.cache.query_group_members_id(group_id).await {
-            Ok(member_ids) => {
-                if member_ids.contains(&user_id.to_string()) {
-                    debug!("群组成员身份缓存命中：用户 {} 是群组 {} 的成员", user_id, group_id);
-                    return Ok(true);
-                } else if !member_ids.is_empty() {
-                    // 如果缓存中有成员列表但不包含该用户，说明用户不是成员
-                    debug!("群组成员身份缓存命中：用户 {} 不是群组 {} 的成员", user_id, group_id);
-                    return Ok(false);
-                }
-                // 如果缓存为空，继续使用RPC调用
-            }
-            Err(e) => {
-                debug!("从缓存查询群组成员失败: {}，将使用RPC调用", e);
-            }
-        }
-
-        // 缓存未命中，使用RPC调用检查群组成员身份
         let mut group_client = self.group_client.clone();
         match group_client.check_membership(CheckMembershipRequest {
             group_id: group_id.to_string(),
@@ -396,7 +339,7 @@ impl ChatRpcService {
         }
     }
 
-    /// 检查拉黑状态（基于缓存优化）
+    /// 检查拉黑状态
     ///
     /// # 参数
     /// * `user_id` - 用户ID
@@ -407,19 +350,6 @@ impl ChatRpcService {
     /// * `Ok(false)` - 未被拉黑
     /// * `Err(Status)` - 检查失败
     async fn check_blocked_status(&self, user_id: &str, target_user_id: &str) -> Result<bool, tonic::Status> {
-        // 先检查缓存
-        match self.cache.is_user_in_blacklist(user_id, target_user_id).await {
-            Ok(is_blocked) => {
-                if is_blocked {
-                    debug!("拉黑状态缓存命中：用户 {} 已被 {} 拉黑", target_user_id, user_id);
-                    return Ok(true);
-                }
-            }
-            Err(e) => {
-                debug!("从缓存检查拉黑状态失败: {}，将使用RPC调用", e);
-            }
-        }
-
         // 缓存未命中，使用RPC调用
         let mut friend_client = self.friend_client.clone();
         match friend_client.is_blocked(IsBlockedRequest {
@@ -440,7 +370,7 @@ impl ChatRpcService {
         }
     }
 
-    /// 根据消息类型校验发送权限（基于缓存优化）
+    /// 根据消息类型校验发送权限
     ///
     /// # 参数
     /// * `msg` - 消息对象
