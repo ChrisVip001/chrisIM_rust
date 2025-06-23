@@ -10,22 +10,7 @@ use crate::repository::member_settings_repository::MemberSettingsRepository;
 use common::config::ConfigLoader;
 use common::grpc_client::base::get_rpc_client;
 use common::proto::group::group_service_server::GroupService;
-use common::proto::group::{
-    AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse,
-    CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest,
-    CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse,
-    GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest,
-    GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest,
-    GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest,
-    GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse,
-    GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse,
-    GroupResponse, GroupSettingsResponse, MemberResponse,
-    MemberRole, MemberSettingsResponse, MuteMemberRequest,
-    MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest,
-    RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse,
-    UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest,
-    UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest,
-};
+use common::proto::group::{AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse, CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest, CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse, GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest, GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest, GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse, GroupResponse, GroupSettingsResponse, LeaveGroupRequest, LeaveGroupResponse, MemberResponse, MemberRole, MemberSettingsResponse, MuteMemberRequest, MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest, RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse, UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest, UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest};
 use common::proto::user::user_service_client::UserServiceClient;
 use common::service_discovery::LbWithServiceDiscovery;
 use sqlx::PgPool;
@@ -751,6 +736,48 @@ impl GroupService for GroupServiceImpl {
             Err(Status::not_found("没有成功移除任何成员"))
         }
     }
+
+    // 退出群组 (成员主动退出)
+    async fn leave_group(
+        &self,
+        request: Request<LeaveGroupRequest>,
+    ) -> Result<Response<LeaveGroupResponse>, Status> {
+        let req = request.into_inner();
+        let group_id = req.group_id.clone();
+        let user_id = req.user_id.clone();
+
+        // 调用member_repository的leave_group方法
+        match self.member_repository.leave_group(group_id.clone(), user_id.clone()).await {
+            Ok(success) => {
+                if success {
+                    info!("用户退出群组成功: group_id={}, user_id={}", group_id, user_id);
+
+                    // 删除缓存
+                    if let Err(e) = self.cache.del_group_members(&group_id).await {
+                        error!("删除群组缓存失败: {}", e);
+                    }
+
+                    // 发送退出群组消息通知
+                    self.send_remove_member_message(&user_id, &group_id, "成员已退出群聊").await;
+
+                    Ok(Response::new(LeaveGroupResponse { success: true }))
+                } else {
+                    Err(Status::internal("退出群组失败"))
+                }
+            }
+            Err(e) => {
+                error!("退出群组失败: {}", e);
+                if e.to_string().contains("群主不能直接退出群组") {
+                    Err(Status::permission_denied("群主不能直接退出群组，请先转让群主身份"))
+                } else if e.to_string().contains("用户不是群组成员") {
+                    Err(Status::not_found("用户不是群组成员"))
+                } else {
+                    Err(Status::internal("退出群组失败"))
+                }
+            }
+        }
+    }
+
 
     // 更新成员角色
     async fn update_member_role(

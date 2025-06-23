@@ -24,6 +24,9 @@ service GroupService {
   // 移除群组成员
   rpc RemoveMember (RemoveMemberRequest) returns (RemoveMemberResponse);
   
+  // 退出群组 (成员主动退出)
+  rpc LeaveGroup (LeaveGroupRequest) returns (LeaveGroupResponse);
+  
   // 更新成员角色
   rpc UpdateMemberRole (UpdateMemberRoleRequest) returns (MemberResponse);
   
@@ -125,6 +128,17 @@ message RemoveMemberRequest {
 
 // 移除成员响应
 message RemoveMemberResponse {
+  bool success = 1;
+}
+
+// 退出群组请求
+message LeaveGroupRequest {
+  string group_id = 1;
+  string user_id = 2;
+}
+
+// 退出群组响应
+message LeaveGroupResponse {
   bool success = 1;
 }
 

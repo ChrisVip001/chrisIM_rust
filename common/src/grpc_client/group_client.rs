@@ -8,7 +8,7 @@ use crate::proto::group::{
     DeleteGroupRequest, DeleteGroupResponse, GetGroupRequest, GetMembersRequest, GetMembersResponse,
     GetUserGroupsRequest, GetUserGroupsResponse, GroupResponse, MemberResponse, MemberRole,
     RemoveMemberRequest, RemoveMemberResponse, UpdateGroupRequest, UpdateMemberRoleRequest,
-    SearchUserGroupsRequest, SearchUserGroupsResponse,
+    SearchUserGroupsRequest, SearchUserGroupsResponse, LeaveGroupRequest, LeaveGroupResponse,
     CreateAnnouncementRequest, AnnouncementResponse, GetAnnouncementRequest, 
     GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, DeleteAnnouncementRequest,
     DeleteAnnouncementResponse, GetGroupSettingsRequest, GroupSettingsResponse,
@@ -130,6 +130,21 @@ impl GroupServiceGrpcClient {
         });
 
         let response = self.service_client.remove_member(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// 退出群组（成员主动退出）
+    pub async fn leave_group(
+        &mut self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<LeaveGroupResponse> {
+        let request = Request::new(LeaveGroupRequest {
+            group_id: group_id.to_string(),
+            user_id: user_id.to_string(),
+        });
+
+        let response = self.service_client.leave_group(request).await?;
         Ok(response.into_inner())
     }
 

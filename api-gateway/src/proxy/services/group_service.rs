@@ -185,6 +185,18 @@ impl GroupServiceHandler {
                 ))
             }
 
+            // 退出群组（成员主动退出）
+            (&Method::POST, "leaveGroup") => {
+                let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
+
+                let response = self.client.leave_group(&group_id, &current_user_id).await?;
+
+                Ok(success_response(
+                    response.success,
+                    StatusCode::OK
+                ))
+            }
+
             // 更新成员角色
             (&Method::POST, "updateMemberRole") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
