@@ -429,25 +429,6 @@ impl ConsumerService {
         // 为所有群成员增加序列号
         let seq = self.cache.incr_group_seq(members).await?;
 
-        // 根据消息类型判断是否需要更新缓存
-        // 如果是群解散，应该删除缓存数据
-        // 如果是成员退出，应该更新缓存
-        if msg.msg_type == MsgType::GroupDismiss as i32 {
-            self.cache.del_group_members(&msg.receiver_id).await?;
-        } else if msg.msg_type == MsgType::GroupMemberExit as i32 {
-            self.cache
-                .remove_group_member_id(&msg.receiver_id, &msg.send_id)
-                .await?;
-        } else if msg.msg_type == MsgType::GroupRemoveMember as i32 {
-            let data: Vec<String> =
-                bincode::deserialize(&msg.content).map_err(|e| Error::Internal(e.to_string()))?;
-
-            let member_ids_ref: Vec<&str> = data.iter().map(AsRef::as_ref).collect();
-            self.cache
-                .remove_group_member_batch(&msg.group_id, &member_ids_ref)
-                .await?;
-        }
-
         Ok(seq)
     }
 
