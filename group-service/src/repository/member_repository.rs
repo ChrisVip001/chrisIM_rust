@@ -91,6 +91,40 @@ impl MemberRepository {
         Ok(rows_affected > 0)
     }
 
+    // 主动退出群组
+    pub async fn leave_group(
+        &self,
+        group_id: String,
+        user_id: String,
+    ) -> Result<bool> {
+        // 检查用户是否是群主，群主不能直接退出群组，需要先转让群主身份
+        let member_role = self.get_member_role(group_id.clone(), user_id.clone()).await?;
+        
+        if member_role == MemberRole::Owner as i32 {
+            return Err(anyhow::anyhow!("群主不能直接退出群组，请先转让群主身份"));
+        }
+
+        // 检查用户是否是群组成员
+        let (is_member, _) = self.check_membership(group_id.clone(), user_id.clone()).await?;
+        if !is_member {
+            return Err(anyhow::anyhow!("用户不是群组成员"));
+        }
+
+        let rows_affected = sqlx::query!(
+            r#"
+            DELETE FROM group_members
+            WHERE group_id = $1 AND user_id = $2
+            "#,
+            group_id,
+            user_id
+        )
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
+
     // 更新成员角色
     pub async fn update_member_role(
         &self,
