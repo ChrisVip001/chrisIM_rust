@@ -628,6 +628,11 @@ impl GroupServiceHandler {
             "roleText": role_text,
             "joinedAt": timestamp_to_datetime_string(&user_group.joined_at),
             "remark": user_group.remark,
+            "nicknameInGroup":user_group.nickname_in_group,
+            "isTop":user_group.is_top,
+            "recallNotification":user_group.recall_notification,
+            "showNickname":user_group.show_nickname,
+            "muteNotifications":user_group.mute_notifications,
         })
     }
 

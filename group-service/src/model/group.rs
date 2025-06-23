@@ -54,6 +54,11 @@ pub struct UserGroup {
     pub role: i32,
     pub joined_at: DateTime<Utc>,
     pub remark: String,
+    pub mute_notifications: bool,
+    pub nickname_in_group: String,
+    pub is_top: bool,
+    pub recall_notification: bool,
+    pub show_nickname: bool,
 }
 
 impl UserGroup {
@@ -68,6 +73,11 @@ impl UserGroup {
             role: self.role,
             joined_at: Some(prost_types::Timestamp::from(joined_system_time)),
             remark: self.remark.clone(),
+            mute_notifications: self.mute_notifications,
+            nickname_in_group: self.nickname_in_group.clone(),
+            is_top: self.is_top,
+            recall_notification: self.recall_notification,
+            show_nickname: self.show_nickname,
         }
     }
 }

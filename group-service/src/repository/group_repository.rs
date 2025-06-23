@@ -170,9 +170,14 @@ impl GroupRepository {
                 m.role,
                 m.joined_at,
                 ms.remark,
+                ms.mute_notifications,
+                ms.nickname_in_group,
+                ms.is_top,
+                ms.recall_notification,
+                ms.show_nickname,
                 (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
             FROM groups g
-            JOIN group_members m ON g.id = m.group_id
+            LEFT JOIN group_members m ON g.id = m.group_id
             LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id
             WHERE m.user_id = $1
             "#,
@@ -190,7 +195,12 @@ impl GroupRepository {
                 member_count: g.member_count.unwrap_or(0) as i32,
                 role: g.role.parse::<i32>().unwrap_or(0),
                 joined_at: Utc.from_utc_datetime(&g.joined_at),
-                remark: g.remark.unwrap_or_default(), // 直接使用查询结果中的remark
+                remark: g.remark.unwrap_or_default(),
+                nickname_in_group: g.nickname_in_group.unwrap_or_default(),
+                is_top: g.is_top != 0,
+                recall_notification: g.recall_notification != 0,
+                show_nickname: g.show_nickname != 0,
+                mute_notifications: g.mute_notifications != 0,
             })
             .collect();
 
@@ -229,6 +239,11 @@ impl GroupRepository {
                     m.role,
                     m.joined_at,
                     ms.remark,
+                    ms.mute_notifications,
+                    ms.nickname_in_group,
+                    ms.is_top,
+                    ms.recall_notification,
+                    ms.show_nickname,
                     (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
                 FROM groups g
                 JOIN group_members m ON g.id = m.group_id
@@ -256,6 +271,11 @@ impl GroupRepository {
                     role: g.role.parse::<i32>().unwrap_or(0),
                     joined_at: Utc.from_utc_datetime(&g.joined_at),
                     remark: g.remark.unwrap_or_default(), // 直接使用查询结果中的remark
+                    nickname_in_group: g.nickname_in_group.unwrap_or_default(),
+                    is_top: g.is_top != 0,
+                    recall_notification: g.recall_notification != 0,
+                    show_nickname: g.show_nickname != 0,
+                    mute_notifications: g.mute_notifications != 0,
                 });
             }
 
@@ -287,6 +307,11 @@ impl GroupRepository {
                     m.role,
                     m.joined_at,
                     ms.remark,
+                    ms.mute_notifications,
+                    ms.nickname_in_group,
+                    ms.is_top,
+                    ms.recall_notification,
+                    ms.show_nickname,
                     (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
                 FROM groups g
                 JOIN group_members m ON g.id = m.group_id
@@ -312,6 +337,11 @@ impl GroupRepository {
                     role: g.role.parse::<i32>().unwrap_or(0),
                     joined_at: Utc.from_utc_datetime(&g.joined_at),
                     remark: g.remark.unwrap_or_default(), // 直接使用查询结果中的remark
+                    nickname_in_group: g.nickname_in_group.unwrap_or_default(),
+                    is_top: g.is_top != 0,
+                    recall_notification: g.recall_notification != 0,
+                    show_nickname: g.show_nickname != 0,
+                    mute_notifications: g.mute_notifications != 0,
                 });
             }
 

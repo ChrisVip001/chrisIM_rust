@@ -244,6 +244,11 @@ message UserGroup {
   MemberRole role = 5;
   google.protobuf.Timestamp joined_at = 6;
   string remark = 7;  // 群备注
+  bool mute_notifications = 8;  // 消息免打扰
+  string nickname_in_group = 9;  // 群内昵称
+  bool is_top = 10;  // 是否置顶
+  bool recall_notification = 11;  // 撤回通知
+  bool show_nickname = 12;  // 显示群昵称
 }
 
 // 成员角色
