@@ -521,8 +521,8 @@ impl GroupService for GroupServiceImpl {
                         error!("删除MongoDB中的群组消息失败: {}", e);
                     }
                 }
-                //休眠0.3秒
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                //休眠0.05秒
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
             Err(e) => {
                 error!("获取群组信息失败: {}", e);
