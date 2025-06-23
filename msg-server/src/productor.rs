@@ -578,15 +578,9 @@ impl ChatService for ChatRpcService {
 
         // 根据消息类型校验发送权限
         self.validate_message_permissions(&msg).await?;
-
-        // 为特定类型的消息生成服务器ID
-        // 某些系统消息（如群组解散、好友邀请等）可能已经有了服务器ID，无需重新生成
-        if !(msg.msg_type == MsgType::GroupDismissOrExitReceived as i32
-            || msg.msg_type == MsgType::GroupInvitationReceived as i32)
-        {
-            // 使用nanoid生成唯一消息ID, nanoid比UUID更短且更安全
-            msg.server_id = nanoid!();
-        }
+        
+        // 使用nanoid生成唯一消息ID, nanoid比UUID更短且更安全
+        msg.server_id = nanoid!();
 
         // 生成发送序列号
         // 所有用户发送的消息都需要一个唯一的发送序列号用于排序和去重
@@ -1337,15 +1331,28 @@ impl ChatRpcService {
 
     /// 提取会话ID
     fn extract_conversation_id(&self, msg: &Msg, user_id: &str) -> String {
-        if msg.msg_type == MsgType::GroupMsg as i32 {
-            // 群聊：会话ID是群组ID
-            msg.group_id.clone()
-        } else {
-            // 单聊：会话ID是对方的用户ID
-            if msg.send_id == user_id {
-                msg.receiver_id.clone()
-            } else {
-                msg.send_id.clone()
+        let msg_type = MsgType::try_from(msg.msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
+        match msg_type {
+            MsgType::GroupMsg |
+            MsgType::GroupInvitation |
+            MsgType::GroupInviteNew |
+            MsgType::GroupMemberExit |
+            MsgType::GroupRemoveMember |
+            MsgType::GroupDismiss |
+            MsgType::GroupDismissOrExitReceived |
+            MsgType::GroupInvitationReceived |
+            MsgType::GroupUpdate
+            => {
+                // 群聊：会话ID是群组ID
+                msg.group_id.clone()
+            }
+            _ => {
+                // 单聊：会话ID是对方的用户ID
+                if msg.send_id == user_id {
+                    msg.receiver_id.clone()
+                } else {
+                    msg.send_id.clone()
+                }
             }
         }
     }
