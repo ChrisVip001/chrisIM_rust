@@ -2,7 +2,7 @@ use std::io::Read;
 use chrono::{FixedOffset, Utc};
 use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest, GetUsersByIdsRequest, GetUsersByIdsResponse};
+use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest, GetUsersByIdsRequest, GetUsersByIdsResponse, UpdateLastLoginTimeRequest, UpdateLastLoginTimeResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -1130,4 +1130,22 @@ impl UserService for UserServiceImpl {
         }))
     }
 
+    async fn update_last_login_time(
+        &self,
+        request: Request<UpdateLastLoginTimeRequest>)
+        -> Result<Response<UpdateLastLoginTimeResponse>, Status> {
+        let user_id = request.into_inner().user_id;
+        match self.repository.update_last_login_time(user_id.clone()).await {
+            Ok(success) => {
+                info!("更新用户最后登录时间成功，用户ID: {}", user_id);
+                Ok(Response::new(UpdateLastLoginTimeResponse {
+                    success,
+                }))
+            },
+            Err(err) => {
+                error!("更新用户最后登录时间失败: {}", err);
+                Err(err.into())
+            }
+        }
+    }
 }

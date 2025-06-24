@@ -61,6 +61,10 @@ service UserService {
   
   // 根据用户ID列表获取用户列表
   rpc GetUsersByIds (GetUsersByIdsRequest) returns (GetUsersByIdsResponse);
+
+  // 登录后更新最后登录时间
+  rpc UpdateLastLoginTime (UpdateLastLoginTimeRequest) returns (UpdateLastLoginTimeResponse);
+  
 }
 
 // 创建用户请求
@@ -378,4 +382,12 @@ message GetUsersByIdsRequest {
 // 根据ID列表获取用户列表响应
 message GetUsersByIdsResponse {
   repeated User users = 1;
+}
+
+message UpdateLastLoginTimeRequest{
+  string user_id = 1;
+}
+
+message UpdateLastLoginTimeResponse{
+  bool success = 1;
 }

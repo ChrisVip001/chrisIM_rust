@@ -835,4 +835,24 @@ impl UserRepository {
 
         Ok(users)
     }
+    pub async fn update_last_login_time(&self, user_id: String) -> Result<bool> {
+        
+        let result = sqlx::query!(
+            r#"
+            UPDATE users
+            SET last_login_time = now()
+            WHERE id = $1
+            "#,
+            user_id
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|err| {
+            error!("更新用户最后登录时间失败: {}", err);
+            Error::Database(err)
+        })?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
 }

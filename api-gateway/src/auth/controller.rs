@@ -171,6 +171,19 @@ impl SharedUserService {
             .map(|response| response.into_inner())
             .map_err(Into::into)
     }
+
+    pub async fn update_last_login_time(
+        &self,
+        request: common::proto::user::UpdateLastLoginTimeRequest,
+    ) -> Result<common::proto::user::UpdateLastLoginTimeResponse, anyhow::Error> {
+        // 克隆基础客户端
+        let mut client = self.0.clone();
+        client
+            .update_last_login_time(request)
+            .await
+            .map(|response| response.into_inner())
+            .map_err(Into::into)
+    }
 }
 
 /// 处理短信验证码登录请求
@@ -233,6 +246,11 @@ pub async fn login_by_phone(
     )
     .await?;
 
+    let login_time_req=common::proto::user::UpdateLastLoginTimeRequest {
+        user_id: user.id,
+    };
+    user_service.update_last_login_time(login_time_req).await?;
+    
     // 返回响应
     Ok(success_response(login_response, StatusCode::OK))
 }
@@ -305,6 +323,12 @@ pub async fn login(
     )
     .await?;
 
+    let login_time_req=common::proto::user::UpdateLastLoginTimeRequest {
+        user_id: user.id,
+    };
+    user_service.update_last_login_time(login_time_req).await?;
+    
+    
     // 返回响应
     Ok(success_response(login_response, StatusCode::OK))
 }
