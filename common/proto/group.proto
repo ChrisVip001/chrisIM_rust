@@ -419,13 +419,10 @@ message MuteMemberRequest {
   string group_id = 1;
   string user_id = 2;
   string creator_id = 3;
-  string reason = 4;
-  google.protobuf.Timestamp mute_until = 5;
-  bool is_permanent = 6;
 }
 
 message MuteResponse {
-  MuteEntry entry = 1;
+  bool success = 1;
 }
 
 message UnmuteMemberRequest {
@@ -443,7 +440,7 @@ message GetMutedMembersRequest {
 }
 
 message GetMutedMembersResponse {
-  repeated MuteEntry entries = 1;
+  repeated Member entries = 1;
 }
 
 // 新增: 检查用户禁言状态请求
@@ -455,7 +452,6 @@ message CheckUserMuteStatusRequest {
 // 新增: 检查用户禁言状态响应
 message CheckUserMuteStatusResponse {
   bool is_muted = 1;                // 是否被禁言
-  optional MuteEntry mute_info = 2; // 禁言信息（如果被禁言）
 }
 
 // 新增消息定义 - 群成员设置

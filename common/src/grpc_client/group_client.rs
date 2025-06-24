@@ -375,17 +375,11 @@ impl GroupServiceGrpcClient {
         group_id: &str,
         user_id: &str,
         creator_id: &str,
-        reason: &str,
-        mute_until: Option<prost_types::Timestamp>,
-        is_permanent: bool,
     ) -> Result<MuteResponse> {
         let request = Request::new(MuteMemberRequest {
             group_id: group_id.to_string(),
             user_id: user_id.to_string(),
             creator_id: creator_id.to_string(),
-            reason: reason.to_string(),
-            mute_until,
-            is_permanent,
         });
 
         let response = self.service_client.mute_member(request).await?;

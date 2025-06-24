@@ -15,6 +15,7 @@ pub struct Member {
     pub avatar_url: Option<String>,
     pub role: i32,
     pub joined_at: DateTime<Utc>,
+    pub is_muted: bool,
 }
 
 impl Member {
@@ -35,6 +36,7 @@ impl Member {
             avatar_url,
             role: role as i32,
             joined_at: Utc::now(),
+            is_muted: false,
         }
     }
 
@@ -50,7 +52,7 @@ impl Member {
             avatar_url: self.avatar_url.clone(),
             role: self.role,
             joined_at: Some(prost_types::Timestamp::from(joined_system_time)),
-            is_muted: false,
+            is_muted: self.is_muted,
             mute_info: None,
             remark: "".to_string(),
         }

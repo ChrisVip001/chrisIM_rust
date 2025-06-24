@@ -32,15 +32,16 @@ impl MemberRepository {
 
         let result = sqlx::query!(
             r#"
-            INSERT INTO group_members (id, group_id, user_id, role, joined_at)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, group_id, user_id, role, joined_at
+            INSERT INTO group_members (id, group_id, user_id, role, joined_at, is_muted)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, group_id, user_id, role, joined_at, is_muted
             "#,
             member.id,
             member.group_id,
             member.user_id,
             member.role.to_string(),
-            joined_at_naive
+            joined_at_naive,
+            0,
         )
         .fetch_one(&self.pool)
         .await?;
@@ -54,6 +55,7 @@ impl MemberRepository {
             avatar_url: member.avatar_url,
             role: result.role.parse::<i32>().unwrap_or(0),
             joined_at: Utc.from_utc_datetime(&result.joined_at),
+            is_muted: result.is_muted == 1,
         })
     }
 
@@ -172,6 +174,7 @@ impl MemberRepository {
             avatar_url: member_info.avatar_url,
             role: result.role.parse::<i32>().unwrap_or(0),
             joined_at: Utc.from_utc_datetime(&result.joined_at),
+            is_muted: member_info.is_muted,
         })
     }
 
@@ -182,7 +185,7 @@ impl MemberRepository {
         let result = sqlx::query!(
             r#"
             SELECT m.id, m.group_id, m.user_id, m.role, m.joined_at, 
-                   u.username, u.nickname, u.avatar_url
+                   u.username, u.nickname, u.avatar_url, m.is_muted
             FROM group_members m
             JOIN users u ON m.user_id = u.id
             WHERE m.group_id = $1 AND m.user_id = $2
@@ -202,6 +205,7 @@ impl MemberRepository {
             avatar_url: result.avatar_url,
             role: result.role.parse::<i32>().unwrap_or(0),
             joined_at: Utc.from_utc_datetime(&result.joined_at),
+            is_muted: result.is_muted == 1,
         })
     }
 
@@ -248,7 +252,7 @@ impl MemberRepository {
         // 查询成员列表
         let query = r#"
             SELECT m.id, m.group_id, m.user_id, m.role, m.joined_at,
-                  u.username, u.nickname, u.avatar_url
+                  u.username, u.nickname, u.avatar_url, m.is_muted
             FROM group_members m
             JOIN users u ON m.user_id = u.id
             WHERE m.group_id = $1
@@ -276,6 +280,7 @@ impl MemberRepository {
                     avatar_url: row.get("avatar_url"),
                     role: row.get::<String, _>("role").parse::<i32>().unwrap_or(0),
                     joined_at: Utc.from_utc_datetime(&row.get::<chrono::NaiveDateTime, _>("joined_at")),
+                    is_muted: row.get::<i32, _>("is_muted") == 1,
                 }
             })
             .collect();
@@ -331,5 +336,87 @@ impl MemberRepository {
             .rows_affected();
 
         Ok(rows_affected > 0)
+    }
+
+    // 设置成员禁言状态
+    pub async fn set_member_muted_status(
+        &self,
+        group_id: String,
+        user_id: String,
+        is_muted: i32,
+    ) -> Result<bool> {
+        let result = sqlx::query!(
+            r#"
+            update group_members
+            SET is_muted = $3
+            WHERE group_id = $1 AND user_id = $2
+            "#,
+            group_id,
+            user_id,
+            is_muted,
+        )
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+
+
+    // 检查用户是否是群组成员
+    pub async fn check_user_mute_status(
+        &self,
+        group_id: String,
+        user_id: String,
+    ) -> Result<bool> {
+        let result = sqlx::query!(
+            r#"
+            SELECT is_muted
+            FROM group_members
+            WHERE group_id = $1 AND user_id = $2
+            "#,
+            group_id,
+            user_id
+        )
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(result.is_muted == 1)
+    }
+
+    pub async fn get_muted_members(
+        &self,
+        group_id: String,
+    ) -> Result<Vec<Member>> {
+        let members = sqlx::query!(
+            r#"
+            SELECT m.id, m.group_id, m.user_id, m.role, m.joined_at,
+                  u.username, u.nickname, u.avatar_url, m.is_muted
+            FROM group_members m
+            JOIN users u ON m.user_id = u.id
+            WHERE m.group_id = $1 AND m.is_muted = 1"#
+            ,
+            group_id
+       )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let result = members
+            .into_iter()
+            .map(|row| {
+                Member {
+                    id: row.id,
+                    group_id: row.group_id,
+                    user_id: row.user_id,
+                    username: row.username,
+                    nickname: row.nickname,
+                    avatar_url: row.avatar_url,
+                    role: row.role.parse::<i32>().unwrap_or(0),
+                    joined_at: Utc.from_utc_datetime(&row.joined_at),
+                    is_muted: row.is_muted == 1,
+                }
+            })
+            .collect();
+            Ok(result)
     }
 }

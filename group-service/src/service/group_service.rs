@@ -30,7 +30,7 @@ pub struct GroupServiceImpl {
     announcement_repository: GroupAnnouncementRepository,
     settings_repository: GroupSettingsRepository,
     blacklist_repository: GroupBlacklistRepository,
-    mutes_repository: GroupMutesRepository,
+    // mutes_repository: GroupMutesRepository,
     member_settings_repository: MemberSettingsRepository,
     user_service_client: UserServiceClient<LbWithServiceDiscovery>,
     chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
@@ -56,7 +56,7 @@ impl GroupServiceImpl {
             announcement_repository: GroupAnnouncementRepository::new(pool.clone()),
             settings_repository: GroupSettingsRepository::new(pool.clone()),
             blacklist_repository: GroupBlacklistRepository::new(pool.clone()),
-            mutes_repository: GroupMutesRepository::new(pool.clone()),
+            // mutes_repository: GroupMutesRepository::new(pool.clone()),
             member_settings_repository: MemberSettingsRepository::new(pool.clone()),
             user_service_client,
             chat_service_client,
@@ -125,29 +125,7 @@ impl GroupServiceImpl {
         }
     }
     
-    // 检查用户禁言状态
-    async fn check_user_mute_status(&self, group_id: &str, user_id: &str) -> Result<Option<common::proto::group::MuteEntry>, Status> {
-        match self.mutes_repository.get_mute_status(group_id.to_string(), user_id.to_string()).await {
-            Ok(mute_entry) => {
-                if let Some(entry) = mute_entry {
-                    // 检查禁言是否有效
-                    if entry.is_active() {
-                        Ok(Some(entry.to_proto()))
-                    } else {
-                        // 如果禁言已过期，返回None
-                        Ok(None)
-                    }
-                } else {
-                    // 用户未被禁言
-                    Ok(None)
-                }
-            }
-            Err(e) => {
-                error!("检查用户禁言状态失败: {}", e);
-                Err(Status::internal("检查用户禁言状态失败"))
-            }
-        }
-    }
+
     
     // 创建群聊消息
     async fn send_create_group_message(&self, owner_id: &str, group_id: &str, message: &str) {
@@ -830,12 +808,7 @@ impl GroupService for GroupServiceImpl {
             Ok((members, total)) => {
                 // 转换成员列表为 proto 对象
                 let mut proto_members = Vec::with_capacity(members.len());
-                
-                // 批量获取群组中所有被禁言的成员状态
-                let mute_map = self.mutes_repository.get_active_mutes_by_group_id(group_id.clone()).await.unwrap_or_else(|e| {
-                    error!("批量获取群组禁言状态失败: {}", e);
-                    std::collections::HashMap::new() // 出错时使用空映射继续处理
-                });
+
 
                 // 批量获取群组中所有成员设置
                 let member_setting_map = self.member_settings_repository.get_active_mutes_by_group_id(group_id.clone()).await.unwrap_or_else(|e| {
@@ -846,13 +819,7 @@ impl GroupService for GroupServiceImpl {
                 for member in members {
                     // 先创建基本的成员对象
                     let mut proto_member = member.to_proto();
-                    
-                    // 检查该成员是否在禁言映射中
-                    if let Some(mute_entry) = mute_map.get(&member.user_id) {
-                        // 设置禁言状态和详细信息
-                        proto_member.is_muted = true;
-                        proto_member.mute_info = Some(mute_entry.to_proto());
-                    }
+
                     
                     // 检查该成员是否在成员设置映射中
                     if let Some(member_setting) = member_setting_map.get(&member.user_id) {
@@ -1289,39 +1256,25 @@ impl GroupService for GroupServiceImpl {
         let group_id = req.group_id.clone();
         let user_id = req.user_id.clone();
         let creator_id = req.creator_id.clone();
-        let reason = if req.reason.is_empty() { None } else { Some(req.reason) };
-        let is_permanent = req.is_permanent;
-
-        // 将 Timestamp 转换为 DateTime<Utc>
-        let mute_until = req.mute_until.map(|ts| {
-            chrono::DateTime::<chrono::Utc>::from_timestamp(ts.seconds, ts.nanos as u32)
-                .unwrap_or_else(|| chrono::Utc::now())
-        });
-
-        // 验证操作者的权限 (群主或管理员)
-        match self.member_repository.get_member_role(group_id.clone(), creator_id.clone()).await {
-            Ok(role) => {
-                if role < MemberRole::Admin as i32 {
-                    return Err(Status::permission_denied("只有群主或管理员才能禁言成员"));
-                }
-            }
-            Err(_) => {
-                return Err(Status::permission_denied("操作者不是群组成员"));
-            }
-        }
 
         // 检查目标用户的角色，不能禁言管理员或群主
         let creator_role = match self.member_repository.get_member_role(group_id.clone(), creator_id.clone()).await {
-            Ok(role) => role,
+            Ok(role) => {
+                // 验证操作者的权限 (群主或管理员)
+                if role < MemberRole::Admin as i32 {
+                    return Err(Status::permission_denied("只有群主或管理员才能禁言成员"));
+                }
+                role
+            },
             Err(e) => {
-                error!("获取创建者角色失败: {}", e);
-                return Err(Status::internal("获取创建者角色失败"));
+                error!("操作者不是群组成员: {}", e);
+                return Err(Status::permission_denied("操作者不是群组成员"));
             }
         };
 
         match self.member_repository.get_member_role(group_id.clone(), user_id.clone()).await {
             Ok(role) => {
-                if role >= creator_role && creator_id != user_id {
+                if role >= creator_role {
                     return Err(Status::permission_denied("不能禁言角色相同或更高的成员"));
                 }
             }
@@ -1330,12 +1283,10 @@ impl GroupService for GroupServiceImpl {
             }
         }
 
-        match self.mutes_repository.mute_member(group_id, user_id, creator_id, reason, mute_until, is_permanent).await {
-            Ok(entry) => {
-                info!("禁言成员成功: {:?}", entry);
-                Ok(Response::new(MuteResponse {
-                    entry: Some(entry.to_proto()),
-                }))
+        match self.member_repository.set_member_muted_status(group_id, user_id,1).await {
+            Ok(success) => {
+                info!("禁言成员成功");
+                Ok(Response::new(MuteResponse { success }))
             }
             Err(e) => {
                 error!("禁言成员失败: {}", e);
@@ -1366,7 +1317,7 @@ impl GroupService for GroupServiceImpl {
             }
         }
 
-        match self.mutes_repository.unmute_member(group_id, user_id).await {
+        match self.member_repository.set_member_muted_status(group_id, user_id,0).await {
             Ok(success) => {
                 info!("解除成员禁言成功");
                 Ok(Response::new(UnmuteResponse { success }))
@@ -1386,7 +1337,7 @@ impl GroupService for GroupServiceImpl {
         let req = request.into_inner();
         let group_id = req.group_id.clone();
 
-        match self.mutes_repository.get_muted_members(group_id).await {
+        match self.member_repository.get_muted_members(group_id).await {
             Ok(entries) => {
                 let proto_entries = entries.into_iter().map(|e| e.to_proto()).collect();
                 Ok(Response::new(GetMutedMembersResponse { entries: proto_entries }))
@@ -1504,13 +1455,10 @@ impl GroupService for GroupServiceImpl {
                 return Err(Status::internal("检查成员资格失败"));
             }
         }
-
-        // 查询用户禁言状态
-        match self.check_user_mute_status(&group_id, &user_id).await {
+        match self.member_repository.check_user_mute_status(group_id.clone(), user_id.clone()).await { 
             Ok(mute_entry_opt) => {
                 Ok(Response::new(CheckUserMuteStatusResponse {
-                    is_muted: mute_entry_opt.is_some(),
-                    mute_info: mute_entry_opt,
+                    is_muted: mute_entry_opt,
                 }))
             }
             Err(e) => {

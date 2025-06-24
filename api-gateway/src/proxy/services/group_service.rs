@@ -419,34 +419,17 @@ impl GroupServiceHandler {
             (&Method::POST, "muteMember") => {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
                 let target_user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-                let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let is_permanent = get_bool_param(&body, "isPermanent", Some("is_permanent"), true);
-                
-                // 处理禁言截止时间
-                let mute_until = if is_permanent {
-                    None
-                } else {
-                    let duration_minutes = body.get("durationMinutes")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(60); // 默认60分钟
-                    
-                    let now = SystemTime::now();
-                    let future_time = now + StdDuration::from_secs((duration_minutes * 60) as u64);
-                    Some(prost_types::Timestamp::from(future_time))
-                };
 
                 let response = self.client.mute_member(
                     &group_id,
                     &target_user_id,
-                    &current_user_id,
-                    &reason,
-                    mute_until,
-                    is_permanent
+                    &current_user_id
                 ).await?;
-
-                let entry = response.entry.ok_or_else(|| anyhow::anyhow!("禁言数据为空"))?;
-
-                Ok(success_response(self.convert_mute_entry_to_json(&entry), StatusCode::OK))
+                
+                Ok(success_response(
+                    response.success,
+                    StatusCode::OK
+                ))
             }
 
             // 解除成员禁言
@@ -472,7 +455,7 @@ impl GroupServiceHandler {
 
                 let response = self.client.get_muted_members(&group_id).await?;
                 let entries = response.entries.iter()
-                    .map(|e| self.convert_mute_entry_to_json(e))
+                    .map(|e| self.convert_member_to_json(e))
                     .collect::<Vec<_>>();
 
                 Ok(success_response(entries, StatusCode::OK))
