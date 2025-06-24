@@ -363,4 +363,24 @@ impl GroupRepository {
 
         Ok((result, total))
     }
+    
+    // 修改群组全员禁言状态
+    pub async fn update_group_muted(&self, group_id: String, muted: bool) -> Result<bool> {
+        let muted=match muted {
+            true => {1}
+            false => {0}
+        };
+        let result=sqlx::query!(
+            r#"
+            UPDATE groups
+            SET all_member_muted = $1
+            WHERE id = $2
+            "#,
+            muted,
+            group_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }

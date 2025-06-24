@@ -1117,6 +1117,21 @@ impl GroupService for GroupServiceImpl {
                 return Err(Status::permission_denied("用户不是群组成员"));
             }
         }
+        match req.all_member_muted.clone() {
+            // 如果修改了全员禁言设置，同步修改群组表的设置（用于发消息时验证），否则不处理
+            Some(muted) => {
+               match self.group_repository.update_group_muted(group_id.clone(), muted).await {
+                   Ok(_) => {
+                        info!("更新群组全员禁言设置成功");
+                    },
+                   Err(e) => {
+                        error!("更新群组全员禁言设置失败: {}", e);
+                        return Err(Status::internal("更新群组全员禁言设置失败"));
+                   }
+               }
+            },
+            None => {}
+        }
 
         match self.settings_repository.update_group_settings(
             group_id,
