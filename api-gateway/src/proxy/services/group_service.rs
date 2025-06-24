@@ -99,7 +99,8 @@ impl GroupServiceHandler {
                     &group_id,
                     name,
                     description,
-                    avatar_url
+                    avatar_url,
+                    current_user_id,
                 ).await?;
                 
                 let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;

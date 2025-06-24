@@ -73,12 +73,14 @@ impl GroupServiceGrpcClient {
         name: Option<String>,
         description: Option<String>,
         avatar_url: Option<String>,
+        current_user_id: String,
     ) -> Result<GroupResponse> {
         let request = Request::new(UpdateGroupRequest {
             group_id: group_id.to_string(),
             name,
             description,
             avatar_url,
+            current_user_id,
         });
 
         let response = self.service_client.update_group(request).await?;

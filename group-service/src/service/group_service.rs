@@ -432,6 +432,36 @@ impl GroupService for GroupServiceImpl {
     ) -> Result<Response<GroupResponse>, Status> {
         let req = request.into_inner();
         let group_id = req.group_id.clone();
+        let current_user_id = req.current_user_id.clone();
+
+        // 查询群设置
+        let only_admin_can_modify = match self.settings_repository.get_group_settings(group_id.clone()).await {
+            Ok(group_setting) => group_setting.only_admin_can_modify,
+            Err(e) => {
+                error!("获取群组设置失败: {}", e);
+                return Err(Status::internal("获取群组设置失败"));
+            }
+        };
+        
+        match only_admin_can_modify {
+            true => {
+                // 检查目标用户的角色，非管理员或群主不能修改信息
+                match self.member_repository.get_member_role(group_id.clone(), current_user_id.clone()).await {
+                    Ok(role) => {
+                        // 验证操作者的权限 (群主或管理员)
+                        if role < MemberRole::Admin as i32 {
+                            return Err(Status::permission_denied("只有群主或管理员才能修改群组信息"));
+                        }
+                    },
+                    Err(e) => {
+                        error!("操作者不是群组成员: {}", e);
+                        return Err(Status::permission_denied("操作者不是群组成员"));
+                    }
+                };
+                
+            }
+            false => {}
+        }
 
         match self
             .group_repository
