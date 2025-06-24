@@ -234,7 +234,8 @@ CREATE TABLE groups
     announcement_id VARCHAR(36),
     join_mode       VARCHAR(10)  NOT NULL DEFAULT 'APPROVAL' CHECK (join_mode IN ('OPEN', 'APPROVAL', 'INVITE_ONLY')),
     qrcode_id       VARCHAR(36),
-    group_type      VARCHAR(10)  NOT NULL DEFAULT 'NORMAL' CHECK (group_type IN ('NORMAL', 'SUPER'))
+    group_type      VARCHAR(10)  NOT NULL DEFAULT 'NORMAL' CHECK (group_type IN ('NORMAL', 'SUPER')),
+    all_member_muted integer NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_groups_owner_id ON groups (owner_id);
@@ -260,6 +261,7 @@ COMMENT ON COLUMN groups.announcement_id IS '当前群公告ID';
 COMMENT ON COLUMN groups.join_mode IS '加入模式：OPEN(开放)、APPROVAL(审批)、INVITE_ONLY(仅邀请)';
 COMMENT ON COLUMN groups.qrcode_id IS '当前群二维码ID';
 COMMENT ON COLUMN groups.group_type IS '群类型：NORMAL(普通群)、SUPER(超级群/大群)';
+COMMENT ON COLUMN groups.all_member_muted IS '全员禁言状态 (0-未禁言，1-已禁言)';
 
 -- 群组成员表
 CREATE TABLE group_members
@@ -269,6 +271,7 @@ CREATE TABLE group_members
     user_id   VARCHAR(36) NOT NULL,
     role      VARCHAR(10) NOT NULL,
     joined_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_muted  integer NOT NULL DEFAULT 0,
     CONSTRAINT unique_membership UNIQUE (group_id, user_id)
 );
 
@@ -281,6 +284,7 @@ COMMENT ON COLUMN group_members.group_id IS '群组ID';
 COMMENT ON COLUMN group_members.user_id IS '用户ID';
 COMMENT ON COLUMN group_members.role IS '角色：0：MEMBER(普通成员)、1：ADMIN(管理员)、2：OWNER(群主)';
 COMMENT ON COLUMN group_members.joined_at IS '加入时间';
+COMMENT ON COLUMN group_members.is_muted IS '群成员禁言状态 (0-未禁言，1-已禁言)';
 
 -- 群组设置表
 CREATE TABLE group_settings
