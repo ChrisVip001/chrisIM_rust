@@ -1299,7 +1299,7 @@ impl ChatRpcService {
                 // 按发送时间排序（最新的在后）
                 msgs.sort_by(|a, b| a.send_time.cmp(&b.send_time));
 
-                Some(self.create_conversation(conversation_id, msgs))
+                Some(self.create_conversation(conversation_id, msgs,req.user_id.clone()))
             })
             .collect();
 
@@ -1358,14 +1358,18 @@ impl ChatRpcService {
     }
 
     /// 创建会话对象
-    fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>) -> Conversation {
+    fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>, user_id: String) -> Conversation {
         let mt = MsgType::try_from(msgs[0].msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
         let mt2 = MsgType2::from(mt);
 
         // 计算未读消息数（只计算接收到的未读消息）
+        // 消息未读&&收消息的人是当前查询人&&撤回的消息不算在内&&接收到的消息是单聊消息或群聊消息
         let unread_count = msgs
             .iter()
-            .filter(|msg| !msg.is_read && msg.receiver_id != msg.send_id)
+            .filter(|msg|
+                !msg.is_read && msg.receiver_id == user_id && !msg.is_revoked
+                && ( msg.msg_type == MsgType::SingleMsg as i32 || msg.msg_type == MsgType::SingleMsg as i32)
+            )
             .count() as i32;
 
         let last_active_time = msgs[0].send_time;
