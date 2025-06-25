@@ -1372,7 +1372,7 @@ impl ChatRpcService {
             )
             .count() as i32;
 
-        let last_active_time = msgs[0].send_time;
+        let last_active_time = msgs[msgs.len()-1].send_time;
 
         Conversation {
             conversation_id,
