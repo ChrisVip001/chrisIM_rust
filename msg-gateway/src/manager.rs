@@ -296,7 +296,7 @@ impl Manager {
             }
         };
         // 计算并更新未读数
-        let unread_count = self.calculate_and_update_unread_count(msg, is_self).await;
+        let unread_count = self.calculate_and_update_unread_count(msg, &conversation_id.clone(),is_self).await;
         
         // 创建一个Conversation对象
         let conversation = common::proto::message::Conversation {
@@ -507,17 +507,17 @@ impl Manager {
     /// 
     /// # 返回值
     /// 返回计算后的未读数
-    async fn calculate_and_update_unread_count(&self, msg: &Msg, is_self: bool) -> i32 {
+    async fn calculate_and_update_unread_count(&self, msg: &Msg, conversation_id:&str,is_self: bool) -> i32 {
         // 如果是发送给自己的消息副本，未读数为0，无需查询和更新缓存
         if is_self {
             return 0;
         }
 
-        let (sender_id, receiver_id) = (&msg.send_id, &msg.receiver_id);
+        let (user_id, conversation_id) = (&msg.receiver_id.clone(), conversation_id);
         
         // 查询接收者对发送者的历史未读数
         let old_unread = self.cache
-            .unread_count_sum(receiver_id, sender_id)
+            .unread_count_sum(user_id, conversation_id)
             .await
             .unwrap_or(0);
 
@@ -530,7 +530,7 @@ impl Manager {
 
         // 更新缓存中的未读数
         let _ = self.cache
-            .unread_count_set(receiver_id, sender_id, &unread_count)
+            .unread_count_set(user_id, conversation_id, &unread_count)
             .await;
 
         unread_count
