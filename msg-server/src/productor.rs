@@ -1370,13 +1370,25 @@ impl ChatRpcService {
         let mt2 = MsgType2::from(mt);
 
         // 计算未读消息数（只计算接收到的未读消息）
-        // 消息未读&&收消息的人是当前查询人&&撤回的消息不算在内&&接收到的消息是单聊消息或群聊消息
         let unread_count = msgs
             .iter()
-            .filter(|msg|
-                !msg.is_read && msg.receiver_id == user_id && !msg.is_revoked
-                && ( msg.msg_type == MsgType::SingleMsg as i32 || msg.msg_type == MsgType::SingleMsg as i32)
-            )
+            .filter(|msg| {
+                // 基本条件：消息未读且未被撤回
+                if msg.is_read || msg.is_revoked {
+                    return false;
+                }
+                
+                // 根据消息类型判断是否为当前用户的未读消息
+                let msg_type = MsgType::try_from(msg.msg_type).unwrap_or(MsgType::SingleMsg);
+                match msg_type {
+                    // 单聊消息：接收者是当前用户
+                    MsgType::SingleMsg => msg.receiver_id == user_id,
+                    // 群聊消息：发送者不是当前用户（避免统计自己发送的消息）
+                    MsgType::GroupMsg => msg.send_id != user_id,
+                    // 其他消息类型暂不统计为未读
+                    _ => false,
+                }
+            })
             .count() as i32;
         let _ = self.cache.unread_count_set(&user_id, &conversation_id, &unread_count).await;
         let last_active_time = msgs[msgs.len()-1].send_time;
