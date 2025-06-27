@@ -692,7 +692,10 @@ impl ChatService for ChatRpcService {
                     "成功标记会话 {} 中 {} 条消息为已读",
                     req.conversation_id, count
                 );
-                self.cache.unread_count_remove(&req.user_id, &req.conversation_id).await?;
+                if let Err(e) = self.cache.unread_count_remove(&req.user_id, &req.conversation_id).await {
+                    error!("清除未读计数失败: {}", e);
+                    // 这里不返回错误，因为标记已读操作已经成功，只是缓存更新失败
+                }
                 Ok(tonic::Response::new(MarkMessagesAsReadResponse {
                     success: true,
                     read_count: count,
