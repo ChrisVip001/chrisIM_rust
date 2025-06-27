@@ -138,7 +138,7 @@ impl Manager {
     async fn send_to_self(&self, id: &str, msg: &Msg) {
         if let Some(clients) = self.hub.get(id) {
             // 创建适合JSON序列化的消息副本
-            let mut json_msg = self.prepare_message_for_json(msg,  true);
+            let mut json_msg = self.prepare_message_for_json(msg,  true).await;
             
             // 设置is_self标识为true，因为这是发送给发送者自己的消息
             if let Some(obj) = json_msg.as_object_mut() {
@@ -222,7 +222,7 @@ impl Manager {
         }
 
         // 创建适合JSON序列化的消息副本
-        let mut json_msg = self.prepare_message_for_json(msg,  false);
+        let mut json_msg = self.prepare_message_for_json(msg,  false).await;
         
         // 设置is_self标识为false，因为这是发送给接收者的消息
         if let Some(obj) = json_msg.as_object_mut() {
@@ -280,7 +280,7 @@ impl Manager {
     /// 
     /// # 返回值
     /// 返回适合JSON序列化的消息对象
-    fn prepare_message_for_json(&self, msg: &Msg, is_self: bool) -> serde_json::Value {
+    async fn prepare_message_for_json(&self, msg: &Msg, is_self: bool) -> serde_json::Value {
         let mt = MsgType::try_from(msg.msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
         let mt2 = MsgType2::from(mt);
         let conversation_id = match mt2 {
@@ -295,12 +295,15 @@ impl Manager {
                 msg.group_id.clone()
             }
         };
+        // 计算并更新未读数
+        let unread_count = self.calculate_and_update_unread_count(msg, is_self).await;
+        
         // 创建一个Conversation对象
         let conversation = common::proto::message::Conversation {
             conversation_id,
             conversation_type: MsgType2::mt2_str(mt2),
             recent_messages: vec![msg.clone()],
-            unread_count: if !msg.is_read && !is_self { 1 } else { 0 },
+            unread_count,
             last_active_time: msg.send_time,
         };
 
@@ -492,5 +495,44 @@ impl Manager {
             .send(msg)
             .await
             .map_err(|e| Error::BroadCastError(e.to_string()))
+    }
+
+    /// 计算并更新未读数
+    /// 
+    /// 根据消息类型和接收者对发送者的历史未读数，计算并更新未读数。
+    /// 
+    /// # 参数
+    /// * `msg` - 要处理的消息
+    /// * `is_self` - 是否为发送给自己的消息副本
+    /// 
+    /// # 返回值
+    /// 返回计算后的未读数
+    async fn calculate_and_update_unread_count(&self, msg: &Msg, is_self: bool) -> i32 {
+        // 如果是发送给自己的消息副本，未读数为0，无需查询和更新缓存
+        if is_self {
+            return 0;
+        }
+
+        let (sender_id, receiver_id) = (&msg.send_id, &msg.receiver_id);
+        
+        // 查询接收者对发送者的历史未读数
+        let old_unread = self.cache
+            .unread_count_sum(receiver_id, sender_id)
+            .await
+            .unwrap_or(0);
+
+        // 计算新的未读数：只有消息未读时才增加
+        let unread_count = if msg.is_read { 
+            old_unread 
+        } else { 
+            old_unread + 1 
+        };
+
+        // 更新缓存中的未读数
+        let _ = self.cache
+            .unread_count_set(receiver_id, sender_id, &unread_count)
+            .await;
+
+        unread_count
     }
 }

@@ -692,6 +692,7 @@ impl ChatService for ChatRpcService {
                     "成功标记会话 {} 中 {} 条消息为已读",
                     req.conversation_id, count
                 );
+                self.cache.unread_count_remove(&req.user_id, &req.conversation_id).await?;
                 Ok(tonic::Response::new(MarkMessagesAsReadResponse {
                     success: true,
                     read_count: count,
@@ -1276,7 +1277,7 @@ impl ChatRpcService {
     }
 
     /// 构建会话列表
-    fn build_conversations(
+    async fn build_conversations(
         &self,
         req: &GetConversationsRequest,
         messages: Vec<Msg>,
@@ -1291,7 +1292,7 @@ impl ChatRpcService {
         // 构建会话对象
         let mut conversations: Vec<Conversation> = conversations_map
             .into_iter()
-            .filter_map(|(conversation_id, mut msgs)| {
+            .filter_map(async |(conversation_id, mut msgs)| {
                 if msgs.is_empty() {
                     return None;
                 }
@@ -1358,7 +1359,7 @@ impl ChatRpcService {
     }
 
     /// 创建会话对象
-    fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>, user_id: String) -> Conversation {
+    async fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>, user_id: String) -> Conversation {
         let mt = MsgType::try_from(msgs[0].msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
         let mt2 = MsgType2::from(mt);
 
@@ -1371,7 +1372,7 @@ impl ChatRpcService {
                 && ( msg.msg_type == MsgType::SingleMsg as i32 || msg.msg_type == MsgType::SingleMsg as i32)
             )
             .count() as i32;
-
+        let _ = self.cache.unread_count_set(&user_id, &conversation_id, &unread_count).await;
         let last_active_time = msgs[msgs.len()-1].send_time;
 
         Conversation {
