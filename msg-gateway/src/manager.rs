@@ -120,6 +120,8 @@ impl Manager {
             if let Some(clients) = self.hub.get(&mem.mem_id) {
                 // 为每个成员设置正确的接收序列号
                 msg.seq = mem.cur_seq;
+                // 为每个成员设置正确的接收者id
+                msg.receiver_id=mem.mem_id.clone();
 
                 // 向该成员的所有在线客户端发送消息
                 self.send_msg_to_clients(&clients, &msg).await;
