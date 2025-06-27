@@ -1375,7 +1375,7 @@ impl ChatRpcService {
             .iter()
             .filter(|msg|
                 !msg.is_read && msg.receiver_id == user_id && !msg.is_revoked
-                && ( msg.msg_type == MsgType::SingleMsg as i32 || msg.msg_type == MsgType::SingleMsg as i32)
+                && ( msg.msg_type == MsgType::SingleMsg as i32 || msg.msg_type == MsgType::GroupMsg as i32)
             )
             .count() as i32;
         let _ = self.cache.unread_count_set(&user_id, &conversation_id, &unread_count).await;
