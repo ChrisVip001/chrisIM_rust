@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::future;
 use nanoid::nanoid;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
@@ -821,7 +822,7 @@ impl ChatService for ChatRpcService {
         match self.fetch_messages(&req.user_id, &query_range).await {
             Ok(messages) => {
                 debug!("获取到 {} 条消息", messages.len());
-                let conversations = self.build_conversations(&req, messages);
+                let conversations = self.build_conversations(&req, messages).await;
                 debug!("构建了 {} 个会话", conversations.len());
                 let total = conversations.len() as i32;
 
@@ -1293,9 +1294,9 @@ impl ChatRpcService {
         let conversations_map = self.group_messages_by_conversation(&req.user_id, messages);
 
         // 构建会话对象
-        let mut conversations: Vec<Conversation> = conversations_map
+        let conversation_futures: Vec<_> = conversations_map
             .into_iter()
-            .filter_map(async |(conversation_id, mut msgs)| {
+            .filter_map(|(conversation_id, mut msgs)| {
                 if msgs.is_empty() {
                     return None;
                 }
@@ -1303,9 +1304,11 @@ impl ChatRpcService {
                 // 按发送时间排序（最新的在后）
                 msgs.sort_by(|a, b| a.send_time.cmp(&b.send_time));
 
-                Some(self.create_conversation(conversation_id, msgs,req.user_id.clone()))
+                Some(self.create_conversation(conversation_id, msgs, req.user_id.clone()))
             })
             .collect();
+
+        let mut conversations = future::join_all(conversation_futures).await;
 
         // 按最后活跃时间排序（最新的在后）
         conversations.sort_by(|a, b| a.last_active_time.cmp(&b.last_active_time));
