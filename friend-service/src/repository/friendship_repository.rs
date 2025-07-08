@@ -1380,6 +1380,13 @@ impl FriendshipRepository {
         let now = Utc::now();
         let now_naive = now.naive_utc();
         
+        // 处理备注参数：如果是空字符串或仅包含空白字符，则设置为NULL
+        let remark_value = if remark.trim().is_empty() { 
+            None 
+        } else { 
+            Some(remark.to_string()) 
+        };
+        
         // 先更新好友备注
         let result = sqlx::query!(
             r#"
@@ -1388,7 +1395,7 @@ impl FriendshipRepository {
             WHERE user_id = $3 AND friend_id = $4 AND status = 1
             RETURNING 1 as updated
             "#,
-            remark,
+            remark_value,
             now_naive,
             user_id,
             friend_id

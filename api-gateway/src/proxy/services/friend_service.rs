@@ -329,7 +329,8 @@ impl FriendServiceHandler {
             // 更新好友备注
             (&Method::POST, "updateRemark") => {
                 let friend_id = extract_string_param(&body, "friendId", Some("friend_id"))?;
-                let remark = extract_string_param(&body, "remark", Some("remark"))?;
+                // 获取备注参数，允许空字符串表示清空备注
+                let remark = get_optional_string(&body, "remark", Some("remark")).unwrap_or_default();
                 
                 let response = self.client.update_friend_remark(&current_user_id, &friend_id, &remark).await?;
                 
