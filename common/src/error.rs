@@ -1,3 +1,4 @@
+#[cfg(feature = "s3")]
 use aws_sdk_s3::error::SdkError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -200,6 +201,7 @@ impl From<Error> for tonic::Status {
     }
 }
 
+#[cfg(feature = "s3")]
 impl<E> From<SdkError<E>> for Error
 where
     E: StdError + 'static,

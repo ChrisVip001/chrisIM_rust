@@ -10,7 +10,7 @@ use rand::distr::Alphanumeric;
 use rand::Rng;
 use uuid::Uuid;
 use regex::Regex;
-use rusttype::{Font, Scale};
+use ab_glyph::{FontArc, PxScale};
 use crate::config::ConfigLoader;
 // 导入雪花ID模块
 use crate::snowflake::SNOWFLAKE;
@@ -115,12 +115,12 @@ pub fn generate_user_id() -> Result<String> {
 
 
 pub fn generate_user_custom_id() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // 生成8位字母和数字的随机字符串
     let random_id: String = (0..8)
         .map(|_| {
-            let idx = rng.gen_range(0..62);
+            let idx = rng.random_range(0..62);
             match idx {
                 0..=9 => (b'0' + idx as u8) as char,   // 数字 0-9
                 10..=35 => (b'a' + (idx - 10) as u8) as char,  // 小写字母 a-z
@@ -146,14 +146,14 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
     }
 
     // 添加轻微噪点
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..500 {
-        let x = rng.gen_range(0..width);
-        let y = rng.gen_range(0..height);
+        let x = rng.random_range(0..width);
+        let y = rng.random_range(0..height);
         let color = Rgba([
-            rng.gen_range(180..220), // 浅灰色噪点
-            rng.gen_range(180..220),
-            rng.gen_range(180..220),
+            rng.random_range(180..220), // 浅灰色噪点
+            rng.random_range(180..220),
+            rng.random_range(180..220),
             255,
         ]);
         img.put_pixel(x, y, color);
@@ -161,7 +161,7 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
 
     // 加载字体文件
     let font_data = include_bytes!("../assets/Roboto-Regular.ttf");
-    let font = Font::try_from_bytes(font_data).expect("加载字体失败");
+    let font = FontArc::try_from_slice(font_data).expect("加载字体失败");
 
     // 动态计算字体大小
     let max_font_size = (height as f32) * 0.6; // 最大字体高度为图片高度的 60%
@@ -171,7 +171,7 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
     let final_font_size = approx_font_size.clamp(10.0, max_font_size); // 最终字体大小
 
     // 使用动态计算的字体大小
-    let scale = Scale::uniform(final_font_size);
+    let scale = PxScale::from(final_font_size);
 
     // 计算字符间距和起始位置
     let total_text_width = char_count as f32 * final_font_size; // 总文本宽度（估算）
@@ -187,18 +187,18 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
     for c in text_code.chars() {
         // 随机字体颜色
         let color = Rgba([
-            rng.gen_range(0..150),       // 红色分量
-            rng.gen_range(0..150),       // 绿色分量
-            rng.gen_range(0..150),       // 蓝色分量
+            rng.random_range(0..150),       // 红色分量
+            rng.random_range(0..150),       // 绿色分量
+            rng.random_range(0..150),       // 蓝色分量
             255,                         // 完全不透明
         ]);
 
-        // 绘制单个字符
+        // 绘制单个字符（imageproc 0.27：坐标为 i32，字体为 ab_glyph 的 Font）
         draw_text_mut(
             &mut img,
             color,
-            x_offset as u32,
-            rng.gen_range(10..=30), // 随机Y轴偏移
+            x_offset as i32,
+            rng.random_range(10..=30), // 随机Y轴偏移
             scale,
             &font,
             &c.to_string(),
@@ -210,14 +210,14 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
 
     // 添加简单装饰线条
     for _ in 0..3 {
-        let start_x = rng.gen_range(0..width as i32);
-        let start_y = rng.gen_range(0..height as i32);
-        let end_x = rng.gen_range(0..width as i32);
-        let end_y = rng.gen_range(0..height as i32);
+        let start_x = rng.random_range(0..width as i32);
+        let start_y = rng.random_range(0..height as i32);
+        let end_x = rng.random_range(0..width as i32);
+        let end_y = rng.random_range(0..height as i32);
         let line_color = Rgba([
-            rng.gen_range(150..200), // 浅灰色线条
-            rng.gen_range(150..200),
-            rng.gen_range(150..200),
+            rng.random_range(150..200), // 浅灰色线条
+            rng.random_range(150..200),
+            rng.random_range(150..200),
             255,
         ]);
         draw_line_segment_mut(
@@ -229,20 +229,20 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
     }
 
     // 将图片转换为字节流
-    let mut buffer = Vec::new();
+    let mut cursor = std::io::Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(img)
-        .write_to(&mut buffer, image::ImageOutputFormat::Png)
+        .write_to(&mut cursor, image::ImageFormat::Png)
         .expect("写入图片失败");
 
-    buffer
+    cursor.into_inner()
 
 }
 
 /// 生成随机验证码文本
 pub fn generate_captcha_text() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..6) // 生成 6 位数字
-        .map(|_| rng.gen_range(0..10).to_string())
+        .map(|_| rng.random_range(0..10).to_string())
         .collect::<Vec<_>>()
         .join("")
 }

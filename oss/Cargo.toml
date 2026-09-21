@@ -4,11 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 
+[features]
+default = []
+# AWS S3 支持（默认关闭，原因见 common 的 s3 feature 说明）
+s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:aws-smithy-runtime-api", "common/s3"]
+
 [dependencies]
 common = { path = "../common" }
-aws-config = { version = "1.0.1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = {workspace = true }
-aws-smithy-runtime-api = { version = "1.0.1", features = ["client"] }
+aws-config = { version = "1.0.1", features = ["behavior-version-latest"], optional = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-smithy-runtime-api = { version = "1.0.1", features = ["client"], optional = true }
 bytes = "1.10.1"
 md-5 = "0.10.1"
 

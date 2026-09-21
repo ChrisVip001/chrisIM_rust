@@ -9,6 +9,7 @@ use std::time::Duration;
 use md5::{Digest, Md5};
 use serde::Serialize;
 
+#[cfg(feature = "s3")]
 mod s3_client;
 mod cos_client;
 mod oss_client;
@@ -73,8 +74,17 @@ pub async fn oss(config: &AppConfig) -> Result<Arc<dyn Oss>, Error> {
             Ok(Arc::new(client))
         },
         _ => {
-            let client = s3_client::S3Client::new(config).await?;
-            Ok(Arc::new(client))
+            #[cfg(feature = "s3")]
+            {
+                let client = s3_client::S3Client::new(config).await?;
+                Ok(Arc::new(client))
+            }
+            #[cfg(not(feature = "s3"))]
+            {
+                Err(Error::Internal(
+                    "S3 存储支持未启用（需以 --features s3 编译）".to_string(),
+                ))
+            }
         }
     }
 }
