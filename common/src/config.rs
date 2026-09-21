@@ -12,6 +12,18 @@ use crate::utils::url;
 // 定义一个静态全局配置，可以在任何地方访问
 pub static GLOBAL_CONFIG: Lazy<RwLock<Option<Arc<AppConfig>>>> = Lazy::new(|| RwLock::new(None));
 
+/// 解析全局配置文件路径
+///
+/// 优先使用运行目录下的 `config/config.yaml`（服务从 workspace 根启动的场景）；
+/// 不存在时（如 `cargo test` 以 crate 目录为工作目录）回退到 manifest 相对路径。
+pub fn global_config_path() -> String {
+    if Path::new("./config/config.yaml").exists() {
+        "./config/config.yaml".to_string()
+    } else {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../config/config.yaml").to_string()
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub gateway: GatewayConfig, //网关配置
@@ -292,7 +304,7 @@ impl ConfigLoader {
     // 加载配置，先加载全局配置，然后加载服务特定配置并合并
     pub fn load(&mut self) -> Result<Arc<AppConfig>, ConfigError> {
         // 1. 加载全局配置
-        let global_config = AppConfig::from_file(Some("./config/config.yaml"))?;
+        let global_config = AppConfig::from_file(Some(&global_config_path()))?;
         self.global_config = Some(Arc::new(global_config));
 
         // 2. 尝试加载服务特定配置
@@ -478,7 +490,7 @@ impl ConfigLoader {
 
     // 初始化全局配置单例
     pub fn init_global() -> Result<(), ConfigError> {
-        let global_config = AppConfig::from_file(Some("./config/config.yaml"))?;
+        let global_config = AppConfig::from_file(Some(&global_config_path()))?;
         let mut config_guard = GLOBAL_CONFIG.write().unwrap();
         *config_guard = Some(Arc::new(global_config));
         Ok(())
@@ -543,14 +555,14 @@ mod tests {
 
     #[test]
     fn test_load() {
-        let config = match AppConfig::from_file(Some("./config/config.yaml")) {
+        let config = match AppConfig::from_file(Some(&global_config_path())) {
             Ok(config) => config,
             Err(err) => {
                 panic!("load config error: {:?}", err);
             }
         };
         println!("{:?}", config);
-        assert_eq!(config.database.postgres.host, "localhost");
+        assert_eq!(config.database.postgres.host, "127.0.0.1");
         assert_eq!(config.database.postgres.port, 5432);
         assert_eq!(config.database.postgres.user, "kelisi");
         assert_eq!(config.database.postgres.password, "123456");

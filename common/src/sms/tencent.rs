@@ -230,7 +230,7 @@ impl SmsService for TencentSmsService {
         // 将验证码存入Redis，设置过期时间
         let expire_seconds = self.config.tencent.expire_seconds;
         
-        conn.set_ex(&redis_key, &code, expire_seconds).await
+        conn.set_ex::<_, _, ()>(&redis_key, &code, expire_seconds).await
             .map_err(|e| Error::Redis(format!("存储验证码到Redis失败: {}", e)))?;
         Ok(code)
         // 构建API请求参数

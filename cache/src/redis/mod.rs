@@ -289,7 +289,7 @@ impl Cache for RedisCache {
     /// 设置一个标志，表明序列号已经成功从持久存储加载到缓存
     async fn set_seq_loaded(&self) -> Result<(), Error> {
         let mut conn = self.get_connection().await?;
-        conn.set(IS_LOADED, SEQ_NO_NEED_LOAD).await?;
+        conn.set::<_, _, ()>(IS_LOADED, SEQ_NO_NEED_LOAD).await?;
         Ok(())
     }
 
@@ -310,7 +310,7 @@ impl Cache for RedisCache {
             pipe.hset(&key, CUR_SEQ_KEY, rec_max_seq);
             pipe.hset(&key, MAX_SEQ_KEY, rec_max_seq);
         }
-        pipe.query_async(&mut conn).await?;
+        pipe.query_async::<()>(&mut conn).await?;
         Ok(())
     }
 
@@ -328,7 +328,7 @@ impl Cache for RedisCache {
             pipe.hset(&key, CUR_SEQ_KEY, max_seq);
             pipe.hset(&key, MAX_SEQ_KEY, max_seq);
         }
-        pipe.query_async(&mut conn).await?;
+        pipe.query_async::<()>(&mut conn).await?;
         Ok(())
     }
 
@@ -542,7 +542,7 @@ impl Cache for RedisCache {
         for member in members_id {
             pipe.sadd(&key, &member);
         }
-        pipe.query_async(&mut conn).await?;
+        pipe.query_async::<()>(&mut conn).await?;
         Ok(())
     }
 
@@ -554,7 +554,7 @@ impl Cache for RedisCache {
     async fn add_group_member_id(&self, member_id: &str, group_id: &str) -> Result<(), Error> {
         let key = format!("{}:{}", GROUP_MEMBERS_ID_PREFIX, group_id);
         let mut conn = self.get_connection().await?;
-        conn.sadd(&key, member_id).await?;
+        conn.sadd::<_, _, ()>(&key, member_id).await?;
         Ok(())
     }
 
@@ -566,7 +566,7 @@ impl Cache for RedisCache {
     async fn remove_group_member_id(&self, group_id: &str, member_id: &str) -> Result<(), Error> {
         let key = format!("{}:{}", GROUP_MEMBERS_ID_PREFIX, group_id);
         let mut conn = self.get_connection().await?;
-        conn.srem(&key, member_id).await?;
+        conn.srem::<_, _, ()>(&key, member_id).await?;
         Ok(())
     }
 
@@ -582,7 +582,7 @@ impl Cache for RedisCache {
     ) -> Result<(), Error> {
         let key = format!("{}:{}", GROUP_MEMBERS_ID_PREFIX, group_id);
         let mut conn = self.get_connection().await?;
-        conn.srem(&key, member_id).await?;
+        conn.srem::<_, _, ()>(&key, member_id).await?;
         Ok(())
     }
 
@@ -593,7 +593,7 @@ impl Cache for RedisCache {
     async fn del_group_members(&self, group_id: &str) -> Result<(), Error> {
         let key = format!("{}:{}", GROUP_MEMBERS_ID_PREFIX, group_id);
         let mut conn = self.get_connection().await?;
-        conn.del(&key).await?;
+        conn.del::<_, ()>(&key).await?;
         Ok(())
     }
 
@@ -611,7 +611,7 @@ impl Cache for RedisCache {
         let mut pipe = redis::pipe();
         pipe.hset(REGISTER_CODE_KEY, email, code)
             .expire(REGISTER_CODE_KEY, REGISTER_CODE_EXPIRE)
-            .query_async(&mut conn)
+            .query_async::<()>(&mut conn)
             .await?;
         Ok(())
     }
@@ -637,7 +637,7 @@ impl Cache for RedisCache {
     /// * `email` - 用户邮箱
     async fn del_register_code(&self, email: &str) -> Result<(), Error> {
         let mut conn = self.get_connection().await?;
-        conn.hdel(REGISTER_CODE_KEY, email).await?;
+        conn.hdel::<_, _, ()>(REGISTER_CODE_KEY, email).await?;
         Ok(())
     }
     /// 用户平台登录
@@ -650,7 +650,7 @@ impl Cache for RedisCache {
     async fn user_platform_login(&self, user_id: &str, platform: i32) -> Result<(), Error> {
         let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
         let mut conn = self.get_connection().await?;
-        conn.sadd(&key, platform).await?;
+        conn.sadd::<_, _, ()>(&key, platform).await?;
         Ok(())
     }
 
@@ -664,12 +664,12 @@ impl Cache for RedisCache {
     async fn user_platform_logout(&self, user_id: &str, platform: i32) -> Result<(), Error> {
         let key = format!("{}:{}", USER_PLATFORM_ONLINE_PREFIX, user_id);
         let mut conn = self.get_connection().await?;
-        conn.srem(&key, platform).await?;
+        conn.srem::<_, _, ()>(&key, platform).await?;
         
         // 如果用户在所有平台都下线了，删除整个集合
         let count: i64 = conn.scard(&key).await?;
         if count == 0 {
-            conn.del(&key).await?;
+            conn.del::<_, ()>(&key).await?;
         }
         
         Ok(())
@@ -679,7 +679,7 @@ impl Cache for RedisCache {
     async fn save_access_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error> {
         let key = format!("token:access:{}:{}", user_id, platform);
         let mut conn = self.get_connection().await?;
-        conn.set_ex(&key, token, expiry_seconds).await?;
+        conn.set_ex::<_, _, ()>(&key, token, expiry_seconds).await?;
         Ok(())
     }
 
@@ -687,7 +687,7 @@ impl Cache for RedisCache {
     async fn save_refresh_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error> {
         let key = format!("token:refresh:{}:{}", user_id, platform);
         let mut conn = self.get_connection().await?;
-        conn.set_ex(&key, token, expiry_seconds).await?;
+        conn.set_ex::<_, _, ()>(&key, token, expiry_seconds).await?;
         Ok(())
     }
 
@@ -711,7 +711,7 @@ impl Cache for RedisCache {
     async fn delete_access_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error> {
         let key = format!("token:access:{}:{}", user_id, platform);
         let mut conn = self.get_connection().await?;
-        conn.del(&key).await?;
+        conn.del::<_, ()>(&key).await?;
         Ok(())
     }
 
@@ -719,7 +719,7 @@ impl Cache for RedisCache {
     async fn delete_refresh_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error> {
         let key = format!("token:refresh:{}:{}", user_id, platform);
         let mut conn = self.get_connection().await?;
-        conn.del(&key).await?;
+        conn.del::<_, ()>(&key).await?;
         Ok(())
     }
 
@@ -795,7 +795,7 @@ impl Cache for RedisCache {
             .sadd(&key2, user_id);
         
         // 执行管道命令
-        pipeline.query_async(&mut conn).await.map_err(|e| {
+        pipeline.query_async::<()>(&mut conn).await.map_err(|e| {
             Error::Internal(format!("保存好友关系失败: {}", e))
         })?;
         
@@ -830,7 +830,7 @@ impl Cache for RedisCache {
             .srem(&key2, user_id);
         
         // 执行管道命令
-        pipeline.query_async(&mut conn).await.map_err(|e| {
+        pipeline.query_async::<()>(&mut conn).await.map_err(|e| {
             Error::Internal(format!("删除好友关系失败: {}", e))
         })?;
         
@@ -858,7 +858,7 @@ impl Cache for RedisCache {
         let key = format!("{}:{}", USER_BLACKLIST_PREFIX, user_id);
         
         // 将被拉黑用户ID添加到黑名单集合
-        conn.sadd(&key, blocked_user_id).await.map_err(|e| {
+        conn.sadd::<_, _, ()>(&key, blocked_user_id).await.map_err(|e| {
             Error::Internal(format!("添加用户到黑名单失败: {}", e))
         })?;
         
@@ -876,7 +876,7 @@ impl Cache for RedisCache {
         let key = format!("{}:{}", USER_BLACKLIST_PREFIX, user_id);
         
         // 从黑名单集合中移除用户ID
-        conn.srem(&key, blocked_user_id).await.map_err(|e| {
+        conn.srem::<_, _, ()>(&key, blocked_user_id).await.map_err(|e| {
             Error::Internal(format!("从黑名单中移除用户失败: {}", e))
         })?;
         
@@ -962,7 +962,7 @@ impl Cache for RedisCache {
         
         if *count <= 0 {
             // 如果计数为0或负数，从Hash中删除该会话的field
-            conn.hdel(&key, conversation_id).await.map_err(|e| {
+            conn.hdel::<_, _, ()>(&key, conversation_id).await.map_err(|e| {
                 Error::Internal(format!("删除用户未读消息计数失败: {}", e))
             })?;
             
@@ -972,13 +972,13 @@ impl Cache for RedisCache {
             })?;
             
             if hash_size == 0 {
-                conn.del(&key).await.map_err(|e| {
+                conn.del::<_, ()>(&key).await.map_err(|e| {
                     Error::Internal(format!("删除空Hash失败: {}", e))
                 })?;
             }
         } else {
             // 在Hash中设置指定会话的未读消息数量
-            conn.hset(&key, conversation_id, count).await.map_err(|e| {
+            conn.hset::<_, _, _, ()>(&key, conversation_id, count).await.map_err(|e| {
                 Error::Internal(format!("设置用户未读消息总数失败: {}", e))
             })?;
         }
@@ -1056,7 +1056,7 @@ impl Cache for RedisCache {
         let key = format!("{}:{}", UNREAD_COUNT_PREFIX, user_id);
         
         // 从Hash中删除指定会话的未读消息计数
-        conn.hdel(&key, conversation_id).await.map_err(|e| {
+        conn.hdel::<_, _, ()>(&key, conversation_id).await.map_err(|e| {
             Error::Internal(format!("移除用户未读消息总数失败: {}", e))
         })?;
         
@@ -1066,7 +1066,7 @@ impl Cache for RedisCache {
         })?;
         
         if hash_size == 0 {
-            conn.del(&key).await.map_err(|e| {
+            conn.del::<_, ()>(&key).await.map_err(|e| {
                 Error::Internal(format!("删除空Hash失败: {}", e))
             })?;
         }

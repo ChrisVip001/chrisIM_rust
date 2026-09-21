@@ -12,6 +12,18 @@ use crate::service_register_center::typos::Registration;
 use crate::service_register_center::ServiceRegister;
 use crate::Error;
 
+/// 幂等地安装 rustls 默认加密提供者
+///
+/// 依赖图中同时存在 aws-lc-rs 与 ring 两个 provider feature 时，
+/// rustls 无法自动选择，首次建立 TLS 连接会 panic。
+pub fn init_crypto_provider() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
 /// Consul client configuration options
 #[derive(Debug, Clone)]
 pub struct ConsulOptions {
@@ -32,6 +44,14 @@ impl ConsulOptions {
     }
 }
 
+/// 规范化 Consul 时长字符串：确保以 "s" 结尾且只有一个后缀
+///
+/// 调用方传入的值可能带（"30s"）或不带（"30"）后缀，统一输出 "30s"
+fn with_seconds(value: &str) -> String {
+    let trimmed = value.trim_end_matches('s');
+    format!("{}s", trimmed)
+}
+
 /// Consul service registry implementation
 #[derive(Debug)]
 pub struct Consul {
@@ -43,6 +63,7 @@ pub struct Consul {
 impl Consul {
     /// Create a new Consul client from application config
     pub fn from_config(config: &AppConfig) -> Self {
+        init_crypto_provider();
         let options = ConsulOptions::from_config(config);
 
         let consul_url = format!("{}://{}:{}", options.protocol, options.host, options.port);
@@ -185,21 +206,32 @@ impl ServiceRegister for Consul {
                     let check_json = json!({
                         "Name": check.name,
                         "HTTP": check.url,
-                        "Interval": check.interval.clone() + "s",
-                        "Timeout": check.timeout.clone() + "s",
-                        "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
+                        "Interval": with_seconds(&check.interval),
+                        "Timeout": with_seconds(&check.timeout),
+                        "DeregisterCriticalServiceAfter": with_seconds(&check.deregister_after)
                     });
                     payload["Check"] = check_json;
                     info!("Using HTTP health check for service: {}", registration.name);
                 }
                 "grpc" => {
                     // gRPC健康检查
+                    // interval/timeout 为空时使用默认值，避免生成非法的 "s" 值
+                    let interval = if check.interval.is_empty() {
+                        "10".to_string()
+                    } else {
+                        check.interval.clone()
+                    };
+                    let timeout = if check.timeout.is_empty() {
+                        "5".to_string()
+                    } else {
+                        check.timeout.clone()
+                    };
                     let check_json = json!({
                         "Name": check.name,
                         "GRPC": format!("{}:{}", registration.host, registration.port),
-                        "Interval": check.interval.clone() + "s",
-                        "Timeout": check.timeout.clone() + "s",
-                        "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
+                        "Interval": with_seconds(&interval),
+                        "Timeout": with_seconds(&timeout),
+                        "DeregisterCriticalServiceAfter": with_seconds(&check.deregister_after)
                     });
                     payload["Check"] = check_json;
                     info!("Using gRPC health check for service: {}", registration.name);
@@ -209,8 +241,8 @@ impl ServiceRegister for Consul {
                     let check_json = json!({
                         "Name": check.name,
                         "Notes": "TTL health check for service",
-                        "TTL": check.interval.clone() + "s",
-                        "DeregisterCriticalServiceAfter": check.deregister_after.clone() + "s"
+                        "TTL": with_seconds(&check.interval),
+                        "DeregisterCriticalServiceAfter": with_seconds(&check.deregister_after)
                     });
                     payload["Check"] = check_json;
                     info!("Using TTL health check for service: {}", registration.name);
@@ -439,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_deregister_should_work() {
-        let config = AppConfig::from_file(Option::from("../config/config.yml")).unwrap();
+        let config = AppConfig::from_file(Option::from(crate::config::global_config_path().as_str())).unwrap();
 
         let consul = Consul::from_config(&config);
 
@@ -469,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_with_http_check_should_work() {
-        let config = AppConfig::from_file(Option::from("../config/config.yml")).unwrap();
+        let config = AppConfig::from_file(Option::from(crate::config::global_config_path().as_str())).unwrap();
 
         let consul = Consul::from_config(&config);
 
@@ -504,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_with_ttl_check_should_work() {
-        let config = AppConfig::from_file(Option::from("../config/config.yml")).unwrap();
+        let config = AppConfig::from_file(Option::from(crate::config::global_config_path().as_str())).unwrap();
 
         let consul = Consul::from_config(&config);
 
