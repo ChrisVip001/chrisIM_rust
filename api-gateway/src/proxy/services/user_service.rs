@@ -3,11 +3,14 @@ use axum::{
     http::{Method, Response, StatusCode},
 };
 use common::grpc_client::UserServiceGrpcClient;
-use common::proto;
+use common::{proto, Error};
 use serde_json::{json, Value};
-use tracing::{error, debug};
-
-use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, timestamp_to_rfc3339, format_timestamp};
+use tracing::{error, debug, info};
+use common::auth::Claims;
+use common::proto::user::{CaptchaImageRequest, VerifyPasswordRequest};
+use common::utils::verify_image_code;
+use crate::proxy::services::common::get_user_id_from_jwt;
+use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
 
 /// 用户服务处理器
 #[derive(Clone)]
@@ -23,13 +26,14 @@ impl UserServiceHandler {
 
     /// 处理用户服务请求
     pub async fn handle_request(
-        &self,
+        &mut self,
         method: &Method,
         path: &str,
         body: Value,
+        jwt_user_info: Option<Claims>,
     ) -> Result<Response<Body>, anyhow::Error> {
         debug!("处理用户服务请求: {} {}", method, path);
-
+        
         // 从路径提取方法名 - 格式: /api/users/[method]
         let method_name = path.split('/').nth(3).unwrap_or("unknown");
 
@@ -37,11 +41,59 @@ impl UserServiceHandler {
             // 用户查询
             (&Method::GET, "getUserById") | (&Method::GET, "getUser") => {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
 
-                let response = self.client.get_user(&user_id).await?;
+                let response = self.client.get_user(current_user_id,&user_id).await?;
                 let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
 
                 Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+            }
+
+            // 增强的用户查询（包含好友状态、拉黑状态、在线状态）
+            (&Method::GET, "getEnhancedUserById") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
+
+                let response = self.client.get_enhanced_user(current_user_id, &user_id).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                
+                // 构建基本结果
+                let mut result = json!({
+                    "user": self.convert_user_to_json(&user),
+                    "isBlocked": response.is_blocked,
+                    "friendStatus": response.friend_status,
+                    "requestId": response.request_id.unwrap_or_default(),
+                    "isOnline": response.is_online,
+                    "isStarred": false,
+                    "isTop": false,
+                    "remark": "",
+                    "friendType": 0,
+                    "groups": []  // 添加空的分组列表
+                });
+                
+                // 如果有好友关系信息，则更新相关字段
+                if let Some(relation) = response.friend_relation {
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert("isStarred".to_string(), json!(relation.is_starred));
+                        obj.insert("isTop".to_string(), json!(relation.is_top));
+                        obj.insert("remark".to_string(), json!(relation.remark));
+                        obj.insert("friendType".to_string(), json!(relation.friend_type));
+                        
+                        // 添加好友所在分组信息
+                        if !relation.groups.is_empty() {
+                            let groups = relation.groups.iter().map(|g| {
+                                json!({
+                                    "id": g.id,
+                                    "groupName": g.group_name
+                                })
+                            }).collect::<Vec<_>>();
+                            obj.insert("groups".to_string(), json!(groups));
+                        }
+                    }
+                }
+
+                Ok(success_response(result, StatusCode::OK))
             }
 
             // 用户名查询
@@ -56,17 +108,11 @@ impl UserServiceHandler {
 
             // 创建用户
             (&Method::POST, "createUser") | (&Method::POST, "register") => {
-                let username = body.get("username").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("用户名不能为空"))?;
-                let password = body.get("password").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("密码不能为空"))?;
-
-                if username.is_empty() || password.is_empty() {
-                    return Err(anyhow::anyhow!("用户名和密码不能为空"));
-                }
-
-                let email = body.get("email").and_then(|v| v.as_str()).unwrap_or_default();
-                let nickname = body.get("nickname").and_then(|v| v.as_str()).unwrap_or_default();
-                let avatar_url = body.get("avatarUrl").or_else(|| body.get("avatar_url"))
-                    .and_then(|v| v.as_str()).unwrap_or_default();
+                let username = extract_string_param(&body, "username", None)?;
+                let password = extract_string_param(&body, "password", None)?;
+                let email = get_optional_string(&body, "email", None).unwrap_or_default();
+                let nickname = get_optional_string(&body, "nickname", None).unwrap_or_default();
+                let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url")).unwrap_or_default();
 
                 let request = proto::user::CreateUserRequest {
                     username: username.to_string(),
@@ -82,23 +128,30 @@ impl UserServiceHandler {
                 Ok(success_with_message(
                     self.convert_user_to_json(&user),
                     "用户创建成功",
-                    StatusCode::CREATED
+                    StatusCode::OK
                 ))
             }
 
             // 更新用户
-            (&Method::PUT, "updateUser") | (&Method::PATCH, "updateUser") => {
-                let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
-
+            (&Method::POST, "updateUser") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                // userid从token中获取
+                let user_id = Some(current_user_id);
                 let nickname = get_optional_string(&body, "nickname", None);
                 let email = get_optional_string(&body, "email", None);
                 let avatar_url = get_optional_string(&body, "avatarUrl", Some("avatar_url"));
-                let password = get_optional_string(&body, "password", None);
+                // 密码不让在此修改
+                // let password = get_optional_string(&body, "password", None);
+                let password = None;
                 let address = get_optional_string(&body, "address", None);
-                let head_image = get_optional_string(&body, "head_image", None);
-                let head_image_thumb = get_optional_string(&body, "head_image_thumb", None);
+                let head_image = get_optional_string(&body, "headImage", Some("head_image"));
+                let head_image_thumb = get_optional_string(&body, "headImageThumb", Some("head_image_thumb"));
+                let custom_id = get_optional_string(&body, "customId", Some("custom_id"));
+                let sign = get_optional_string(&body, "sign", Some("sign"));
                 let sex = get_optional_string(&body, "sex", None)
                     .and_then(|s| s.parse::<i32>().ok());
+                let username = get_optional_string(&body, "username", None);
 
                 let request = proto::user::UpdateUserRequest {
                     user_id,
@@ -110,6 +163,9 @@ impl UserServiceHandler {
                     head_image,
                     head_image_thumb,
                     sex,
+                    username,
+                    custom_id,
+                    sign,
                 };
 
                 let response = self.client.update_user(request).await?;
@@ -122,39 +178,61 @@ impl UserServiceHandler {
                 ))
             }
 
-            // 用户账号密码注册
-            (&Method::POST, "registerByUsername") => {
-                let username = body
-                    .get("username")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let password = body
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let nickname = body
-                    .get("nickname")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let tenant_id = body
-                    .get("tenant_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let phone = body
-                    .get("phone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if username.is_empty() || password.is_empty() {
-                    return Ok(error_response("用户名或者密码不能为空", StatusCode::BAD_REQUEST));
+            // 用户注销
+            (&Method::POST, "deactivateUser") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                
+                // 获取手机号和验证码
+                let phone = extract_string_param(&body, "phone", None)?;
+                let verify_code = extract_string_param(&body, "verifyCode", Some("verify_code"))?;
+                
+                let request = proto::user::DeactivateUserRequest {
+                    user_id: current_user_id.to_string(),
+                    phone,
+                    verify_code,
+                };
+                
+                match self.client.deactivate_user(request).await {
+                    Ok(response) => {
+                        if response.success {
+                            Ok(success_with_message(
+                                json!({}),
+                                "用户注销成功",
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("用户注销失败: {}", err);
+                        Ok(error_response(&format!("用户注销失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
                 }
+            }
+
+            // 用户账号密码注册(不校验验证码)
+            (&Method::POST, "registerByUsername") => {
+                let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
+                if tenant_id != "1122" {
+                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
+                }
+                let username = extract_string_param(&body,"username",None)?;
+                let password = extract_string_param(&body,"password",None)?;
+                let phone = extract_string_param(&body,"phone",None)?;
+                let image_code = extract_string_param(&body,"image_code",Some("image_code"))?;
+                let image_code_key = extract_string_param(&body,"image_code_key",Some("image_code_key"))?;
 
                 let request = proto::user::RegisterRequest {
-                    username: username.to_string(),
-                    password: password.to_string(),
-                    nickname: nickname.to_string(),
-                    tenant_id: tenant_id.to_string(),
-                    phone: phone.to_string()
+                    tenant_id,
+                    username,
+                    password,
+                    phone,
+                    verify_code: "".to_string(),
+                    nickname: "".to_string(),
+                    image_code,
+                    image_code_key
                 };
 
                 match self.client.register_by_username(request).await {
@@ -165,7 +243,7 @@ impl UserServiceHandler {
                         Ok(success_with_message(
                             self.convert_user_to_json(&user),
                             "用户注册成功",
-                            StatusCode::CREATED
+                            StatusCode::OK
                         ))
                     }
                     Err(err) => {
@@ -177,37 +255,26 @@ impl UserServiceHandler {
 
             // 用户手机号注册
             (&Method::POST, "registerByPhone") => {
-                let username = body
-                    .get("username")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let password = body
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let nickname = body
-                    .get("nickname")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let tenant_id = body
-                    .get("tenant_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let phone = body
-                    .get("phone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
 
-                if phone.is_empty() || password.is_empty() {
-                    return Ok(error_response("手机号或者密码不能为空", StatusCode::BAD_REQUEST));
+                let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
+                if tenant_id != "1122" {
+                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
                 }
+                let phone = extract_string_param(&body,"phone",None)?;
+                let password = extract_string_param(&body,"password",None)?;
+                let msg_code = extract_string_param(&body,"msgCode",Some("msg_code"))?;
+                let image_code = extract_string_param(&body,"image_code",Some("image_code"))?;
+                let image_code_key = extract_string_param(&body,"image_code_key",Some("image_code_key"))?;
 
                 let request = proto::user::RegisterRequest {
-                    username: username.to_string(),
-                    password: password.to_string(),
-                    nickname: nickname.to_string(),
-                    tenant_id: tenant_id.to_string(),
-                    phone: phone.to_string()
+                    tenant_id,
+                    phone,
+                    password,
+                    verify_code: msg_code,
+                    username: "".to_string(),
+                    nickname: "".to_string(),
+                    image_code,
+                    image_code_key
                 };
 
                 match self.client.register_by_phone(request).await {
@@ -218,7 +285,7 @@ impl UserServiceHandler {
                         Ok(success_with_message(
                             self.convert_user_to_json(&user),
                             "用户注册成功",
-                            StatusCode::CREATED
+                            StatusCode::OK
                         ))
                     }
                     Err(err) => {
@@ -230,37 +297,19 @@ impl UserServiceHandler {
 
             // 忘记密码
             (&Method::POST, "forgetPassword") => {
-                let username = body
-                    .get("username")
-                    .or_else(|| body.get("username"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let phone = body
-                    .get("phone")
-                    .or_else(|| body.get("phone"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if username.is_empty() && phone.is_empty() {
-                    return Ok(error_response("用户名或者手机号不能为空", StatusCode::BAD_REQUEST));
+                // let username = extract_string_param(&body, "username", None)?;
+                let password = extract_string_param(&body, "password", None)?;
+                let tenant_id = get_optional_string(&body, "tenantId", Some("tenant_id")).unwrap_or_default();
+                let phone = get_optional_string(&body, "phone", None).unwrap_or_default();
+                let verify_code = get_optional_string(&body, "verifyCode", Some("verify_code")).unwrap_or_default();
+                if tenant_id != "1122" {
+                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
                 }
-
-                let password = body
-                    .get("password")
-                    .or_else(|| body.get("password"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let tenant_id = body
-                    .get("tenant_id")
-                    .or_else(|| body.get("tenant_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
                 let request = proto::user::ForgetPasswordRequest {
-                    username: username.to_string(),
                     password: password.to_string(),
                     tenant_id: tenant_id.to_string(),
                     phone: phone.to_string(),
+                    verify_code: verify_code.to_string(),
                 };
 
                 match self.client.forget_password(request).await {
@@ -279,6 +328,180 @@ impl UserServiceHandler {
                         Ok(error_response(&format!("密码更新失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
                     }
                 }
+            }
+
+            // 用户设置查询
+            (&Method::GET, "getUserConfig")=> {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let response = self.client.get_user_config(&current_user_id).await?;
+                let user_config = response.user_config.unwrap_or_default();
+                info!("时间: {}", user_config.clone().create_time.unwrap_or_default());
+                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+            }
+
+            // 保存用户设置
+            (&Method::POST, "saveUserConfig")=> {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let allow_phone_search = get_optional_string(&body, "allowPhoneSearch", Some("allow_phone_search"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let allow_id_search = get_optional_string(&body, "allowIdSearch", Some("allow_id_search"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let auto_load_video = get_optional_string(&body, "autoLoadVideo", Some("auto_load_video"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let auto_load_pic = get_optional_string(&body, "autoLoadPic", Some("auto_load_pic"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let msg_read_flag = get_optional_string(&body, "msgReadFlag", Some("msg_read_flag"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let sound_enabled = get_optional_string(&body, "soundEnabled", Some("sound_enabled"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let vibration_enabled = get_optional_string(&body, "vibrationEnabled", Some("vibration_enabled"))
+                    .and_then(|s| s.parse::<i32>().ok());
+                let show_phone = get_optional_string(&body, "showPhone", Some("show_phone"))
+                    .and_then(|s| s.parse::<i32>().ok());
+
+                let request = proto::user::UserConfigRequest {
+                    user_id: current_user_id.to_string(),
+                    allow_phone_search,
+                    allow_id_search,
+                    auto_load_video,
+                    auto_load_pic,
+                    msg_read_flag,
+                    sound_enabled,
+                    vibration_enabled,
+                    show_phone,
+                };
+                let response = self.client.save_user_config(request).await?;
+                let user_config = response.user_config.unwrap_or_default();
+                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+            }
+            
+            // 发送手机验证码
+            (&Method::POST, "sendVerificationCode") => {
+                let phone = extract_string_param(&body, "phone", None)?;
+                let action = get_optional_string(&body, "action", None).unwrap_or_default();
+                
+                let request = proto::user::PhoneVerificationRequest {
+                    phone: phone.to_string(),
+                    action: action.to_string(),
+                };
+                
+                match self.client.send_phone_verification_code(request).await {
+                    Ok(response) => {
+                        if response.success {
+                            Ok(success_with_message(
+                                json!({}),
+                                &response.message,
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("发送验证码失败: {}", err);
+                        Ok(error_response(&format!("发送验证码失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
+            }
+            
+            // 验证手机验证码
+            (&Method::POST, "verifyPhoneCode") => {
+                let phone = extract_string_param(&body, "phone", None)?;
+                let code = extract_string_param(&body, "verifyCode", Some("verify_code"))
+                    .or_else(|_| extract_string_param(&body, "msgCode", Some("msg_code")))
+                    .or_else(|_| extract_string_param(&body, "code", None))?;
+                let action = get_optional_string(&body, "action", None).unwrap_or("register".to_string());
+                
+                let request = proto::user::VerifyPhoneCodeRequest {
+                    phone: phone.to_string(),
+                    code: code.to_string(),
+                    action: action.to_string(),
+                };
+                
+                match self.client.verify_phone_code(request).await {
+                    Ok(response) => {
+                        if response.valid {
+                            Ok(success_with_message(
+                                json!({"valid": true}),
+                                &response.message,
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("验证码验证失败: {}", err);
+                        Ok(error_response(&format!("验证码验证失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
+            }
+
+            // 修改手机号（密码+新手机验证码）
+            (&Method::POST, "updatePhone") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let password = extract_string_param(&body, "password", None)?;
+                let new_phone = extract_string_param(&body, "newPhone", Some("new_phone"))?;
+                let verify_code = extract_string_param(&body, "verifyCode", Some("verify_code"))?;
+                
+                let request = proto::user::UpdatePhoneRequest {
+                    user_id: current_user_id.to_string(),
+                    password,
+                    new_phone: new_phone.clone(),
+                    verify_code,
+                };
+                
+                // 调用后端服务
+                match self.client.update_phone(request).await {
+                    Ok(response) => {
+                        if response.success {
+                            Ok(success_with_message(
+                                json!({"phone": new_phone}),
+                                "手机号更新成功",
+                                StatusCode::OK
+                            ))
+                        } else {
+                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                        }
+                    }
+                    Err(err) => {
+                        error!("更新手机号失败: {}", err);
+                        Ok(error_response(&format!("更新手机号失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                    }
+                }
+            }
+
+            //根据token获取用户信息(用户id等信息已经在jwt_user_info里了用id查找用户详细信息)
+            (&Method::GET, "getUserInfo") => {
+                // 从JWT中获取用户ID
+                let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
+                let response = self.client.get_user(current_user_id.clone(),&current_user_id).await?;
+                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+
+                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+            }
+
+            // 图片验证码生成
+            (&Method::POST, "genCaptchaImage")=> {
+                let width = get_optional_string(&body, "width", Some("width")).unwrap_or("180".to_string());
+                let height = get_optional_string(&body, "height", Some("height")).unwrap_or("60".to_string());
+                let font_size = get_optional_string(&body, "font_size", Some("font_size")).unwrap_or("30".to_string());
+                let request = proto::user::CaptchaImageRequest {
+                    width: width.parse()?,
+                    height: height.parse()?,
+                    font_size: font_size.parse()?,
+                };
+                let response = self.client.gen_captcha_image(request).await?;
+                let code_key = response.code_key;
+                let image_content = response.image_content;
+                let ret_data = json!({
+                    "code_key": code_key,
+                    "image_content": image_content,
+                });
+                Ok(success_response(ret_data, StatusCode::OK))
             }
 
             // 其他未知方法
@@ -307,7 +530,24 @@ impl UserServiceHandler {
             "user_stat" : user.user_stat,
             "tenant_id" : user.tenant_id,
             "last_login_time" : format_timestamp(user.last_login_time.clone()),
-            "user_idx" : user.user_idx,
+            "custom_id" : user.custom_id,
+            "sign" : user.sign,
+        })
+    }
+
+    fn convert_user_config_to_json(&self, user_config: &proto::user::UserConfig) -> Value {
+        json!({
+            "user_id": user_config.user_id,
+            "allow_phone_search": user_config.allow_phone_search,
+            "allow_id_search": user_config.allow_id_search,
+            "auto_load_video": user_config.auto_load_video,
+            "auto_load_pic": user_config.auto_load_pic,
+            "msg_read_flag": user_config.msg_read_flag,
+            "sound_enabled": user_config.sound_enabled,
+            "vibration_enabled": user_config.vibration_enabled,
+            "show_phone": user_config.show_phone,
+            "create_time": format_timestamp(user_config.create_time.clone()),
+            "update_time": format_timestamp(user_config.update_time.clone()),
         })
     }
 } 

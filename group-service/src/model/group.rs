@@ -6,19 +6,19 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
     pub description: String,
     pub avatar_url: String,
-    pub owner_id: Uuid,
+    pub owner_id: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl Group {
-    pub fn new(name: String, description: String, avatar_url: String, owner_id: Uuid) -> Self {
+    pub fn new(name: String, description: String, avatar_url: String, owner_id: String) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: Uuid::new_v4().to_string(),
             name,
             description,
             avatar_url,
@@ -33,11 +33,11 @@ impl Group {
         let updated_system_time = SystemTime::from(self.updated_at);
 
         common::proto::group::Group {
-            id: self.id.to_string(),
+            id: self.id.clone(),
             name: self.name.clone(),
             description: self.description.clone(),
             avatar_url: self.avatar_url.clone(),
-            owner_id: self.owner_id.to_string(),
+            owner_id: self.owner_id.clone(),
             member_count,
             created_at: Some(prost_types::Timestamp::from(created_system_time)),
             updated_at: Some(prost_types::Timestamp::from(updated_system_time)),
@@ -47,12 +47,18 @@ impl Group {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserGroup {
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
     pub avatar_url: String,
     pub member_count: i32,
     pub role: i32,
     pub joined_at: DateTime<Utc>,
+    pub remark: String,
+    pub mute_notifications: bool,
+    pub nickname_in_group: String,
+    pub is_top: bool,
+    pub recall_notification: bool,
+    pub show_nickname: bool,
 }
 
 impl UserGroup {
@@ -60,12 +66,18 @@ impl UserGroup {
         let joined_system_time = SystemTime::from(self.joined_at);
 
         common::proto::group::UserGroup {
-            id: self.id.to_string(),
+            id: self.id.clone(),
             name: self.name.clone(),
             avatar_url: self.avatar_url.clone(),
             member_count: self.member_count,
             role: self.role,
             joined_at: Some(prost_types::Timestamp::from(joined_system_time)),
+            remark: self.remark.clone(),
+            mute_notifications: self.mute_notifications,
+            nickname_in_group: self.nickname_in_group.clone(),
+            is_top: self.is_top,
+            recall_notification: self.recall_notification,
+            show_nickname: self.show_nickname,
         }
     }
 }

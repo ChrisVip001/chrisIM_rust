@@ -13,7 +13,7 @@ common = { path = "../common" }
 async-trait = { workspace = true }
 redis = { workspace = true, features = ["tokio-comp", "connection-manager"] }
 tokio = { workspace = true, features = ["full"] }
-futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"]  }

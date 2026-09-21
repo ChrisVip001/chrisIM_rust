@@ -12,6 +12,9 @@ service UserService {
   // 通过ID获取用户
   rpc GetUserById (GetUserByIdRequest) returns (UserResponse);
   
+  // 增强的通过ID获取用户（包含好友状态、拉黑状态、在线状态）
+  rpc GetEnhancedUserById (GetEnhancedUserByIdRequest) returns (EnhancedUserResponse);
+  
   // 通过用户名获取用户
   rpc GetUserByUsername (GetUserByUsernameRequest) returns (UserResponse);
   
@@ -20,6 +23,9 @@ service UserService {
   
   // 验证用户密码（用于登录）
   rpc VerifyPassword (VerifyPasswordRequest) returns (VerifyPasswordResponse);
+  
+  // 验证手机号登录验证码（用于登录）
+  rpc VerifyPhoneCodeLogin (VerifyPhoneCodeRequest) returns (VerifyPasswordResponse);
   
   // 搜索用户
   rpc SearchUsers (SearchUsersRequest) returns (SearchUsersResponse);
@@ -32,6 +38,33 @@ service UserService {
 
   // 忘记密码
   rpc forgetPassword (ForgetPasswordRequest) returns (UserResponse);
+
+  // 查询用户设置
+  rpc GetUserConfig (UserConfigRequest) returns (UserConfigResponse);
+
+  // 保存用户设置
+  rpc saveUserConfig (UserConfigRequest) returns (UserConfigResponse);
+  
+  // 发送手机验证码
+  rpc SendPhoneVerificationCode (PhoneVerificationRequest) returns (PhoneVerificationResponse);
+  
+  // 验证手机验证码
+  rpc VerifyPhoneCode (VerifyPhoneCodeRequest) returns (VerifyPhoneCodeResponse);
+  
+  // 注销用户账号
+  rpc DeactivateUser (DeactivateUserRequest) returns (DeactivateUserResponse);
+  
+  // 修改手机号
+  rpc UpdatePhone (UpdatePhoneRequest) returns (UpdatePhoneResponse);
+
+  rpc generateCaptchaImage (CaptchaImageRequest) returns (CaptchaImageResponse);
+  
+  // 根据用户ID列表获取用户列表
+  rpc GetUsersByIds (GetUsersByIdsRequest) returns (GetUsersByIdsResponse);
+
+  // 登录后更新最后登录时间
+  rpc UpdateLastLoginTime (UpdateLastLoginTimeRequest) returns (UpdateLastLoginTimeResponse);
+  
 }
 
 // 创建用户请求
@@ -46,6 +79,13 @@ message CreateUserRequest {
 // 按ID获取用户请求
 message GetUserByIdRequest {
   string user_id = 1;
+  string current_user_id = 2;
+}
+
+// 按ID获取用户请求
+message GetEnhancedUserByIdRequest {
+  string current_user_id = 1;
+  string user_id = 2;
 }
 
 // 按用户名获取用户请求
@@ -55,7 +95,7 @@ message GetUserByUsernameRequest {
 
 // 更新用户请求
 message UpdateUserRequest {
-  string user_id = 1;
+  optional string user_id = 1;
   optional string nickname = 2;
   optional string email = 3;
   optional string avatar_url = 4;
@@ -64,6 +104,9 @@ message UpdateUserRequest {
   optional string head_image = 7;
   optional string head_image_thumb = 8;
   optional int32 sex = 9;
+  optional string username = 10;
+  optional string custom_id = 11;
+  optional string sign = 12;
 }
 
 // 验证密码请求
@@ -113,7 +156,8 @@ message User {
   int32 user_stat = 13;
   string tenant_id = 14;
   google.protobuf.Timestamp last_login_time = 15;
-  optional string user_idx = 16;
+  string custom_id = 16;
+  optional string sign = 17;
 }
 
 // 用户注册请求
@@ -123,12 +167,227 @@ message RegisterRequest {
   string nickname = 3;
   string tenant_id = 4;
   string phone = 5;
+  string verify_code = 6;
+  string image_code = 7; // 图片验证码
+  string image_code_key = 8; // 图片验证码Key
 }
 
 // 忘记密码请求
 message ForgetPasswordRequest{
-  string username = 1;
+//  string username = 1;
+  string phone = 1;
   string password = 2;
   string tenant_id = 3;
-  string phone = 4;
+  string verify_code = 4;
+}
+
+// 用户设置请求
+message UserConfigRequest{
+  string user_id = 1;
+  optional int32 allow_phone_search = 2;
+  optional int32 allow_id_search = 3;
+  optional int32 auto_load_video = 4;
+  optional int32 auto_load_pic = 5;
+  optional int32 msg_read_flag = 6;
+  optional int32 sound_enabled = 7;
+  optional int32 vibration_enabled = 8;
+  optional int32 show_phone = 9;
+}
+
+// 用户设置响应
+message UserConfigResponse {
+  optional UserConfig userConfig = 1;
+}
+
+// 用户设置消息定义
+message UserConfig {
+  string user_id = 1;
+  optional int32 allow_phone_search = 2;
+  optional int32 allow_id_search = 3;
+  optional int32 auto_load_video = 4;
+  optional int32 auto_load_pic = 5;
+  optional int32 msg_read_flag = 6;
+  google.protobuf.Timestamp create_time = 7;
+  google.protobuf.Timestamp update_time = 8;
+  optional int32 sound_enabled = 9;
+  optional int32 vibration_enabled = 10;
+  optional int32 show_phone = 11;
+}
+
+// 手机验证码请求
+message PhoneVerificationRequest {
+  string phone = 1;
+  string action = 2; // register, login, reset_password等
+}
+
+// 手机验证码响应
+message PhoneVerificationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 验证手机验证码请求
+message VerifyPhoneCodeRequest {
+  string phone = 1;
+  string code = 2;
+  string action = 3; // register, login, reset_password等
+}
+
+// 验证手机验证码响应
+message VerifyPhoneCodeResponse {
+  bool valid = 1;
+  string message = 2;
+}
+
+// 用户注销请求
+message DeactivateUserRequest {
+  string user_id = 1;
+  string phone = 2;    // 需要验证手机号
+  string verify_code = 3;  // 需要提供验证码
+}
+
+// 用户注销响应
+message DeactivateUserResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 修改手机号请求
+message UpdatePhoneRequest {
+  string user_id = 1;     // 用户ID
+  string password = 2;    // 用户密码，用于验证身份
+  string new_phone = 3;   // 新手机号
+  string verify_code = 4; // 新手机号的验证码
+}
+
+// 修改手机号响应
+message UpdatePhoneResponse {
+  bool success = 1;
+  string message = 2;
+  optional User user = 3; // 更新后的用户信息
+}
+
+// 图片验证码请求
+message CaptchaImageRequest {
+  int32 width = 1; // 图片宽度
+  int32 height = 2; // 图片高度
+  float font_size = 3; // 字体大小
+}
+
+// 图片验证码响应
+message CaptchaImageResponse {
+  bool success = 1;
+  string imageContent = 2; // 图片验证码base64
+  string codeKey = 3; // redis存储图片验证码的Key
+}
+
+// 增强的用户详情响应
+message EnhancedUserResponse {
+  User user = 1;                    // 用户基本信息
+  bool is_blocked = 2;              // 是否已拉黑
+  FriendshipStatus friend_status = 3; // 好友状态
+  bool is_online = 4;               // 在线状态
+  optional FriendRelation friend_relation =5;     // 好友关系
+  optional string request_id =6;// 如果好友请求为待处理、返回好友请求ID
+}
+
+// 好友关系状态枚举
+enum FriendshipStatus {
+  NO_RELATION = 0;      // 无关系
+  PENDING = 1;          // 待确认
+  ACCEPTED = 2;         // 已接受（好友）
+  REJECTED = 3;         // 已拒绝
+  BLOCKED = 4;          // 已拉黑
+  EXPIRED = 5;          // 已过期
+}
+
+message FriendRelation{
+  optional string remark = 1;    // 好友备注名称
+  bool is_starred = 2;           // 是否星标
+  bool is_top = 3;               // 是否置顶
+  int32 friend_type = 4;         // 好友类型：0-普通好友 1-官方账号 2-系统账号
+  repeated FriendGroupInfo groups = 5; // 好友所在的分组信息
+}
+
+// 好友分组信息
+message FriendGroupInfo {
+  string id = 1;           // 分组ID
+  string group_name = 2;   // 分组名称
+}
+
+message UserWithMatchType {
+  string id = 1;
+  string name = 2;
+  string account = 3;
+  string avatar = 4;
+  string gender = 5;
+  int32 age = 6;
+  optional string email = 7;
+  optional string region = 8;
+  optional int64 birthday = 9;
+  optional string match_type = 10;
+  string signature = 11;
+  bool is_friend = 12;
+}
+
+/// 用户信息更新请求
+message UserUpdate {
+  string id = 1;                // 用户ID
+  string name = 2;              // 用户名
+  string avatar = 3;            // 头像URL
+  string gender = 4;            // 性别
+  optional string phone = 5;    // 手机号
+  optional string email = 6;    // 邮箱
+  optional string address = 7;  // 地址
+  optional string region = 8;   // 地区
+  optional int64 birthday = 9;  // 生日时间戳
+  optional string signature = 10; // 个性签名
+}
+
+// 增强版用户信息（包含扩展字段）
+message EnhancedUser {
+  User user = 1;                           // 基础用户信息
+  FriendshipStatus friendship_status = 2;  // 好友关系状态
+  bool is_blocked = 3;                     // 是否被拉黑
+  bool is_online = 4;                      // 是否在线
+  optional string remark = 5;              // 备注名
+}
+
+/// 完整的用户信息（来自原message.proto）
+/// 包含数据库中的完整用户信息字段
+message UserComplete {
+  string id = 1;                // 用户ID
+  string name = 2;              // 用户名
+  string account = 3;           // 账号
+  string password = 4;          // 密码（加密后）
+  string avatar = 5;            // 头像URL
+  string gender = 6;            // 性别
+  int32 age = 7;                // 年龄
+  optional string phone = 8;    // 手机号
+  optional string email = 9;    // 邮箱
+  optional string address = 10; // 地址
+  optional string region = 11;  // 地区
+  optional int64 birthday = 12; // 生日时间戳
+  int64 create_time = 13;       // 创建时间
+  int64 update_time = 14;       // 更新时间
+  string salt = 15;             // 密码盐值
+  string signature = 16;        // 个性签名
+}
+
+// 根据ID列表获取用户列表请求
+message GetUsersByIdsRequest {
+  repeated string user_ids = 1;
+}
+
+// 根据ID列表获取用户列表响应
+message GetUsersByIdsResponse {
+  repeated User users = 1;
+}
+
+message UpdateLastLoginTimeRequest{
+  string user_id = 1;
+}
+
+message UpdateLastLoginTimeResponse{
+  bool success = 1;
 }

@@ -5,8 +5,41 @@ use common::error::Error;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
+use md5::{Digest, Md5};
+use serde::Serialize;
 
-mod client;
+#[cfg(feature = "s3")]
+mod s3_client;
+mod cos_client;
+mod oss_client;
+
+// 存储提供商枚举
+#[derive(Debug, Clone, PartialEq)]
+pub enum StorageProvider {
+    S3,     // AWS S3兼容接口(包括MinIO)
+    COS,    // 腾讯云对象存储
+    OSS,    // 阿里云对象存储
+}
+
+// 统一的上传签名结构体
+#[derive(Debug, Serialize)]
+pub struct UploadSignature {
+    pub host: String,
+    pub access_key_id: String,
+    pub policy: String,
+    pub signature: String,
+    pub dir: String,
+    pub expire: i64,
+    pub extra: Option<serde_json::Value>, // 某些平台需要 securityToken 等附加参数
+}
+
+// 存储桶类型枚举
+#[derive(Debug, Clone, PartialEq)]
+pub enum BucketType {
+    File,   // 普通文件存储桶
+    Avatar, // 头像存储桶
+}
 
 #[async_trait]
 pub trait Oss: Debug + Send + Sync {
@@ -18,10 +51,42 @@ pub trait Oss: Debug + Send + Sync {
     async fn upload_avatar(&self, key: &str, content: Vec<u8>) -> Result<(), Error>;
     async fn download_avatar(&self, key: &str) -> Result<Bytes, Error>;
     async fn delete_avatar(&self, key: &str) -> Result<(), Error>;
+    
+    // 生成预签名URL用于前端直接上传 (PUT方式)
+    async fn generate_presigned_upload_url(&self, key: &str, content_type: &str, expiration: Duration) -> Result<String, Error>;
+    
+    // 生成POST表单上传签名 (POST方式)
+    async fn generate_upload_signature(&self, key: &str, content_type: &str, expiration: Duration, bucket_type: BucketType) -> Result<UploadSignature, Error>;
+    
+    // 验证上传是否完成并处理后续逻辑
+    async fn validate_upload(&self, key: &str, expected_size: usize, expected_md5: &str) -> Result<bool, Error>;
 }
 
-pub async fn oss(config: &AppConfig) -> Arc<dyn Oss> {
-    Arc::new(client::S3Client::new(config).await)
+pub async fn oss(config: &AppConfig) -> Result<Arc<dyn Oss>, Error> {
+    // 根据配置选择存储提供商
+    match config.oss.provider.as_str() {
+        "cos" => {
+            let client = cos_client::CosClient::new(config).await?;
+            Ok(Arc::new(client))
+        },
+        "oss" => {
+            let client = oss_client::OssClient::new(config).await?;
+            Ok(Arc::new(client))
+        },
+        _ => {
+            #[cfg(feature = "s3")]
+            {
+                let client = s3_client::S3Client::new(config).await?;
+                Ok(Arc::new(client))
+            }
+            #[cfg(not(feature = "s3"))]
+            {
+                Err(Error::Internal(
+                    "S3 存储支持未启用（需以 --features s3 编译）".to_string(),
+                ))
+            }
+        }
+    }
 }
 
 pub fn default_avatars() -> HashMap<String, String> {
@@ -39,4 +104,12 @@ pub fn default_avatars() -> HashMap<String, String> {
             String::from("avatar3.png"),
         ),
     ])
+}
+
+// 计算文件MD5哈希值
+fn calculate_md5(content: &[u8]) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(content);
+    let result = hasher.finalize();
+    format!("{:x}", result)
 }

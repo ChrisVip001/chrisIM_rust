@@ -8,7 +8,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::message::GroupMemSeq;
+use common::proto::message::{GroupMemSeq, PlatformType};
+use serde::{Deserialize, Serialize};
 
 use common::config::AppConfig;
 use common::error::Error;
@@ -86,15 +87,317 @@ pub trait Cache: Sync + Send + Debug {
 
     /// 用户注册后删除注册验证码
     async fn del_register_code(&self, email: &str) -> Result<(), Error>;
+    
+    
+    /// 用户平台登录
+    /// 
+    /// 将用户在指定平台标记为在线状态
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_login(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
-    /// 用户登录
-    async fn user_login(&self, user_id: &str) -> Result<(), Error>;
+    /// 用户平台登出
+    /// 
+    /// 将用户在指定平台标记为离线状态
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn user_platform_logout(&self, user_id: &str, platform: i32) -> Result<(), Error>;
 
-    /// 用户登出
-    async fn user_logout(&self, user_id: &str) -> Result<(), Error>;
+    /// 存储指定平台的访问令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `token` - 访问令牌
+    /// * `platform` - 平台类型
+    /// * `expiry_seconds` - 过期时间（秒）
+    async fn save_access_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error>;
 
-    /// 在线用户计数
-    async fn online_count(&self) -> Result<i64, Error>;
+    /// 存储指定平台的刷新令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `token` - 刷新令牌
+    /// * `platform` - 平台类型
+    /// * `expiry_seconds` - 过期时间（秒）
+    async fn save_refresh_token_for_platform(&self, user_id: &str, token: &str, platform: i32, expiry_seconds: u64) -> Result<(), Error>;
+
+    /// 获取指定平台的访问令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    /// 
+    /// # 返回值
+    /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
+    async fn get_access_token_for_platform(&self, user_id: &str, platform: i32) -> Result<Option<String>, Error>;
+
+    /// 获取指定平台的刷新令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    /// 
+    /// # 返回值
+    /// * `Option<String>` - 令牌，如果不存在或已过期则返回None
+    async fn get_refresh_token_for_platform(&self, user_id: &str, platform: i32) -> Result<Option<String>, Error>;
+
+    /// 删除指定平台的访问令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn delete_access_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error>;
+
+    /// 删除指定平台的刷新令牌
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// * `platform` - 平台类型
+    async fn delete_refresh_token_for_platform(&self, user_id: &str, platform: i32) -> Result<(), Error>;
+
+    /// 批量获取用户完整在线状态信息
+    /// 
+    /// # 参数
+    /// * `user_ids` - 用户ID列表
+    /// 
+    /// # 返回值
+    /// * `Vec<UserOnlineStatus>` - 用户在线状态信息列表
+    async fn batch_get_users_online_status(&self, user_ids: &[String]) -> Result<Vec<UserOnlineStatus>, Error>;
+    
+    /// 保存双向好友关系
+    /// 
+    /// 在缓存中存储两个用户之间的双向好友关系，便于快速查询
+    /// 
+    /// # 参数
+    /// * `user_id` - 第一个用户的ID
+    /// * `friend_id` - 第二个用户的ID
+    async fn save_bidirectional_friendship(&self, user_id: &str, friend_id: &str) -> Result<(), Error>;
+
+    /// 检查双向好友关系是否存在
+    /// 
+    /// 快速检查两个用户之间是否存在好友关系
+    /// 
+    /// # 参数
+    /// * `user_id` - 第一个用户的ID
+    /// * `friend_id` - 第二个用户的ID
+    /// 
+    /// # 返回值
+    /// * `bool` - 如果存在好友关系返回true，否则返回false
+    async fn check_friendship_exists(&self, user_id: &str, friend_id: &str) -> Result<bool, Error>;
+
+    /// 删除双向好友关系
+    /// 
+    /// 从缓存中删除两个用户之间的双向好友关系
+    /// 
+    /// # 参数
+    /// * `user_id` - 第一个用户的ID
+    /// * `friend_id` - 第二个用户的ID
+    async fn delete_bidirectional_friendship(&self, user_id: &str, friend_id: &str) -> Result<(), Error>;
+
+    /// 获取用户的所有好友ID
+    /// 
+    /// 从缓存中获取指定用户的所有好友ID列表
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `Vec<String>` - 好友ID列表
+    async fn get_all_friend_ids(&self, user_id: &str) -> Result<Vec<String>, Error>;
+    
+    /// 添加用户黑名单关系
+    /// 
+    /// 将指定用户添加到另一用户的黑名单中
+    /// 
+    /// # 参数
+    /// * `user_id` - 拉黑操作的发起用户ID
+    /// * `blocked_user_id` - 被拉黑的用户ID
+    async fn add_user_to_blacklist(&self, user_id: &str, blocked_user_id: &str) -> Result<(), Error>;
+    
+    /// 从黑名单中移除用户
+    /// 
+    /// 将指定用户从另一用户的黑名单中移除
+    /// 
+    /// # 参数
+    /// * `user_id` - 解除拉黑操作的发起用户ID
+    /// * `blocked_user_id` - 被解除拉黑的用户ID
+    async fn remove_user_from_blacklist(&self, user_id: &str, blocked_user_id: &str) -> Result<(), Error>;
+    
+    /// 检查用户是否在黑名单中
+    /// 
+    /// 检查一个用户是否被另一用户拉黑
+    /// 
+    /// # 参数
+    /// * `user_id` - 可能拉黑他人的用户ID
+    /// * `target_user_id` - 可能被拉黑的用户ID
+    /// 
+    /// # 返回值
+    /// * `bool` - 如果目标用户被拉黑则返回true，否则返回false
+    async fn is_user_in_blacklist(&self, user_id: &str, target_user_id: &str) -> Result<bool, Error>;
+
+    // 双向检查黑名单
+    
+    /// 获取用户的黑名单列表
+    /// 
+    /// 获取指定用户拉黑的所有用户ID列表
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID
+    /// 
+    /// # 返回值
+    /// * `Vec<String>` - 被拉黑的用户ID列表
+    async fn get_user_blacklist(&self, user_id: &str) -> Result<Vec<String>, Error>;
+    
+    /// 双向检查黑名单关系
+    /// 
+    /// 检查两个用户之间是否存在任意方向的黑名单关系
+    /// 
+    /// # 参数
+    /// * `user_id1` - 第一个用户的ID
+    /// * `user_id2` - 第二个用户的ID
+    /// 
+    /// # 返回值
+    /// * `BlacklistCheckResult` - 黑名单检查结果，包含是否存在黑名单关系及关系方向
+    async fn check_bidirectional_blacklist(&self, user_id1: &str, user_id2: &str) -> Result<BlacklistCheckResult, Error>;
+
+    /// 获取用户在指定会话中的未读消息总数
+    /// 
+    /// 查询用户在特定会话（私聊或群聊）中的未读消息数量，
+    /// 用于在客户端显示未读消息提示徽章。
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID，标识要查询的用户
+    /// * `conversation_id` - 会话ID，可以是私聊对方的用户ID或群组ID
+    /// 
+    /// # 返回值
+    /// * `Result<i32, Error>` - 成功时返回未读消息数量，失败时返回错误
+    ///   - 如果用户在该会话中没有未读消息，返回0
+    ///   - 如果会话不存在或从未有过消息，也返回0
+    /// 
+    /// # 使用场景
+    /// * 用户登录时批量获取各个会话的未读数量
+    /// * 实时更新会话列表中的未读消息徽章
+    /// * 计算用户的总未读消息数量
+    async fn unread_count_sum(&self, user_id: &str, conversation_id: &str) -> Result<i32, Error>;
+
+    /// 设置用户在指定会话中的未读消息总数
+    /// 
+    /// 直接设置用户在特定会话中的未读消息数量。
+    /// 通常在以下场景使用：消息同步、批量标记已读等。
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID，标识要设置未读数的用户
+    /// * `conversation_id` - 会话ID，可以是私聊对方的用户ID或群组ID
+    /// * `count` - 要设置的未读消息数量
+    ///   - 如果为0或负数，会清除该会话的未读计数
+    ///   - 如果为正数，会设置为指定值
+    /// 
+    /// # 返回值
+    /// * `Result<(), Error>` - 成功时返回空，失败时返回错误
+    /// 
+    /// # 使用场景
+    /// * 用户从其他设备同步未读状态
+    /// * 管理员重置某个会话的未读计数
+    /// * 批量操作时直接设置未读数量
+    /// * 消息撤回后调整未读计数
+    async fn unread_count_set(&self, user_id: &str, conversation_id: &str, count: &i32) -> Result<(), Error>;
+
+    /// 减少用户在指定会话中的未读消息总数（减1）
+    /// 
+    /// 当用户阅读一条消息时调用此方法，将对应会话的未读计数减1。
+    /// 这是最常用的未读消息管理方法，确保未读数量的准确性。
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID，标识阅读消息的用户
+    /// * `conversation_id` - 会话ID，可以是私聊对方的用户ID或群组ID
+    /// 
+    /// # 返回值
+    /// * `Result<(), Error>` - 成功时返回空，失败时返回错误
+    /// 
+    /// # 行为说明
+    /// * 如果当前未读数为1，减1后会自动清除整个计数记录
+    /// * 如果当前未读数为0或会话不存在，操作不会产生负数或错误
+    /// * 操作是原子性的，确保在高并发场景下的数据一致性
+    /// 
+    /// # 使用场景
+    /// * 用户点击并查看单条消息
+    /// * 消息推送被用户查看后
+    /// * 实时聊天中用户阅读新消息
+    async fn unread_count_decrement(&self, user_id: &str, conversation_id: &str) -> Result<(), Error>;
+    
+    /// 移除用户在指定会话中的未读消息计数
+    /// 
+    /// 完全清除用户在特定会话中的所有未读消息计数，
+    /// 等效于将未读数量设置为0，但更加直接和高效。
+    /// 
+    /// # 参数
+    /// * `user_id` - 用户ID，标识要清除未读计数的用户
+    /// * `conversation_id` - 会话ID，可以是私聊对方的用户ID或群组ID
+    /// 
+    /// # 返回值
+    /// * `Result<(), Error>` - 成功时返回空，失败时返回错误
+    /// 
+    /// # 使用场景
+    /// * 用户点击"标记为已读"按钮
+    /// * 用户进入会话页面并查看了所有消息
+    /// * 用户离开群组时清除该群组的未读计数
+    /// * 会话被删除时清理相关的未读数据
+    /// * 批量清理操作，如"全部标记为已读"
+    async fn unread_count_remove(&self, user_id: &str, conversation_id: &str) -> Result<(), Error>;
+    
+}
+
+/// 用户在线状态信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserOnlineStatus {
+    /// 用户ID
+    pub user_id: String,
+    /// 是否在线（全局状态）
+    pub is_online: bool,
+    /// 在线平台列表
+    pub online_platforms: Vec<String>,
+    /// 在线平台数量
+    pub platform_count: i64,
+}
+
+impl UserOnlineStatus {
+    /// 创建新的用户在线状态
+    pub fn new(user_id: String, is_online: bool, online_platforms: Vec<String>) -> Self {
+        let platform_count = online_platforms.len() as i64;
+        Self {
+            user_id,
+            is_online,
+            online_platforms,
+            platform_count,
+        }
+    }
+}
+
+/// 黑名单检查结果
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlacklistCheckResult {
+    /// 是否存在黑名单关系
+    pub has_blacklist: bool,
+    /// 用户1是否将用户2加入黑名单
+    pub user1_blocked_user2: bool,
+    /// 用户2是否将用户1加入黑名单
+    pub user2_blocked_user1: bool,
+}
+
+impl BlacklistCheckResult {
+    /// 创建新的黑名单检查结果
+    pub fn new(user1_blocked_user2: bool, user2_blocked_user1: bool) -> Self {
+        let has_blacklist = user1_blocked_user2 || user2_blocked_user1;
+        Self {
+            has_blacklist,
+            user1_blocked_user2,
+            user2_blocked_user1,
+        }
+    }
 }
 
 /// 根据配置创建缓存实例
@@ -104,6 +407,6 @@ pub trait Cache: Sync + Send + Debug {
 ///
 /// # 返回
 /// * 实现了Cache特征的实例，被Arc包裹以便共享
-pub fn cache(config: &AppConfig) -> Arc<dyn Cache> {
-    Arc::new(redis::RedisCache::from_config(config))
+pub async fn cache(config: &AppConfig) -> Arc<dyn Cache> {
+    Arc::new(redis::RedisCache::from_config(config).await)
 }

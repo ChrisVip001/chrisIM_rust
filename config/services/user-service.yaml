@@ -1,0 +1,33 @@
+# 冒烟测试专用：用户服务配置（统一使用 rustim 主库）
+component: UserServer
+
+server:
+  host: 127.0.0.1
+  port: 50002
+  ws_lb_strategy: RoundRobin
+
+database:
+  postgres:
+    host: 127.0.0.1
+    port: 5432
+    user: kelisi
+    password: "123456"
+    database: rustim
+
+  mongodb:
+    host: 127.0.0.1
+    port: 27017
+    database: im
+
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    seq_step: 10
+    max_connections: 100
+    pool_timeout_ms: 3000
+    connection_timeout_ms: 5000
+
+log:
+  level: "info"
+  output: "console"
+  format: "plain"

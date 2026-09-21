@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>腾讯云 COS 上传测试</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+    }
+    .upload-section {
+      border: 1px solid #ddd;
+      padding: 20px;
+      margin-bottom: 20px;
+      border-radius: 5px;
+    }
+    #result {
+      margin-top: 20px;
+      padding: 10px;
+      background-color: #f5f5f5;
+      border-radius: 5px;
+      min-height: 50px;
+    }
+    .success {
+      color: green;
+    }
+    .error {
+      color: red;
+    }
+    button {
+      padding: 10px 20px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    button:disabled {
+      background-color: #6c757d;
+      cursor: not-allowed;
+    }
+    .file-input-wrapper {
+      position: relative;
+      display: inline-block;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .file-input-wrapper input[type=file] {
+      position: absolute;
+      left: 0;
+      top: 0;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+    .file-input-button {
+      display: inline-block;
+      padding: 10px 20px;
+      background-color: #28a745;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .file-input-button:hover {
+      background-color: #218838;
+    }
+    #selectedFileName {
+      margin-left: 10px;
+      font-style: italic;
+      color: #666;
+    }
+    .debug-info {
+      margin-top: 20px;
+      padding: 10px;
+      background-color: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .drop-zone {
+      border: 2px dashed #ccc;
+      border-radius: 10px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background-color: #f9f9f9;
+      margin-bottom: 20px;
+    }
+    .drop-zone:hover {
+      border-color: #28a745;
+      background-color: #f0f8f0;
+    }
+    .drop-zone.drag-over {
+      border-color: #007bff;
+      background-color: #e7f3ff;
+      transform: scale(1.02);
+    }
+    .drop-zone-icon {
+      font-size: 48px;
+      color: #6c757d;
+      margin-bottom: 10px;
+    }
+    .drop-zone-text {
+      color: #6c757d;
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+    .drop-zone-hint {
+      color: #999;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+<h1>腾讯云 COS 文件上传测试</h1>
+
+<div class="upload-section">
+  <h2>1. 选择文件</h2>
+  
+  <!-- 拖拽区域 -->
+  <div id="dropZone" class="drop-zone">
+    <div class="drop-zone-icon">📁</div>
+    <div class="drop-zone-text">拖拽文件到这里上传</div>
+    <div class="drop-zone-hint">或者点击选择文件</div>
+  </div>
+  
+  <input type="file" id="fileInput" style="display: none;" accept="*/*" />
+  
+  <!-- 已选择文件信息 -->
+  <div id="selectedFileInfo" style="display: none; margin-top: 20px;">
+    <strong>已选择文件：</strong>
+    <span id="selectedFileName"></span>
+    <button onclick="clearSelection()" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">清除</button>
+  </div>
+  
+  <!-- 备用方案：显示原生的文件选择按钮 -->
+  <div style="margin-top: 10px;">
+    <small style="color: #666;">备用方案：</small>
+    <input type="file" id="fileInputBackup" style="margin-left: 10px;" />
+  </div>
+</div>
+
+<div class="upload-section">
+  <h2>2. 选择上传类型</h2>
+  <label>
+    <input type="radio" name="bucketType" value="file" checked> 普通文件
+  </label>
+  <label style="margin-left: 20px;">
+    <input type="radio" name="bucketType" value="avatar"> 头像文件
+  </label>
+</div>
+
+<div class="upload-section">
+  <h2>3. 上传文件</h2>
+  <button id="uploadBtn" onclick="uploadFile()" disabled>开始上传</button>
+  <button onclick="clearSelection()">清除选择</button>
+</div>
+
+<div id="result">
+  <p>等待选择文件...</p>
+</div>
+
+<div class="debug-info" id="debugInfo" style="display: none;">
+  <strong>调试信息：</strong>
+  <div id="debugContent"></div>
+</div>
+
+<script>
+  // 调试日志函数
+  function debugLog(message) {
+    const debugContent = document.getElementById('debugContent');
+    const debugInfo = document.getElementById('debugInfo');
+    debugInfo.style.display = 'block';
+    const timestamp = new Date().toLocaleTimeString();
+    debugContent.innerHTML += `[${timestamp}] ${message}<br>`;
+    debugContent.scrollTop = debugContent.scrollHeight;
+  }
+
+  // 文件选择函数
+  function selectFile() {
+    debugLog('触发文件选择');
+    const fileInput = document.getElementById('fileInput');
+    fileInput.click();
+  }
+
+  // 文件选择事件处理
+  document.getElementById('fileInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    handleFileSelect(file);
+  });
+
+  // 处理文件选择
+  function handleFileSelect(file) {
+    const uploadBtn = document.getElementById('uploadBtn');
+    const selectedFileName = document.getElementById('selectedFileName');
+    const selectedFileInfo = document.getElementById('selectedFileInfo');
+    const result = document.getElementById('result');
+    
+    if (file) {
+      selectedFileName.textContent = `${file.name} (${formatFileSize(file.size)})`;
+      selectedFileInfo.style.display = 'block';
+      uploadBtn.disabled = false;
+      result.innerHTML = '<p>已选择文件，可以开始上传</p>';
+      debugLog(`选择文件: ${file.name}, 大小: ${formatFileSize(file.size)}, 类型: ${file.type || '未知'}`);
+    } else {
+      selectedFileInfo.style.display = 'none';
+      uploadBtn.disabled = true;
+      result.innerHTML = '<p>等待选择文件...</p>';
+      debugLog('文件选择被取消');
+    }
+  }
+
+  // 备用文件输入框的事件处理
+  document.getElementById('fileInputBackup').addEventListener('change', function(e) {
+    debugLog('使用备用文件选择器');
+    // 将选择的文件同步到主文件输入框
+    const file = e.target.files[0];
+    if (file) {
+      // 触发主文件输入框的 change 事件
+      const mainFileInput = document.getElementById('fileInput');
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      mainFileInput.files = dataTransfer.files;
+      mainFileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+
+  // 格式化文件大小
+  function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  // 清除选择
+  function clearSelection() {
+    document.getElementById('fileInput').value = '';
+    document.getElementById('selectedFileInfo').style.display = 'none';
+    document.getElementById('uploadBtn').disabled = true;
+    document.getElementById('result').innerHTML = '<p>等待选择文件...</p>';
+    debugLog('清除文件选择');
+  }
+
+  // 获取腾讯云 COS 上传签名
+  async function getSignature(bucketType) {
+    try {
+      debugLog(`开始获取上传签名，桶类型: ${bucketType}`);
+      
+      const response = await fetch('http://127.0.0.1:8000/api/files/upload-signature', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // 如果需要认证，请添加你的 token
+          'Authorization': 'Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3MTY1NzIzNjM3NDY5NzE2NDgiLCJpc3MiOiJhcGktZ2F0ZXdheSIsImV4cCI6MTc1MTA5NzMxNCwiaWF0IjoxNzUxMDEwOTE0LCJ1c2VybmFtZSI6Iua1i-ivlSIsInRlbmFudF9pZCI6IjExMTExMSIsInRlbmFudF9uYW1lIjoiZGVmYXVsdCIsInBsYXRmb3JtIjoyLCJleHRyYSI6eyJjdXN0b21faWQiOiJteWlkLVRJUFVjbm1JIn19.UoV2ddpmK7z0a3rW9QNjKEi4w_SRr06v83uvyy415E0'
+        },
+        body: JSON.stringify({ 
+          bucket_type: bucketType,
+          content_type: "application/octet-stream"
+        })
+      });
+      
+      debugLog(`签名请求响应状态: ${response.status}`);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`获取签名失败: ${response.status} - ${errorText}`);
+      }
+      
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(`签名接口返回失败: ${data.message || '未知错误'}`);
+      }
+      
+      debugLog('成功获取签名数据');
+      console.log('获取到的签名数据:', data.data);
+      return data.data;
+    } catch (error) {
+      debugLog(`获取签名出错: ${error.message}`);
+      console.error('获取签名出错:', error);
+      throw error;
+    }
+  }
+
+  // 上传文件到腾讯云 COS
+  async function uploadFile() {
+    const fileInput = document.getElementById('fileInput');
+    const file = fileInput.files[0];
+    const result = document.getElementById('result');
+    const bucketType = document.querySelector('input[name="bucketType"]:checked').value;
+    const uploadBtn = document.getElementById('uploadBtn');
+    
+    if (!file) {
+      result.innerHTML = '<p class="error">请先选择文件</p>';
+      return;
+    }
+
+    // 禁用上传按钮防止重复点击
+    uploadBtn.disabled = true;
+    result.innerHTML = '<p>正在获取上传签名...</p>';
+
+    try {
+      // 1. 获取上传签名
+      const sig = await getSignature(bucketType);
+
+      // 2. 构建文件的完整路径
+      const key = `${sig.dir}/${file.name}`;
+      debugLog(`上传文件路径: ${key}`);
+      console.log('上传文件路径:', key);
+
+      // 3. 构建腾讯云 COS POST Object 表单数据
+      const formData = new FormData();
+      
+      // 腾讯云 COS POST Object 需要的必要字段，顺序很重要
+      if (sig.extra) {
+        const extra = sig.extra;
+        debugLog('使用腾讯云 COS POST Object 参数');
+        
+        // 添加腾讯云 COS 特有的签名参数
+        formData.append('key', key);
+        formData.append('policy', sig.policy);
+        formData.append('q-sign-algorithm', extra['q-sign-algorithm']);
+        formData.append('q-ak', extra['q-ak']);
+        formData.append('q-sign-time', extra['q-sign-time']);
+        formData.append('q-key-time', extra['q-key-time']);
+        formData.append('q-header-list', extra['q-header-list']);
+        formData.append('q-url-param-list', extra['q-url-param-list']);
+        formData.append('q-signature', extra['q-signature']);
+        
+        debugLog(`Policy: ${sig.policy}`);
+        debugLog(`Signature: ${extra['q-signature']}`);
+      } else {
+        // 如果没有 extra，使用传统的签名方式（S3 兼容）
+        debugLog('使用传统 S3 兼容签名参数');
+        formData.append('key', key);
+        formData.append('policy', sig.policy);
+        formData.append('signature', sig.signature);
+        if (sig.access_key_id) {
+          formData.append('AWSAccessKeyId', sig.access_key_id);
+        }
+      }
+      
+      // 文件必须是最后一个字段
+      formData.append('file', file);
+
+      result.innerHTML = '<p>正在上传文件...</p>';
+
+      // 4. 上传文件
+      const uploadUrl = sig.host;
+      debugLog(`开始上传到: ${uploadUrl}`);
+      console.log('上传地址:', uploadUrl);
+      
+      const uploadResp = await fetch(uploadUrl, {
+        method: 'POST',
+        body: formData
+      });
+
+      debugLog(`上传响应状态: ${uploadResp.status}`);
+      console.log('上传响应状态:', uploadResp.status);
+
+      if (!uploadResp.ok) {
+        const errorText = await uploadResp.text();
+        console.error('上传失败响应:', errorText);
+        debugLog(`上传失败: ${errorText}`);
+        result.innerHTML = `<p class="error">上传失败: ${uploadResp.status} - ${errorText}</p>`;
+        return;
+      }
+
+      // 5. 显示成功信息
+      const fileUrl = `${sig.host}/${key}`;
+      debugLog('上传成功！');
+      result.innerHTML = `
+        <p class="success">上传成功！</p>
+        <p>文件路径: ${key}</p>
+        <p>访问地址: <a href="${fileUrl}" target="_blank">${fileUrl}</a></p>
+        <p>存储桶类型: ${bucketType === 'file' ? '普通文件' : '头像文件'}</p>
+      `;
+      
+      // 清除文件选择
+      clearSelection();
+      
+    } catch (error) {
+      debugLog(`上传出错: ${error.message}`);
+      console.error('上传出错:', error);
+      result.innerHTML = `<p class="error">上传出错: ${error.message}</p>`;
+    } finally {
+      // 重新启用上传按钮
+      uploadBtn.disabled = !fileInput.files[0];
+    }
+  }
+
+  // 页面加载完成后的初始化
+  window.addEventListener('DOMContentLoaded', function() {
+    debugLog('页面加载完成');
+    console.log('腾讯云 COS 上传测试页面已就绪');
+    
+    // 初始化拖拽功能
+    initDragAndDrop();
+  });
+
+  // 初始化拖拽功能
+  function initDragAndDrop() {
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    
+    // 点击拖拽区域触发文件选择
+    dropZone.addEventListener('click', function() {
+      fileInput.click();
+    });
+    
+    // 拖拽事件
+    dropZone.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add('drag-over');
+    });
+    
+    dropZone.addEventListener('dragleave', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('drag-over');
+    });
+    
+    dropZone.addEventListener('drop', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('drag-over');
+      
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        const file = files[0];
+        // 更新文件输入框
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        fileInput.files = dataTransfer.files;
+        // 处理文件
+        handleFileSelect(file);
+        debugLog(`通过拖拽选择文件: ${file.name}`);
+      }
+    });
+    
+    // 防止浏览器默认的拖拽行为
+    document.addEventListener('dragover', function(e) {
+      e.preventDefault();
+    });
+    
+    document.addEventListener('drop', function(e) {
+      e.preventDefault();
+    });
+    
+    debugLog('拖拽功能初始化完成');
+  }
+</script>
+</body>
+</html> 

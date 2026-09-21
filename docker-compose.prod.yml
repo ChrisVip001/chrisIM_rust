@@ -1,0 +1,400 @@
+version: '3.8'
+
+services:
+  # API 网关服务
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/api-gateway:latest
+    container_name: rustim_api_gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:9092
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["api-gateway"]
+
+  # 消息网关服务
+  msg-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/msg-gateway:latest
+    container_name: rustim_msg_gateway
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["msg-gateway"]
+
+  # 用户服务
+  user-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/user-service:latest
+    container_name: rustim_user_service
+    restart: unless-stopped
+    ports:
+      - "50001:50001"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["user-service"]
+
+  # 好友服务
+  friend-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/friend-service:latest
+    container_name: rustim_friend_service
+    restart: unless-stopped
+    ports:
+      - "50002:50002"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["friend-service"]
+
+  # 群组服务
+  group-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/group-service:latest
+    container_name: rustim_group_service
+    restart: unless-stopped
+    ports:
+      - "50003:50003"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["group-service"]
+
+  # 消息服务
+  msg-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/msg-server:latest
+    container_name: rustim_msg_server
+    restart: unless-stopped
+    ports:
+      - "50004:50004"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["msg-server"]
+
+  # 对象存储服务
+  oss:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/oss:latest
+    container_name: rustim_oss
+    restart: unless-stopped
+    ports:
+      - "50005:50005"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:50005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["oss"]
+
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: rustim_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: rustim
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rustim
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustim -d rustim"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: rustim_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command: redis-server /usr/local/etc/redis/redis.conf
+
+  # Zookeeper (Kafka 依赖)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: rustim_zookeeper
+    restart: unless-stopped
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_INIT_LIMIT: 5
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Kafka 消息队列
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: rustim_kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Nginx 负载均衡器 (可选)
+  nginx:
+    image: nginx:alpine
+    container_name: rustim_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - api-gateway
+      - msg-gateway
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  zookeeper_data:
+    driver: local
+  zookeeper_logs:
+    driver: local
+  kafka_data:
+    driver: local
+
+networks:
+  rustim-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16 

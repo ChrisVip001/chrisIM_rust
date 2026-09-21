@@ -4,53 +4,39 @@ use axum::{
     response::IntoResponse,
 };
 use futures::future::BoxFuture;
-use metrics::{counter, histogram};
+use metrics::{counter, histogram, describe_counter, describe_histogram};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use once_cell::sync::Lazy;
-use prometheus::{Encoder, Registry, TextEncoder};
-use std::sync::Arc;
 use std::time::Instant;
-use tower::Layer;
-use tower::Service;
+use tower::{Layer, Service};
 use tracing::info;
 
-// 全局 Prometheus 注册表
-static REGISTRY: Lazy<Arc<Registry>> = Lazy::new(|| {
-    let registry = Registry::new();
-    Arc::new(registry)
+// 全局 Prometheus 处理器
+static PROMETHEUS_HANDLE: Lazy<PrometheusHandle> = Lazy::new(|| {
+    PrometheusBuilder::new()
+        .with_http_listener(([0, 0, 0, 0], 9090))
+        .install_recorder()
+        .expect("Failed to install Prometheus recorder")
 });
-
-/// 获取全局Registry
-pub fn get_registry() -> Arc<Registry> {
-    REGISTRY.clone()
-}
 
 /// 初始化指标系统
 pub fn init_metrics() {
-    // 注册默认的收集器
-    let _registry = get_registry();
-    info!("Prometheus指标已初始化");
+    // 强制初始化 Prometheus 处理器
+    Lazy::force(&PROMETHEUS_HANDLE);
+
+    // 描述指标
+    describe_counter!("gateway_requests_total", "Total number of requests processed by the gateway");
+    describe_counter!("gateway_responses_total", "Total number of responses sent by the gateway");
+    describe_counter!("gateway_errors_total", "Total number of errors encountered by the gateway");
+    describe_histogram!("gateway_request_duration_seconds", "Request processing duration in seconds");
+
+    info!("指标系统已初始化");
 }
 
 /// 指标请求处理函数
 pub async fn get_metrics_handler() -> impl IntoResponse {
-    let encoder = TextEncoder::new();
-    let registry = get_registry();
-
-    // 收集所有指标
-    let metric_families = registry.gather();
-    let mut buffer = Vec::new();
-    encoder
-        .encode(&metric_families, &mut buffer)
-        .unwrap_or_else(|e| {
-            eprintln!("无法编码指标: {}", e);
-        });
-
-    let metrics_text = String::from_utf8(buffer).unwrap_or_else(|e| {
-        eprintln!("无法将指标转换为UTF-8: {}", e);
-        String::from("metrics encoding error")
-    });
-
-    (StatusCode::OK, metrics_text)
+    let metrics = PROMETHEUS_HANDLE.render();
+    (StatusCode::OK, metrics)
 }
 
 /// 指标中间件层
@@ -80,7 +66,6 @@ where
     type Error = S::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    /// 检查服务是否就绪
     fn poll_ready(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -89,67 +74,56 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        // 获取请求路径
         let path = req.uri().path().to_string();
-        let method = req.method().clone();
-
-        // 获取服务名称
+        let method = req.method().to_string();
         let service = extract_service_name(&path);
 
-        // 增加请求计数
-        counter!("gateway.requests.total",
-            "method" => method.to_string(),
+        // 记录请求
+        counter!("gateway_requests_total", 
+            "method" => method.clone(),
             "path" => path.clone(),
             "service" => service.clone()
         );
 
-        // 开始计时
         let start = Instant::now();
-
-        // 克隆服务
         let mut svc = self.inner.clone();
 
         Box::pin(async move {
             let result = svc.call(req).await;
+            let duration = start.elapsed().as_secs_f64();
 
-            // 计算请求处理时间
-            let duration = start.elapsed();
+            // 记录请求处理时间
+            histogram!("gateway_request_duration_seconds").record(duration);
 
             match &result {
                 Ok(response) => {
-                    let status = response.status().as_u16();
+                    let status = response.status().as_u16().to_string();
 
-                    // 记录请求处理时间（以秒为单位）
-                    let duration_secs = duration.as_secs_f64();
-                    histogram!("gateway.request.duration").record(duration_secs);
-
-                    // 统计状态码
-                    let path_clone = path.clone();
-                    let service_clone = service.clone();
-                    counter!("gateway.responses.total",
-                        "method" => method.to_string(),
-                        "path" => path_clone,
-                        "service" => service_clone,
-                        "status" => status.to_string()
+                    // 记录响应
+                    counter!("gateway_responses_total",
+                        "method" => method.clone(),
+                        "path" => path.clone(),
+                        "service" => service.clone(),
+                        "status" => status.clone()
                     );
 
-                    // 统计错误状态码
-                    if status >= 400 {
-                        counter!("gateway.errors.total",
-                            "method" => method.to_string(),
+                    // 记录错误（4xx, 5xx）
+                    if response.status().is_client_error() || response.status().is_server_error() {
+                        counter!("gateway_errors_total",
+                            "method" => method,
                             "path" => path,
                             "service" => service,
-                            "status" => status.to_string()
+                            "status" => status
                         );
                     }
                 }
                 Err(_) => {
-                    // 统计请求失败
-                    counter!("gateway.errors.total",
-                        "method" => method.to_string(),
+                    // 记录服务错误
+                    counter!("gateway_errors_total",
+                        "method" => method,
                         "path" => path,
                         "service" => service,
-                        "status" => "error"
+                        "status" => "service_error"
                     );
                 }
             }
@@ -161,13 +135,11 @@ where
 
 /// 从路径中提取服务名称
 fn extract_service_name(path: &str) -> String {
-    if path.starts_with("/api/auth") {
-        "auth".to_string()
-    } else if path.starts_with("/api/users") {
+    if path.starts_with("/api/user") {
         "user".to_string()
-    } else if path.starts_with("/api/friends") {
+    } else if path.starts_with("/api/friend") {
         "friend".to_string()
-    } else if path.starts_with("/api/groups") {
+    } else if path.starts_with("/api/group") {
         "group".to_string()
     } else if path.starts_with("/metrics") {
         "metrics".to_string()

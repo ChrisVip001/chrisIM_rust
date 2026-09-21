@@ -1,234 +1,166 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
-
 use async_trait::async_trait;
 use common::error::Error;
-use dashmap::DashMap;
-use tokio::sync::mpsc;
-use tonic::transport::{Channel, Endpoint};
-use tower::discover::Change;
-use tracing::{debug, error};
-
-use common::config::AppConfig;
-use common::message::msg_service_client::MsgServiceClient;
-use common::message::{GroupMemSeq, Msg, SendGroupMsgRequest, SendMsgRequest};
+use tracing::{debug, error, info};
 
 use super::Pusher;
+use common::config::AppConfig;
+use common::proto::message::msg_service_client::MsgServiceClient;
+use common::proto::message::{GroupMemSeq, Msg, SendGroupMsgRequest, SendMsgRequest};
+use common::grpc_client::base::get_chan;
+use common::service_discovery::LbWithServiceDiscovery;
 
 /// 消息推送服务的具体实现
-/// 负责与多个WebSocket网关通信，将消息推送给在线客户端
+/// 
+/// 负责与多个WebSocket网关通信，将消息推送给在线客户端。
+/// 使用gRPC协议与WebSocket网关服务通信，支持服务发现和负载均衡。
+/// 
+/// ## 工作原理
+/// 
+/// 1. **服务发现**: 通过Consul自动发现可用的WebSocket网关实例
+/// 2. **负载均衡**: 使用轮询算法在多个网关实例间分发请求
+/// 3. **消息推送**: 将消息通过gRPC发送给WebSocket网关
+/// 4. **错误处理**: 处理网络异常和服务不可用的情况
+/// 
+/// ## 推送流程
+/// 
+/// ```text
+/// ConsumerService -> PusherService -> WebSocket网关 -> 客户端WebSocket连接
+/// ```
 #[derive(Debug)]
 pub struct PusherService {
-    // WebSocket RPC客户端列表，以网关的网络地址为键
-    ws_rpc_list: Arc<DashMap<SocketAddr, MsgServiceClient<Channel>>>,
-    // 服务中心客户端，用于查询WebSocket网关服务
-    service_center: ServiceClient,
-    // WebSocket服务名称
-    sub_svr_name: String,
+    /// 带负载均衡和服务发现的WebSocket RPC客户端
+    /// 
+    /// 这个客户端会自动：
+    /// - 从Consul发现可用的WebSocket网关实例
+    /// - 在多个实例间进行负载均衡
+    /// - 处理实例故障和自动重连
+    /// - 维护连接池以提高性能
+    ws_rpc_client: MsgServiceClient<LbWithServiceDiscovery>,
 }
 
 impl PusherService {
     /// 创建一个新的推送服务实例
-    /// 初始化服务发现和WebSocket连接管理
-    pub async fn new(config: &AppConfig) -> Self {
+    /// 
+    /// 使用项目的服务发现机制初始化WebSocket连接，
+    /// 自动配置负载均衡和故障转移功能。
+    /// 
+    /// # 参数
+    /// * `config` - 应用程序配置，包含服务发现和WebSocket服务配置
+    /// 
+    /// # 返回值
+    /// * `Ok(PusherService)` - 成功创建的推送服务实例
+    /// * `Err(Error)` - 初始化失败的错误信息
+    /// 
+    /// # 错误情况
+    /// - Consul连接失败
+    /// - WebSocket服务未注册
+    /// - 网络配置错误
+    pub async fn new(config: &AppConfig) -> Result<Self, Error> {
         // 获取WebSocket网关服务名称
+        // 这个名称必须与WebSocket网关在Consul中注册的服务名一致
         let sub_svr_name = config.rpc.ws.name.clone();
-        // 创建WebSocket RPC客户端映射表
-        let ws_rpc_list = Arc::new(DashMap::new());
-        let cloned_list = ws_rpc_list.clone();
-        // 创建服务变更通知通道
-        let (tx, mut rx) = mpsc::channel::<Change<SocketAddr, Endpoint>>(100);
 
-        // 启动后台任务，处理服务变更通知
-        tokio::spawn(async move {
-            while let Some(change) = rx.recv().await {
-                debug!("接收到服务变更: {:?}", change);
-                match change {
-                    // 添加新的WebSocket服务
-                    Change::Insert(service_id, client) => {
-                        match MsgServiceClient::connect(client).await {
-                            Ok(client) => {
-                                cloned_list.insert(service_id, client);
-                            }
-                            Err(err) => {
-                                error!("连接WebSocket服务失败: {:?}", err);
-                            }
-                        };
-                    }
-                    // 移除已下线的WebSocket服务
-                    Change::Remove(service_id) => {
-                        cloned_list.remove(&service_id);
-                    }
-                }
-            }
-        });
+        // 使用项目的服务发现机制创建带负载均衡的通道
+        // 这会自动从Consul查询可用的WebSocket网关实例
+        let channel = get_chan(config, sub_svr_name).await?;
+        
+        // 创建WebSocket RPC客户端
+        // 客户端会自动处理连接池、重试、超时等功能
+        let ws_rpc_client = MsgServiceClient::new(channel);
 
-        // 获取服务发现通道，用于接收服务变更通知
-        utils::get_chan_(config, sub_svr_name.clone(), tx)
-            .await
-            .unwrap();
+        info!("WebSocket服务发现和负载均衡客户端初始化完成");
 
-        // 创建服务中心客户端
-        let service_center = ServiceClient::builder()
-            .server_host(config.service_center.host.clone())
-            .server_port(config.service_center.port)
-            .connect_timeout(Duration::from_millis(config.service_center.timeout))
-            .build()
-            .await
-            .unwrap();
-            
-        Self {
-            ws_rpc_list,
-            service_center,
-            sub_svr_name,
-        }
-    }
-
-    /// 处理WebSocket网关服务列表
-    /// 为每个服务创建RPC客户端连接
-    pub async fn handle_sub_services(&self, services: Vec<Service>) {
-        for service in services {
-            // 构建服务地址
-            let addr = format!("{}:{}", service.address, service.port);
-            // 解析为网络地址
-            let socket: SocketAddr = match addr.parse() {
-                Ok(sa) => sa,
-                Err(err) => {
-                    error!("解析服务地址失败: {:?}", err);
-                    continue;
-                }
-            };
-            // 构建完整地址，包含协议
-            let addr = format!("{}://{}", service.scheme, addr);
-            // 连接WebSocket服务
-            let endpoint = match Endpoint::from_shared(addr) {
-                Ok(ep) => ep.connect_timeout(Duration::from_secs(5)),
-                Err(err) => {
-                    error!("创建服务端点失败: {:?}", err);
-                    continue;
-                }
-            };
-            // 创建RPC客户端
-            let ws = match MsgServiceClient::connect(endpoint).await {
-                Ok(client) => client,
-                Err(err) => {
-                    error!("连接WebSocket服务失败: {:?}", err);
-                    continue;
-                }
-            };
-            // 添加到客户端列表
-            self.ws_rpc_list.insert(socket, ws);
-        }
+        Ok(Self {
+            ws_rpc_client,
+        })
     }
 }
 
 #[async_trait]
 impl Pusher for PusherService {
     /// 推送单聊消息
-    /// 将消息发送到所有WebSocket网关，由网关转发给目标用户
+    /// 
+    /// 将消息发送到WebSocket网关，由网关转发给目标用户。
+    /// 如果用户在线，消息会立即通过WebSocket连接推送；
+    /// 如果用户离线，消息已经保存在MongoDB消息盒子中，用户上线后会自动拉取。
+    /// 
+    /// # 参数
+    /// * `request` - 要推送的消息对象，包含发送者、接收者、内容等信息
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 推送成功（包括用户离线的情况）
+    /// * `Err(Error)` - 推送失败，通常是网络或服务异常
+    /// 
+    /// # 推送策略
+    /// - 消息会发送给所有在线的WebSocket网关实例
+    /// - 网关会检查用户是否在当前实例上在线
+    /// - 只有用户在线的网关才会实际推送消息
+    /// - 如果所有网关都返回用户离线，这是正常情况
     async fn push_single_msg(&self, request: Msg) -> Result<(), Error> {
-        debug!("推送单聊消息请求: {:?}", request);
-
-        // 获取WebSocket RPC客户端列表
-        let ws_rpc = self.ws_rpc_list.clone();
-        // 如果列表为空，则从服务中心查询WebSocket服务
-        if ws_rpc.is_empty() {
-            let mut client = self.service_center.clone();
-            let list = client
-                .query_with_name(self.sub_svr_name.clone())
-                .await
-                .map_err(|e| Error::Internal(e.to_string()))?;
-            // 为查询到的服务创建RPC客户端
-            self.handle_sub_services(list).await;
-        }
+        debug!("推送单聊消息请求: server_id={}, 发送者={}, 接收者={}", 
+               request.server_id, request.send_id, request.receiver_id);
 
         // 构建发送消息请求
         let request = SendMsgRequest {
             message: Some(request),
         };
-        // 创建错误收集通道
-        let (tx, mut rx) = mpsc::channel(ws_rpc.len());
 
-        // 异步方式向所有WebSocket网关发送消息
-        for v in ws_rpc.iter() {
-            let tx = tx.clone();
-            let service_id = *v.key();
-            let mut v = v.clone();
-            let request = request.clone();
-            // 为每个网关创建单独的发送任务
-            tokio::spawn(async move {
-                if let Err(err) = v.send_msg_to_user(request).await {
-                    tx.send((service_id, err)).await.unwrap();
-                };
-            });
+        // 使用带负载均衡的客户端发送消息
+        // 客户端会自动选择一个可用的WebSocket网关实例
+        let mut client = self.ws_rpc_client.clone();
+        match client.send_msg_to_user(request).await {
+            Ok(response) => {
+                debug!("单聊消息推送成功: {:?}", response);
+                Ok(())
+            }
+            Err(err) => {
+                error!("推送单聊消息失败: {}", err);
+                Err(Error::Internal(format!("推送单聊消息失败: {}", err)))
+            }
         }
-
-        // 关闭发送端
-        drop(tx);
-
-        // 处理发送错误，从列表中移除失败的服务
-        // TODO: 需要更新客户端列表并处理错误
-        while let Some((service_id, err)) = rx.recv().await {
-            ws_rpc.remove(&service_id);
-            error!("向网关 {} 推送消息失败: {}", service_id, err);
-        }
-        Ok(())
     }
 
     /// 推送群聊消息
-    /// 将消息发送到所有WebSocket网关，由网关转发给群成员
+    /// 
+    /// 将消息发送到WebSocket网关，由网关转发给群成员。
+    /// 每个群成员都会收到带有自己序列号的消息副本。
+    /// 
+    /// # 参数
+    /// * `msg` - 要推送的群聊消息
+    /// * `members` - 群成员列表，包含每个成员的ID和序列号信息
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 推送成功
+    /// * `Err(Error)` - 推送失败，通常是网络或服务异常
+    /// 
+    /// # 群聊推送特点
+    /// - 消息会发送给所有WebSocket网关实例
+    /// - 每个网关检查哪些群成员在当前实例上在线
+    /// - 为每个在线成员推送带有其序列号的消息副本
+    /// - 离线成员的消息已保存在MongoDB中，上线后自动拉取
+    /// - 发送者不会收到自己发送的消息（已在客户端显示）
     async fn push_group_msg(&self, msg: Msg, members: Vec<GroupMemSeq>) -> Result<(), Error> {
-        debug!("推送群聊消息请求: {:?}, 成员: {:?}", msg, members);
-        
-        // 获取WebSocket RPC客户端列表
-        let ws_rpc = self.ws_rpc_list.clone();
-        // 如果列表为空，则从服务中心查询WebSocket服务
-        if ws_rpc.is_empty() {
-            let mut client = self.service_center.clone();
-            let list = client
-                .query_with_name(self.sub_svr_name.clone())
-                .await
-                .map_err(|e| Error::Internal(e.to_string()))?;
-            // 为查询到的服务创建RPC客户端
-            self.handle_sub_services(list).await;
-        }
+        debug!("推送群聊消息请求: server_id={}, 群组={}, 成员数量={}", 
+               msg.server_id, msg.group_id, members.len());
 
         // 构建群聊消息请求
         let request = SendGroupMsgRequest {
             message: Some(msg),
             members,
         };
-        // 创建结果收集通道
-        let (tx, mut rx) = mpsc::channel(ws_rpc.len());
-        
-        // 异步方式向所有WebSocket网关发送群聊消息
-        for v in ws_rpc.iter() {
-            let tx = tx.clone();
-            let service_id = *v.key();
-            let mut v = v.clone();
-            let request = request.clone();
-            // 为每个网关创建单独的发送任务
-            tokio::spawn(async move {
-                match v.send_group_msg_to_user(request).await {
-                    Ok(_) => {
-                        tx.send(Ok(())).await.unwrap();
-                    }
-                    Err(err) => {
-                        tx.send(Err((service_id, err))).await.unwrap();
-                    }
-                };
-            });
+
+        // 使用带负载均衡的客户端发送群聊消息
+        // 网关会处理群成员的批量推送逻辑
+        let mut client = self.ws_rpc_client.clone();
+        match client.send_group_msg_to_user(request).await {
+            Ok(response) => {
+                debug!("群聊消息推送成功: {:?}", response);
+                Ok(())
+            }
+            Err(err) => {
+                error!("推送群聊消息失败: {}", err);
+                Err(Error::Internal(format!("推送群聊消息失败: {}", err)))
+            }
         }
-        // 关闭发送端
-        drop(tx);
-        
-        // 处理发送错误，从列表中移除失败的服务
-        // TODO: 需要更新客户端列表
-        while let Some(Err((service_id, err))) = rx.recv().await {
-            ws_rpc.remove(&service_id);
-            error!("向网关 {} 推送群聊消息失败: {}", service_id, err);
-        }
-        Ok(())
     }
 }

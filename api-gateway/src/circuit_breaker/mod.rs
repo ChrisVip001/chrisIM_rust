@@ -1,10 +1,10 @@
-use crate::config::CONFIG;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
+use common::config::ConfigLoader;
 use futures::future::BoxFuture;
 use parking_lot::RwLock;
 use serde_json::json;
@@ -48,9 +48,8 @@ impl CircuitBreaker {
     pub fn new(service_id: &str, failure_threshold: u64, reset_timeout_secs: u64) -> Self {
         Self {
             state: Arc::new(RwLock::new(CircuitBreakerState::Closed)),
-            // TODO 需要根据实际情况定义连续失败次数，可以改成从配置文件中读取
-            failure_count: Arc::new(RwLock::new(5)),
-            // TODO 需要根据实际情况定义失败阈值，可以改成从配置文件中读取
+            // 连续失败计数从 0 开始；阈值由调用方传入
+            failure_count: Arc::new(RwLock::new(0)),
             failure_threshold,
             reset_timeout: Duration::from_secs(reset_timeout_secs),
             last_failure_time: Arc::new(RwLock::new(Instant::now())),
@@ -182,16 +181,15 @@ impl<S> CircuitBreakerMiddleware<S> {
         }
 
         // 从配置中读取熔断参数
-        let config_future = CONFIG.read();
-        let config = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(config_future)
-        });
+        // 读取全局配置
+        let config = ConfigLoader::get_global().expect("Failed to get global config");
+        let gateway_config = &config.gateway;
 
         // 创建新的熔断器
         let breaker = Arc::new(CircuitBreaker::new(
             service_id,
-            config.circuit_breaker.failure_threshold,
-            config.circuit_breaker.half_open_timeout_secs,
+            gateway_config.circuit_breaker.failure_threshold,
+            gateway_config.circuit_breaker.half_open_timeout_secs,
         ));
 
         breakers.insert(service_id.to_string(), breaker.clone());
@@ -295,6 +293,8 @@ fn extract_service_id(req: &Request<Body>) -> String {
         "friend-service".to_string()
     } else if path.starts_with("/api/groups") {
         "group-service".to_string()
+    } else if path.starts_with("/api/chat") {
+        "chat-service".to_string()
     } else {
         // 默认值
         "unknown-service".to_string()
