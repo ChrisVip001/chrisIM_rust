@@ -287,7 +287,7 @@ rpc:
   chat:
     protocol: http
     host: 127.0.0.1
-    port: 50002
+    port: 50010
     name: chat
     tags:
       - chat

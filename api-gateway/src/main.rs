@@ -130,10 +130,14 @@ async fn build_app(config: &AppConfig, cache_instance: std::sync::Arc<dyn cache:
     let router = router::build_routes(service_proxy, &config.gateway, cache_instance).await?;
     
     // 配置中间件栈
+    // 限流/熔断从 gateway 配置读取并挂载到全局中间件栈
+    let rate_limit_layer = rate_limit::RateLimitLayer::new(&config.gateway.rate_limit);
     Ok(router
         .layer(TraceLayer::new_for_http())
         .layer(middleware::RequestLoggerLayer)
         .layer(metrics::MetricsLayer)
+        .layer(circuit_breaker::CircuitBreakerLayer)
+        .layer(rate_limit_layer)
         .layer(build_cors_layer())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)))

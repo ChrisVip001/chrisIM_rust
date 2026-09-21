@@ -4,24 +4,27 @@ use axum::{
     http::{HeaderMap, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
 };
+use common::configs::rate_limit_config::RateLimitConfig;
 use governor::clock::Clock;
 use governor::{
     clock::DefaultClock,
     state::{InMemoryState, NotKeyed},
-    RateLimiter,
+    Quota, RateLimiter,
 };
 use serde_json::json;
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
-use tower::{BoxError, Service};
-use tracing::warn;
+use tower::{layer::Layer, BoxError, Service};
+use tracing::{info, warn};
 
 /// 限流中间件
+#[derive(Clone)]
 pub struct RateLimitLayer {
     global_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
     path_limiters: Arc<
@@ -37,7 +40,50 @@ pub struct RateLimitLayer {
     >,
 }
 
+/// 根据限流规则构建配额
+fn build_quota(rule: &common::configs::rate_limit_config::RateLimitRule) -> Quota {
+    let per_second =
+        NonZeroU32::new(rule.requests_per_second.max(1)).expect("requests_per_second >= 1");
+    let burst = NonZeroU32::new(rule.burst_size.max(1)).expect("burst_size >= 1");
+    Quota::per_second(per_second).allow_burst(burst)
+}
+
 impl RateLimitLayer {
+    /// 根据限流配置构建限流中间件层
+    pub fn new(config: &RateLimitConfig) -> Self {
+        let global_limiter = Arc::new(RateLimiter::direct(build_quota(&config.global)));
+
+        let mut path_limiters = std::collections::HashMap::new();
+        for rule in &config.path_rules {
+            if rule.rule.enabled {
+                path_limiters.insert(
+                    rule.path_prefix.clone(),
+                    Arc::new(RateLimiter::direct(build_quota(&rule.rule))),
+                );
+            }
+        }
+
+        let mut ip_map = std::collections::HashMap::new();
+        for (ip, rule) in &config.ip_rules {
+            if rule.enabled {
+                ip_map.insert(ip.clone(), Arc::new(RateLimiter::direct(build_quota(rule))));
+            }
+        }
+
+        info!(
+            "限流中间件已初始化: 全局={} rps, 路径规则={} 条, IP规则={} 条",
+            config.global.requests_per_second,
+            path_limiters.len(),
+            ip_map.len()
+        );
+
+        Self {
+            global_limiter,
+            path_limiters: Arc::new(path_limiters),
+            ip_limiters: Arc::new(parking_lot::RwLock::new(ip_map)),
+        }
+    }
+
     /// 获取路径限流器
     fn get_path_limiter(
         &self,
@@ -71,16 +117,19 @@ impl<S> RateLimitService<S> {}
 
 impl<S> Service<Request<Body>> for RateLimitService<S>
 where
-    S: Service<Request<Body>, Response = Response> + Send + 'static + Clone,
+    S: Service<Request<Body>, Response = Response, Error = std::convert::Infallible>
+        + Send
+        + 'static
+        + Clone,
     S::Future: Send + 'static,
-    S::Error: Into<BoxError>,
 {
-    type Response = S::Response;
-    type Error = BoxError;
+    type Response = Response;
+    // Router 的 Service 错误类型为 Infallible，错误必须折叠为响应
+    type Error = std::convert::Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Into::into)
+        self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
@@ -156,7 +205,11 @@ where
             }
 
             // 请求通过限流检查，继续处理
-            svc.call(req).await.map_err(Into::into)
+            match svc.call(req).await {
+                Ok(resp) => Ok(resp),
+                // Router 的错误类型为 Infallible，不可能出现
+                Err(infallible) => match infallible {},
+            }
         })
     }
 }
@@ -169,6 +222,22 @@ where
         Self {
             inner: self.inner.clone(),
             rate_limit_layer: self.rate_limit_layer.clone(),
+        }
+    }
+}
+
+impl<S> Layer<S> for RateLimitLayer
+where
+    S: Service<Request<Body>, Response = Response> + Send + 'static + Clone,
+    S::Future: Send + 'static,
+    S::Error: Into<BoxError>,
+{
+    type Service = RateLimitService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        RateLimitService {
+            inner,
+            rate_limit_layer: Arc::new(self.clone()),
         }
     }
 }
