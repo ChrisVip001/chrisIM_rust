@@ -80,7 +80,7 @@ pub async fn build_routes(
     // 创建用户服务客户端
     let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
         &config,
-        "user".to_string(),
+        "relation".to_string(),
     )
     .await?;
 

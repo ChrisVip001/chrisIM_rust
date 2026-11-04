@@ -22,8 +22,9 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
-    /// 用户服务：进程内直调（合并后与 user 同进程，省去 gRPC 回环）
-    user_service: Arc<crate::user::service::user_service::UserServiceImpl>,
+    /// 用户配置查询：同进程只读组件。
+    /// 不直接依赖 UserServiceImpl，否则 user↔friend 会形成构造期循环。
+    user_config: Arc<crate::user::service::user_config_query::UserConfigQuery>,
     chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
     /// 缓存接口
     /// 用于缓存用户序列号、在线状态等高频访问数据
@@ -33,7 +34,7 @@ pub struct FriendServiceImpl {
 impl FriendServiceImpl {
     pub async fn new(
         pool: PgPool,
-        user_service: Arc<crate::user::service::user_service::UserServiceImpl>,
+        user_config: Arc<crate::user::service::user_config_query::UserConfigQuery>,
         config: &AppConfig,
     ) -> anyhow::Result<Self> {
         let chat_service_client =
@@ -46,7 +47,7 @@ impl FriendServiceImpl {
 
         Ok(Self {
             repository: FriendshipRepository::new(pool),
-            user_service,
+            user_config,
             chat_service_client,
             cache,
         })
@@ -845,20 +846,9 @@ impl FriendService for FriendServiceImpl {
         let mut potential_friends: Vec<_> = Vec::with_capacity(users.len());
         
         for (id, username, nickname, avatar_url, phone, friendship_status, sign, custom_id) in users {
-            // 获取用户配置（进程内直调用户服务）
-            let user_config_req = tonic::Request::new(contract::proto::user::UserConfigRequest {
-                    user_id: id.clone(),
-                    allow_phone_search: None,
-                    allow_id_search: None,
-                    auto_load_video: None,
-                    auto_load_pic: None,
-                    msg_read_flag: None,
-                    sound_enabled: None,
-                    vibration_enabled: None,
-                    show_phone: None,
-                });
-            let user_config_resp = match UserService::get_user_config(&*self.user_service, user_config_req).await {
-                Ok(response) => response.into_inner(),
+            // 获取用户配置（同进程只读查询，不经过 gRPC）
+            let user_config_resp = match self.user_config.get_user_config(&id).await {
+                Ok(response) => response,
                 Err(e) => {
                     error!("获取用户配置失败: {}", e);
                     // 获取失败时使用默认配置

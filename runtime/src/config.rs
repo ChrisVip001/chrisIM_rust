@@ -227,6 +227,11 @@ pub enum Component {
     UserServer,
     FriendServer,
     GroupServer,
+    /// 用户 / 好友 / 群组的模块化单体
+    ///
+    /// 三者同进程、同端口、只注册一次。保留 User/Friend/Group 变体是为了
+    /// 兼容旧的配置文件路径与部署脚本，新部署应统一使用本变体。
+    RelationServer,
     MessageServer,
     MessageGateway,
     All,
@@ -277,6 +282,7 @@ impl AppConfig {
             Component::UserServer => Some("./config/services/user-service.yaml".to_string()),
             Component::FriendServer => Some("./config/services/friend-service.yaml".to_string()),
             Component::GroupServer => Some("./config/services/group-service.yaml".to_string()),
+            Component::RelationServer => Some("./config/services/relation-service.yaml".to_string()),
             Component::MessageServer => Some("./config/services/msg-server.yaml".to_string()),
             Component::MessageGateway => Some("./config/services/msg-gateway.yaml".to_string()),
             Component::All => Some("./config/config.yaml".to_string()), // 全局配置

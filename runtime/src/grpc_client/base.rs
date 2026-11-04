@@ -165,6 +165,25 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
             });
             (name, host, port, tags, health_check)
         }
+        Component::RelationServer => {
+            // 模块化单体：用户/好友/群组同进程同端口，只注册一次。
+            // 监听地址沿用 rpc.user（字段名为历史遗留，语义已是 relation 服务）。
+            let name = "relation".to_string();
+            let host = config.rpc.user.host.clone();
+            let port = config.rpc.user.port;
+            let tags = config.rpc.user.tags.clone();
+            let health_check = config.rpc.user.health_check.as_ref().map(|hc| {
+                typos::HealthCheck {
+                    health_type: hc.health_type.clone(),
+                    name: hc.name.clone(),
+                    url: hc.url.clone(),
+                    interval: hc.interval.to_string(),
+                    timeout: hc.timeout.to_string(),
+                    deregister_after: hc.deregister_after.to_string(),
+                }
+            });
+            (name, host, port, tags, health_check)
+        }
         Component::FriendServer => {
             let name = config.rpc.friend.name.clone();
             let host = config.rpc.friend.host.clone();

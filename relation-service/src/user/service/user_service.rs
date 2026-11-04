@@ -19,7 +19,6 @@ use runtime::sms::VerificationAction;
 use std::str::FromStr;
 use contract::proto::friend::{CheckFriendshipRequest, IsBlockedRequest};
 use contract::proto::friend::friend_service_server::FriendService as _;
-use std::sync::OnceLock;
 use base64::Engine;
 use base64::engine::general_purpose;
 use uuid::Uuid;
@@ -35,26 +34,17 @@ pub struct UserServiceImpl {
     redis_client: RedisClient,
     /// 配置快照：验证码等工具函数需要 Redis 地址，不再回读全局单例
     config: Arc<AppConfig>,
-    /// 进程内直调好友服务（与 FriendServiceImpl 相互依赖，构造后由 main 绑定）
-    friend_service: Arc<OnceLock<Arc<crate::friend::service::friend_service::FriendServiceImpl>>>,
+    /// 好友服务：同进程直调。
+    /// friend 只依赖 UserConfigQuery，不再反向依赖本服务，因此可以构造期注入。
+    friendship: Arc<crate::friend::service::friend_service::FriendServiceImpl>,
 }
 
 impl UserServiceImpl {
-    /// 绑定好友服务实例（解决 user↔friend 的构造循环依赖，由 main 在构造完成后调用）
-    pub fn bind_friend_service(
-        &self,
-        friend: Arc<crate::friend::service::friend_service::FriendServiceImpl>,
-    ) -> Result<(), Arc<crate::friend::service::friend_service::FriendServiceImpl>> {
-        self.friend_service.set(friend)
-    }
-
-    /// 获取好友服务实例（进程内直调）
-    fn friend(&self) -> &crate::friend::service::friend_service::FriendServiceImpl {
-        self.friend_service
-            .get()
-            .expect("FriendServiceImpl 尚未绑定（启动顺序错误）")
-    }
-    pub async fn new(pool: PgPool, config: &AppConfig) -> anyhow::Result<Self> {
+    pub async fn new(
+        pool: PgPool,
+        config: &AppConfig,
+        friendship: Arc<crate::friend::service::friend_service::FriendServiceImpl>,
+    ) -> anyhow::Result<Self> {
         // 创建Redis客户端
         let redis_url = config.redis.url();
         let redis_client = RedisClient::open(redis_url)
@@ -72,7 +62,7 @@ impl UserServiceImpl {
             sms_service,
             redis_client,
             config: Arc::new(config.clone()),
-            friend_service: Arc::new(OnceLock::new()),
+            friendship,
         })
     }
     
@@ -281,13 +271,13 @@ impl UserServiceImpl {
             user_id: current_user_id.to_string(),
             friend_id: target_user_id.to_string(),
         };
-        let friend_status = self.friend().check_friendship(Request::new(check_friendship_request)).await?.into_inner();
+        let friend_status = self.friendship.check_friendship(Request::new(check_friendship_request)).await?.into_inner();
 
         let check_block_request = IsBlockedRequest {
             user_id: current_user_id.to_string(),
             blocked_user_id: target_user_id.to_string(),
         };
-        let is_blocked = self.friend().is_blocked(Request::new(check_block_request)).await?.into_inner().is_blocked;
+        let is_blocked = self.friendship.is_blocked(Request::new(check_block_request)).await?.into_inner().is_blocked;
         Ok((friend_status.status, is_blocked,friend_status.request_id))
     }
 }
@@ -534,7 +524,7 @@ impl UserService for UserServiceImpl {
                 friend_id: req.user_id.clone(),
             });
             
-            let friend_relation_resp = self.friend().get_friend_relation(friend_relation_request).await?.into_inner();
+            let friend_relation_resp = self.friendship.get_friend_relation(friend_relation_request).await?.into_inner();
             
             // 获取好友所在分组列表
             let friend_groups_request = Request::new(contract::proto::friend::GetFriendInGroupsRequest {
@@ -542,7 +532,7 @@ impl UserService for UserServiceImpl {
                 friend_id: req.user_id.clone(),
             });
             
-            let friend_groups_resp = match self.friend().get_friend_in_groups(friend_groups_request).await {
+            let friend_groups_resp = match self.friendship.get_friend_in_groups(friend_groups_request).await {
                 Ok(resp) => resp.into_inner(),
                 Err(e) => {
                     // 日志记录错误，但不影响整体返回

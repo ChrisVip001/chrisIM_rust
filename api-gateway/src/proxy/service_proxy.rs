@@ -84,19 +84,19 @@ impl ServiceProxy {
         
         // 并行创建所有客户端连接
         let user_task = async {
-            get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&self.config, "user".to_string())
+            get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&self.config, "relation".to_string())
                 .await
                 .map(|client| UserServiceGrpcClient::new(client))
         };
         
         let friend_task = async {
-            get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&self.config, "friend".to_string())
+            get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&self.config, "relation".to_string())
                 .await
                 .map(|client| FriendServiceGrpcClient::new(client))
         };
         
         let group_task = async {
-            get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&self.config, "group".to_string())
+            get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&self.config, "relation".to_string())
                 .await
                 .map(|client| GroupServiceGrpcClient::new(client))
         };

@@ -21,6 +21,7 @@ mod user;
 
 use friend::service::friend_service::FriendServiceImpl;
 use group::service::group_service::GroupServiceImpl;
+use user::service::user_config_query::UserConfigQuery;
 use user::service::user_service::UserServiceImpl;
 
 // 三个服务的 proto 文件描述符，用于 gRPC 反射
@@ -71,32 +72,27 @@ async fn main() -> Result<()> {
         }
     };
 
-    // 先注册三个服务到注册中心（friend/group 初始化时会通过服务发现解析 user 服务，
-    // 合并后由本进程自身提供，因此必须先完成注册）
-    let user_service_id = register_service(&config, Component::UserServer).await?;
-    let friend_service_id = register_service(&config, Component::FriendServer).await?;
-    let group_service_id = register_service(&config, Component::GroupServer).await?;
-    let service_ids = vec![user_service_id, friend_service_id, group_service_id];
-    info!("已注册 user/friend/group 三个服务到注册中心");
+    // 模块化单体：用户 / 好友 / 群组同进程、同端口、只注册一次。
+    // 注册必须先于初始化：friend/group 构造时会通过服务发现解析 user 服务，
+    // 合并后由本进程自身提供。
+    let service_id = register_service(&config, Component::RelationServer).await?;
+    info!("已注册 relation 服务到注册中心: {}", service_id);
 
-    // 初始化三个业务服务实例（可 Clone，供多个监听端口复用）
-    // 依赖顺序：friend/group 直调 user；user 直调 friend（构造后绑定，解决循环依赖）
-    let user_service = UserServiceImpl::new(db_pool.clone(), &config).await?;
-    let user_arc = Arc::new(user_service);
-    let friend_service = FriendServiceImpl::new(db_pool.clone(), user_arc.clone(), &config).await?;
-    let group_service = GroupServiceImpl::new(db_pool.clone(), user_arc.clone(), &config).await?;
+    // 初始化三个业务服务实例
+    // 依赖顺序（已无循环）：UserConfigQuery(只读) ← FriendServiceImpl ← UserServiceImpl ← GroupServiceImpl
+    // 好友服务只依赖「用户配置查询」这一项能力，因此不需要构造后再回填。
+    let user_config_query = Arc::new(UserConfigQuery::new(db_pool.clone()));
+    let friend_service =
+        FriendServiceImpl::new(db_pool.clone(), user_config_query, &config).await?;
     let friend_arc = Arc::new(friend_service);
-    user_arc
-        .bind_friend_service(friend_arc.clone())
-        .map_err(|_| anyhow::anyhow!("绑定好友服务失败（重复绑定）"))?;
-    info!("用户/好友/群组服务初始化完成（user↔friend/group 进程内直调）");
+    let user_service = UserServiceImpl::new(db_pool.clone(), &config, friend_arc.clone()).await?;
+    let user_arc = Arc::new(user_service);
+    let group_service = GroupServiceImpl::new(db_pool.clone(), user_arc.clone(), &config).await?;
+    info!("用户/好友/群组服务初始化完成（进程内直调，构造期注入）");
 
-    // 沿用原先 user/friend/group 各自的监听地址，保持部署配置兼容
-    let mut addrs: Vec<SocketAddr> = Vec::new();
-    for rpc_cfg in [&config.rpc.user, &config.rpc.friend, &config.rpc.group] {
-        let addr = format!("{}:{}", rpc_cfg.host, rpc_cfg.port).parse::<SocketAddr>()?;
-        addrs.push(addr);
-    }
+    // 单一监听地址：沿用 rpc.user 配置项（历史字段名，语义已是 relation 服务）
+    let addr: SocketAddr = format!("{}:{}", config.rpc.user.host, config.rpc.user.port)
+        .parse::<SocketAddr>()?;
 
     // 优雅关闭通道：信号到达后注销三个服务并通知所有监听器退出
     // 使用 watch 而非 oneshot：三个监听器都需要收到关闭通知
@@ -123,73 +119,59 @@ async fn main() -> Result<()> {
 
         info!("接收到关闭信号，准备优雅关闭...");
         let service_registry = service_register_center(&config_clone);
-        for id in &service_ids {
-            match service_registry.deregister(id).await {
-                Ok(_) => info!("已从服务注册中心注销服务: {}", id),
-                Err(e) => error!("从服务注册中心注销服务失败: {}", e),
-            }
+        match service_registry.deregister(&service_id).await {
+            Ok(_) => info!("已从服务注册中心注销服务: {}", service_id),
+            Err(e) => error!("从服务注册中心注销服务失败: {}", e),
         }
         let _ = shutdown_tx.send(true);
         info!("服务关闭准备完成");
     });
 
-    // 为每个监听地址构建服务器：同一端口同时提供 user/friend/group 三组 gRPC 服务
-    let mut servers = Vec::new();
-    for addr in addrs {
-        let user_svc = user_arc.as_ref().clone();
-        let friend_svc = friend_arc.as_ref().clone();
-        let group_svc = group_service.clone();
-        let mut shutdown_rx = shutdown_rx.clone();
+    // 单端口同时提供 user / friend / group 三组 gRPC 服务
+    // 反射服务：合并注册三个 proto 的文件描述符
+    let reflection_service = ReflectionBuilder::configure()
+        .register_encoded_file_descriptor_set(USER_FD_SET)
+        .register_encoded_file_descriptor_set(FRIEND_FD_SET)
+        .register_encoded_file_descriptor_set(GROUP_FD_SET)
+        .build_v1()?;
 
-        // 反射服务：合并注册三个 proto 的文件描述符
-        let reflection_service = ReflectionBuilder::configure()
-            .register_encoded_file_descriptor_set(USER_FD_SET)
-            .register_encoded_file_descriptor_set(FRIEND_FD_SET)
-            .register_encoded_file_descriptor_set(GROUP_FD_SET)
-            .build_v1()?;
+    // gRPC 健康检查
+    let (mut health_reporter, health_service) = health_reporter();
+    health_reporter
+        .set_serving::<UserServiceServer<UserServiceImpl>>()
+        .await;
+    health_reporter
+        .set_serving::<FriendServiceServer<FriendServiceImpl>>()
+        .await;
+    health_reporter
+        .set_serving::<GroupServiceServer<GroupServiceImpl>>()
+        .await;
 
-        // gRPC 健康检查
-        let (mut health_reporter, health_service) = health_reporter();
-        health_reporter
-            .set_serving::<UserServiceServer<UserServiceImpl>>()
-            .await;
-        health_reporter
-            .set_serving::<FriendServiceServer<FriendServiceImpl>>()
-            .await;
-        health_reporter
-            .set_serving::<GroupServiceServer<GroupServiceImpl>>()
-            .await;
+    let mut shutdown_rx = shutdown_rx.clone();
+    let server = Server::builder()
+        .add_service(health_service)
+        .add_service(UserServiceServer::with_interceptor(
+            user_arc.as_ref().clone(),
+            LoggingInterceptor::new(),
+        ))
+        .add_service(FriendServiceServer::with_interceptor(
+            friend_arc.as_ref().clone(),
+            LoggingInterceptor::new(),
+        ))
+        .add_service(GroupServiceServer::with_interceptor(
+            group_service.clone(),
+            LoggingInterceptor::new(),
+        ))
+        .add_service(reflection_service)
+        .serve_with_shutdown(addr, async move {
+            let _ = shutdown_rx.changed().await;
+            info!("接收到关闭信号，gRPC服务器准备关闭");
+        });
 
-        let server = Server::builder()
-            .add_service(health_service)
-            .add_service(UserServiceServer::with_interceptor(
-                user_svc,
-                LoggingInterceptor::new(),
-            ))
-            .add_service(FriendServiceServer::with_interceptor(
-                friend_svc,
-                LoggingInterceptor::new(),
-            ))
-            .add_service(GroupServiceServer::with_interceptor(
-                group_svc,
-                LoggingInterceptor::new(),
-            ))
-            .add_service(reflection_service)
-            .serve_with_shutdown(addr, async move {
-                let _ = shutdown_rx.changed().await;
-                info!("接收到关闭信号，gRPC服务器准备关闭");
-            });
+    info!("gRPC 服务就绪（user/friend/group），监听地址: {}", addr);
 
-        servers.push(server);
-        info!("gRPC 服务就绪（user/friend/group），监听地址: {}", addr);
-    }
-
-    // 并发运行三个监听器
-    let (r1, r2, r3) = tokio::join!(servers.remove(0), servers.remove(0), servers.remove(0));
-    for (idx, r) in [r1, r2, r3].into_iter().enumerate() {
-        if let Err(e) = r {
-            error!("gRPC服务器[{}]错误: {}", idx, e);
-        }
+    if let Err(e) = server.await {
+        error!("gRPC服务器错误: {}", e);
     }
 
     let _ = shutdown_task.await?;
