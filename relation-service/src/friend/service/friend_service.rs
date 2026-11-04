@@ -11,7 +11,7 @@ use common::config::ConfigLoader;
 use common::grpc_client::base::get_rpc_client;
 use common::proto::message::chat_service_client::ChatServiceClient;
 use common::proto::message::SendMsgRequest;
-use common::proto::user::user_service_client::UserServiceClient;
+use common::proto::user::user_service_server::UserService;
 use common::proto::user::{UserConfigResponse, UserConfig};
 use common::service_discovery::LbWithServiceDiscovery;
 use crate::friend::repository::friendship_repository::FriendshipRepository;
@@ -22,7 +22,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct FriendServiceImpl {
     repository: FriendshipRepository,
-    user_service_client: UserServiceClient<LbWithServiceDiscovery>,
+    /// 用户服务：进程内直调（合并后与 user 同进程，省去 gRPC 回环）
+    user_service: Arc<crate::user::service::user_service::UserServiceImpl>,
     chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
     /// 缓存接口
     /// 用于缓存用户序列号、在线状态等高频访问数据
@@ -30,19 +31,18 @@ pub struct FriendServiceImpl {
 }
 
 impl FriendServiceImpl {
-    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
+    pub async fn new(pool: PgPool, user_service: Arc<crate::user::service::user_service::UserServiceImpl>) -> anyhow::Result<Self> {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
 
-        let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&*config, "user".to_string()).await?;
         let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&*config, "chat".to_string()).await?;
 
         // 初始化Redis缓存连接
         // 用于缓存用户状态和序列号信息
         let cache = cache::cache(&config).await;
-        
+
         Ok(Self {
             repository: FriendshipRepository::new(pool),
-            user_service_client,
+            user_service,
             chat_service_client,
             cache,
         })
@@ -841,10 +841,8 @@ impl FriendService for FriendServiceImpl {
         let mut potential_friends: Vec<_> = Vec::with_capacity(users.len());
         
         for (id, username, nickname, avatar_url, phone, friendship_status, sign, custom_id) in users {
-            // 获取用户配置
-            let mut service_client_clone = self.user_service_client.clone();
-            let user_config_resp = match service_client_clone.get_user_config(
-                tonic::Request::new(common::proto::user::UserConfigRequest {
+            // 获取用户配置（进程内直调用户服务）
+            let user_config_req = tonic::Request::new(common::proto::user::UserConfigRequest {
                     user_id: id.clone(),
                     allow_phone_search: None,
                     allow_id_search: None,
@@ -854,8 +852,8 @@ impl FriendService for FriendServiceImpl {
                     sound_enabled: None,
                     vibration_enabled: None,
                     show_phone: None,
-                })
-            ).await {
+                });
+            let user_config_resp = match UserService::get_user_config(&*self.user_service, user_config_req).await {
                 Ok(response) => response.into_inner(),
                 Err(e) => {
                     error!("获取用户配置失败: {}", e);

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::env;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use common::config::{AppConfig, Component, ConfigLoader};
 use common::grpc::LoggingInterceptor;
 use common::grpc_client::base::{register_service, service_register_center};
@@ -78,10 +79,16 @@ async fn main() -> Result<()> {
     info!("已注册 user/friend/group 三个服务到注册中心");
 
     // 初始化三个业务服务实例（可 Clone，供多个监听端口复用）
+    // 依赖顺序：friend/group 直调 user；user 直调 friend（构造后绑定，解决循环依赖）
     let user_service = UserServiceImpl::new(db_pool.clone()).await?;
-    let friend_service = FriendServiceImpl::new(db_pool.clone()).await?;
-    let group_service = GroupServiceImpl::new(db_pool.clone()).await?;
-    info!("用户/好友/群组服务初始化完成");
+    let user_arc = Arc::new(user_service);
+    let friend_service = FriendServiceImpl::new(db_pool.clone(), user_arc.clone()).await?;
+    let group_service = GroupServiceImpl::new(db_pool.clone(), user_arc.clone()).await?;
+    let friend_arc = Arc::new(friend_service);
+    user_arc
+        .bind_friend_service(friend_arc.clone())
+        .map_err(|_| anyhow::anyhow!("绑定好友服务失败（重复绑定）"))?;
+    info!("用户/好友/群组服务初始化完成（user↔friend/group 进程内直调）");
 
     // 沿用原先 user/friend/group 各自的监听地址，保持部署配置兼容
     let mut addrs: Vec<SocketAddr> = Vec::new();
@@ -128,8 +135,8 @@ async fn main() -> Result<()> {
     // 为每个监听地址构建服务器：同一端口同时提供 user/friend/group 三组 gRPC 服务
     let mut servers = Vec::new();
     for addr in addrs {
-        let user_svc = user_service.clone();
-        let friend_svc = friend_service.clone();
+        let user_svc = user_arc.as_ref().clone();
+        let friend_svc = friend_arc.as_ref().clone();
         let group_svc = group_service.clone();
         let mut shutdown_rx = shutdown_rx.clone();
 
