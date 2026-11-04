@@ -1,6 +1,9 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use axum::extract::ws::Utf8Bytes;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
@@ -8,7 +11,7 @@ use futures::stream::{self, StreamExt};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use cache::Cache;
+use cache::PresenceCache;
 use runtime::config::AppConfig;
 use contract::error::Error;
 use contract::proto::message::chat_service_client::ChatServiceClient;
@@ -18,15 +21,20 @@ use contract::proto::message::{
 use runtime::service_discovery::LbWithServiceDiscovery;
 use contract::types::msg::MsgType2;
 
+use crate::client::Client;
 use crate::push_payload::PushPayload;
 
 /// 群消息并发推送度
 ///
-/// 上限同时约束三件事：并发 WebSocket 写入数、同时持有的连接引用数、
-/// 以及为了区分 `receiver_id` 而构造的消息副本数量（每份都含正文）。
+/// 上限同时约束并发 WebSocket 写入数与同时持有的连接引用数。
+/// 报文在进入循环前只序列化一次，循环内不再产生消息副本。
 const GROUP_PUSH_CONCURRENCY: usize = 32;
 
-pub(crate) use crate::client::Client;
+/// 单个上行 worker 的队列容量
+///
+/// 有界队列提供背压：worker 处理不过来时，消息发送方（连接读循环）
+/// 在入队处等待，而不是无限堆积内存。
+const UPSTREAM_QUEUE_CAP: usize = 256;
 
 /// 用户ID类型别名
 type UserID = String;
@@ -151,42 +159,88 @@ impl<C> Hub<C> {
 ///
 /// 负责管理所有WebSocket客户端连接的生命周期，包括：
 /// - 客户端注册和注销
-/// - 消息路由和分发
+/// - 消息路由和分发（上行按会话哈希到多个 worker 并行处理）
 /// - 与msg-server的gRPC通信
 /// - 缓存操作和序列号管理
+///
+/// 上行并行模型：所有连接的上行消息按「会话键」哈希到 N 个 worker，
+/// 同一会话的消息始终落在同一 worker 上串行处理（保序），
+/// 不同会话之间并行。worker 数由 `websocket.upstream_workers` 配置。
 #[derive(Clone)]
 pub struct Manager {
-    /// 消息广播发送器
-    /// 用于将客户端发送的消息转发到处理队列
-    tx: mpsc::Sender<Msg>,
+    /// 上行处理队列组
+    ///
+    /// 与 worker 一一对应；广播时按会话键哈希选择队列。
+    /// 最后一个持有者销毁后队列关闭，对应 worker 随之退出。
+    upstream: Vec<mpsc::Sender<Msg>>,
 
     /// 客户端连接中心
     hub: Arc<Hub<Client>>,
 
     /// 缓存接口
     /// 用于序列号管理和用户状态缓存
-    pub cache: Arc<dyn Cache>,
+    pub cache: Arc<dyn PresenceCache>,
 
     /// 聊天服务RPC客户端
     /// 用于与msg-server通信，发送消息到Kafka队列
     pub chat_rpc: ChatServiceClient<LbWithServiceDiscovery>,
+
+    /// 本网关的 gRPC 地址（host:port）
+    ///
+    /// 写入 Redis 路由表，供 msg-server 定向推送，
+    /// 消除「消息广播到全部网关实例」的扇出成本。
+    gateway_addr: String,
 }
 
 #[allow(dead_code)]
 impl Manager {
-    /// 创建新的连接管理器实例
-    pub async fn new(tx: mpsc::Sender<Msg>, config: &AppConfig) -> Self {
-        let cache = cache::cache(config).await;
+    /// 创建新的连接管理器实例，并启动上行处理 worker
+    pub async fn new(config: &AppConfig) -> Self {
+        let cache: Arc<dyn PresenceCache> = cache::cache(config).await;
 
-        let chat_rpc = runtime::grpc_client::base::get_rpc_client(config, config.rpc.chat.name.clone())
+        let chat_rpc: ChatServiceClient<LbWithServiceDiscovery> =
+            runtime::grpc_client::base::get_rpc_client(
+                config,
+                runtime::grpc_client::base::service_names::CHAT.to_string(),
+            )
             .await
             .expect("无法连接到聊天RPC服务");
 
+        let hub = Arc::new(Hub::new());
+
+        // 本网关 gRPC 地址：与 Consul 注册的 host:port 一致，
+        // msg-server 内网可达即可直连
+        let gateway_addr = format!("{}:{}", config.rpc.ws.host, config.rpc.ws.port);
+
+        // 按配置启动 N 个上行 worker，每个 worker 独占一条有界队列
+        let worker_count = config.websocket.worker_count();
+        let mut upstream = Vec::with_capacity(worker_count);
+        for worker_id in 0..worker_count {
+            let (tx, mut rx) = mpsc::channel::<Msg>(UPSTREAM_QUEUE_CAP);
+            let worker = Self {
+                upstream: Vec::new(), // worker 自身不再分发，避免误用
+                hub: hub.clone(),
+                cache: cache.clone(),
+                chat_rpc: chat_rpc.clone(),
+                gateway_addr: gateway_addr.clone(),
+            };
+            tokio::spawn(async move {
+                debug!("上行worker #{} 已启动", worker_id);
+                while let Some(mut message) = rx.recv().await {
+                    worker.process_message(&mut message).await;
+                }
+                debug!("上行worker #{} 已退出", worker_id);
+            });
+            upstream.push(tx);
+        }
+        info!("上行处理已启动：{} 个 worker，队列容量 {}", worker_count, UPSTREAM_QUEUE_CAP);
+
         Manager {
-            tx,
-            hub: Arc::new(Hub::new()),
+            upstream,
+            hub,
             cache,
             chat_rpc,
+            gateway_addr,
         }
     }
 
@@ -195,9 +249,21 @@ impl Manager {
     /// 同一用户在同一平台重复登录时，旧连接会收到踢下线信号并主动关闭，
     /// 新连接直接覆盖登记项。这里不再等待固定时长，
     /// 因为旧连接收尾时不会再误删新连接。
+    ///
+    /// 同时把「用户平台 → 本网关地址」写入 Redis 路由表，
+    /// 供 msg-server 定向推送。路由表是尽力而为的旁路数据：
+    /// 写入失败只影响推送定向性（退化为广播），不影响连接可用性。
     pub async fn register(&mut self, id: String, client: Client) -> u64 {
         let platform = client.platform;
         let (conn_id, evicted) = self.hub.register(&id, platform, client);
+
+        if let Err(e) = self
+            .cache
+            .register_user_gateway_route(&id, platform as i32, &self.gateway_addr)
+            .await
+        {
+            warn!("写入用户 {} 平台 {:?} 的网关路由失败（推送将退化为广播）: {}", id, platform, e);
+        }
 
         if let Some(old) = evicted {
             info!(
@@ -225,6 +291,12 @@ impl Manager {
     pub async fn unregister(&mut self, id: String, platform: PlatformType, conn_id: u64) {
         if self.hub.unregister(&id, platform, conn_id) {
             debug!("注销客户端连接: user={}, platform={:?}, conn={}", id, platform, conn_id);
+
+            // 只在确实移除了登记项时清理路由；被顶下线的旧连接
+            // 不能删掉同平台新连接刚写入的路由
+            if let Err(e) = self.cache.unregister_user_gateway_route(&id, platform as i32).await {
+                warn!("清理用户 {} 平台 {:?} 的网关路由失败: {}", id, platform, e);
+            }
         } else {
             debug!(
                 "跳过注销：该连接已被同平台的新连接替换 (user={}, conn={})",
@@ -242,37 +314,46 @@ impl Manager {
     ///
     /// 处理群聊消息的分发逻辑：
     /// 1. 向发送者的其他平台发送消息副本
-    /// 2. 为每个群成员分配正确的序列号
-    /// 3. 向所有在线的群成员推送消息
+    /// 2. 向所有在线的群成员推送消息
+    ///
+    /// 读扩散下序号是会话级的，所有成员看到同一个 `seq`（见 msg-server
+    /// 消费端：`cur_seq = msg.seq`）；群消息的会话标识取自 `group_id`，
+    /// 与成员无关。因此推送报文对全部成员完全一致——
+    /// **序列化一次**，之后对每个接收者只做 O(1) 的帧克隆
+    /// （`Utf8Bytes` 基于 `Bytes`，克隆仅增加引用计数）。
+    /// 此前逐成员深拷贝消息体并重复序列化，万人群一条消息要付出
+    /// 万次内存分配 + 万次 JSON 编码的代价。
     pub async fn send_group(&self, obj_ids: Vec<GroupMemSeq>, mut msg: Msg) {
-        // 向发送者的其他平台发送消息副本
+        // 向发送者的其他平台发送消息副本（方向标记不同，单独序列化）
         self.send_to_self(&msg.send_id, &msg).await;
 
         // 将发送序列号设置为0，因为这是推送给接收者的消息
         msg.send_seq = 0;
 
-        // 读扩散下会话级序号对所有成员相同，成员之间只有 receiver_id 不同，
-        // 因此可以并发推送。串行推送在万人群里会累积成秒级延迟。
-        let base = Arc::new(msg);
+        // 推送报文对所有成员一致，序列化一次后全员共享
+        let frame = match Self::serialize_push(&self.build_push_payload(&msg, false)) {
+            Ok(frame) => frame,
+            Err(e) => {
+                error!("群聊消息JSON序列化失败: {}", e);
+                return;
+            }
+        };
 
+        let hub = self.hub.clone();
         stream::iter(obj_ids)
             .map(|mem| {
-                let base = base.clone();
+                let hub = hub.clone();
+                // 引用计数克隆（O(1)），供该成员的全部平台连接共享
+                let frame = frame.clone();
                 async move {
-                    let Some(clients) = self.hub.get(&mem.mem_id) else {
-                        // 不在线的成员直接跳过，不做任何推送准备
-                        return;
-                    };
-
-                    let mut msg = (*base).clone();
-                    msg.seq = mem.cur_seq;
-                    msg.receiver_id = mem.mem_id.clone();
-
-                    self.send_msg_to_clients(&clients, &msg).await;
+                    // 不在线的成员直接跳过，不做任何推送准备
+                    if let Some(clients) = hub.get(&mem.mem_id) {
+                        Self::send_frame_to_all(&clients, &frame).await;
+                    }
                 }
             })
             .buffer_unordered(GROUP_PUSH_CONCURRENCY)
-            .collect::<Vec<_>>()
+            .count()
             .await;
     }
 
@@ -282,15 +363,15 @@ impl Manager {
     /// 发送消息副本，以保持消息同步。
     async fn send_to_self(&self, id: &str, msg: &Msg) {
         if let Some(clients) = self.hub.get(id) {
-            let content = match serde_json::to_string(&self.build_push_payload(msg, true).await) {
-                Ok(content) => content,
+            let frame = match Self::serialize_push(&self.build_push_payload(msg, true)) {
+                Ok(frame) => frame,
                 Err(e) => {
                     error!("消息JSON序列化失败: {}", e);
                     return;
                 }
             };
 
-            let sent = Self::send_text_to_all(&clients, &content).await;
+            let sent = Self::send_frame_to_all(&clients, &frame).await;
             if sent > 0 {
                 debug!("成功向发送者的 {} 个其他平台发送消息副本", sent);
             }
@@ -305,7 +386,14 @@ impl Manager {
     pub async fn send_single_msg(&self, obj_id: &str, msg: &Msg) {
         // 向接收者发送消息
         if let Some(clients) = self.hub.get(obj_id) {
-            self.send_msg_to_clients(&clients, msg).await;
+            let frame = match Self::serialize_push(&self.build_push_payload(msg, false)) {
+                Ok(frame) => frame,
+                Err(e) => {
+                    error!("消息JSON序列化失败: {}", e);
+                    return;
+                }
+            };
+            Self::send_frame_to_all(&clients, &frame).await;
         }
 
         // 向发送者的其他平台发送消息副本
@@ -314,42 +402,24 @@ impl Manager {
         }
     }
 
-    /// 向客户端连接发送消息
-    async fn send_msg_to_clients(
-        &self,
-        clients: &DashMap<PlatformType, Conn<Client>>,
-        msg: &Msg,
-    ) {
-        if clients.is_empty() {
-            error!("未找到客户端连接");
-            return;
-        }
-
-        let content = match serde_json::to_string(&self.build_push_payload(msg, false).await) {
-            Ok(content) => content,
-            Err(e) => {
-                error!("消息JSON序列化失败: {}", e);
-                return;
-            }
-        };
-
-        let sent = Self::send_text_to_all(clients, &content).await;
-        if sent == 0 {
-            error!("未成功发送消息给任何客户端");
-        } else {
-            debug!("成功向 {} 个客户端发送消息", sent);
-        }
+    /// 序列化下行报文为可共享的帧数据
+    ///
+    /// 返回的 `Utf8Bytes` 基于 `Bytes`，克隆为 O(1)，
+    /// 多个接收者共享同一份序列化结果。
+    fn serialize_push<T: serde::Serialize>(value: &T) -> Result<Utf8Bytes, serde_json::Error> {
+        serde_json::to_string(value).map(Utf8Bytes::from)
     }
 
-    /// 向同一用户的全部平台连接发送同一份报文，返回成功数
-    async fn send_text_to_all(
+    /// 向同一用户的全部平台连接发送同一份帧数据，返回成功数
+    async fn send_frame_to_all(
         clients: &DashMap<PlatformType, Conn<Client>>,
-        content: &str,
+        frame: &Utf8Bytes,
     ) -> usize {
         let mut sent = 0;
         for entry in clients.iter() {
             let (platform, conn) = (entry.key(), entry.value());
-            if let Err(e) = conn.client.send_text(content.to_string()).await {
+            // Utf8Bytes 克隆是引用计数操作，不复制报文内容
+            if let Err(e) = conn.client.send_frame(frame.clone()).await {
                 error!("向平台 {:?} 发送消息失败: {}", platform, e);
             } else {
                 sent += 1;
@@ -363,7 +433,7 @@ impl Manager {
     /// 会话ID的取法在两种视角下不同：
     /// - 发给自己的副本：会话对端是消息的接收者
     /// - 发给接收者的消息：会话对端是消息的发送者
-    async fn build_push_payload(&self, msg: &Msg, is_self: bool) -> PushPayload {
+    fn build_push_payload(&self, msg: &Msg, is_self: bool) -> PushPayload {
         let mt = MsgType::try_from(msg.msg_type).unwrap_or(MsgType::SingleMsg);
         let mt2 = MsgType2::from(mt);
 
@@ -390,23 +460,24 @@ impl Manager {
         )
     }
 
-    /// 运行消息处理循环
+    /// 计算上行消息的路由键
     ///
-    /// 这是Manager的主要工作方法，持续监听消息队列：
-    /// 1. 接收来自WebSocket客户端的消息
-    /// 2. 处理消息（增加序列号、发送到msg-server）
-    /// 3. 向发送者返回处理结果
-    pub async fn run(&mut self, mut receiver: mpsc::Receiver<Msg>) {
-        info!("连接管理器已启动");
+    /// 与 Kafka 分区键、落库会话序号共用 `contract::types::conversation`
+    /// 的唯一推导：同一会话 → 同一 worker（保序），A→B 与 B→A 得到同一键。
+    /// 键格式是持久化数据的一部分，此处不做任何二次推导。
+    fn route_key(msg: &Msg) -> String {
+        contract::types::conversation::conversation_id_of(msg)
+    }
 
-        while let Some(mut message) = receiver.recv().await {
-            self.process_message(&mut message).await;
-            debug!("消息已处理并发送到Kafka: {:?}", message);
-        }
+    /// 会话键 → worker 序号（确定性哈希，测试可复现）
+    fn worker_index(key: &str, worker_count: usize) -> usize {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        (hasher.finish() % worker_count as u64) as usize
     }
 
     /// 处理单条消息
-    async fn process_message(&mut self, message: &mut Msg) {
+    async fn process_message(&self, message: &mut Msg) {
         // 判断是否为心跳消息
         if message.msg_type == MsgType::Heartbeat as i32
             || message.msg_type == MsgType::MsgRecResp as i32
@@ -446,15 +517,15 @@ impl Manager {
             return;
         };
 
-        let content = match serde_json::to_string(msg) {
-            Ok(content) => content,
+        let frame = match Self::serialize_push(msg) {
+            Ok(frame) => frame,
             Err(e) => {
                 error!("处理结果JSON序列化失败: {}", e);
                 return;
             }
         };
 
-        let sent = Self::send_text_to_all(&clients, &content).await;
+        let sent = Self::send_frame_to_all(&clients, &frame).await;
         debug!("处理结果已回传给发送者 {} 的 {} 个连接", msg.send_id, sent);
     }
 
@@ -478,9 +549,17 @@ impl Manager {
 
     /// 广播消息
     ///
-    /// 将消息发送到处理队列，由run方法的循环处理。
+    /// 按会话键哈希选择上行 worker：同一会话的消息始终进入同一队列，
+    /// 由该 worker 串行处理以保持会话内顺序。
+    /// 队列已满时等待（背压），把压力传导到客户端的发送节奏。
     pub async fn broadcast(&self, msg: Msg) -> Result<(), Error> {
-        self.tx
+        let key = Self::route_key(&msg);
+        let worker_count = self.upstream.len();
+        if worker_count == 0 {
+            return Err(Error::BroadCastError("上行worker未运行".to_string()));
+        }
+        let idx = Self::worker_index(&key, worker_count);
+        self.upstream[idx]
             .send(msg)
             .await
             .map_err(|e| Error::BroadCastError(e.to_string()))
@@ -498,6 +577,67 @@ mod tests {
 
     fn hub() -> Hub<FakeClient> {
         Hub::new()
+    }
+
+    fn msg(send_id: &str, receiver_id: &str, group_id: &str) -> Msg {
+        Msg {
+            send_id: send_id.into(),
+            receiver_id: receiver_id.into(),
+            group_id: group_id.into(),
+            msg_type: if group_id.is_empty() {
+                MsgType::SingleMsg as i32
+            } else {
+                MsgType::GroupMsg as i32
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn route_key_groups_by_conversation() {
+        // 群聊：按群ID路由，与发送者无关
+        assert_eq!(Manager::route_key(&msg("u1", "", "g1")), "g:g1");
+        assert_eq!(Manager::route_key(&msg("u2", "", "g1")), "g:g1");
+
+        // 单聊：A→B 与 B→A 是同一会话，路由键必须一致
+        let ab = Manager::route_key(&msg("u1", "u2", ""));
+        let ba = Manager::route_key(&msg("u2", "u1", ""));
+        assert_eq!(ab, ba);
+        assert_eq!(ab, "d:u1:u2");
+    }
+
+    #[test]
+    fn route_key_is_the_shared_conversation_key() {
+        // 跨 crate 契约：网关上行保序键、Kafka 分区键、落库会话序号
+        // 必须来自同一推导，防止三处实现各自漂移
+        use contract::types::conversation::conversation_id_of;
+        for sample in [
+            msg("u1", "u2", ""),
+            msg("u2", "u1", ""),
+            msg("u1", "", "g1"),
+            msg("u2", "", "g1"),
+            msg("u1", "", ""),
+        ] {
+            assert_eq!(Manager::route_key(&sample), conversation_id_of(&sample));
+        }
+    }
+
+    #[test]
+    fn worker_index_is_stable_and_in_range() {
+        let key = Manager::route_key(&msg("u1", "u2", ""));
+        let first = Manager::worker_index(&key, 8);
+        // 同一会话永远落在同一 worker（保序的前提）
+        assert_eq!(Manager::worker_index(&key, 8), first);
+        assert!(first < 8);
+
+        // 边界：1 个 worker 时全部落在 0
+        assert_eq!(Manager::worker_index("anything", 1), 0);
+    }
+
+    #[test]
+    fn route_key_falls_back_to_sender() {
+        // 心跳/回执等无对端消息：单聊键退化为按发送者定向，仍是确定性的
+        assert_eq!(Manager::route_key(&msg("u1", "", "")), "d::u1");
     }
 
     #[tokio::test]

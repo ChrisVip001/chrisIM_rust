@@ -1,0 +1,91 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT \n                    g.id,\n                    g.name,\n                    g.avatar_url,\n                    m.role,\n                    m.joined_at,\n                    ms.remark,\n                    ms.mute_notifications,\n                    ms.nickname_in_group,\n                    ms.is_top,\n                    ms.recall_notification,\n                    ms.show_nickname,\n                    (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count\n                FROM groups g\n                JOIN group_members m ON g.id = m.group_id\n                LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id\n                WHERE m.user_id = $1\n                AND (g.name ILIKE $2 OR g.description ILIKE $2 OR ms.remark ILIKE $2)\n                ORDER BY g.name\n                LIMIT $3 OFFSET $4\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "role",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "joined_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 5,
+        "name": "remark",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "mute_notifications",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "nickname_in_group",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_top",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "recall_notification",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "show_nickname",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "member_count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "57b1c77f67ac78bd5e14e0c05af27e09b1467263701b58aecfc836d79b9f9f65"
+}

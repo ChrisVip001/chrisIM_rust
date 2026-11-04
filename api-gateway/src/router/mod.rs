@@ -1,6 +1,7 @@
 use crate::auth::controller;
 use crate::auth::middleware::auth_middleware;
 use crate::proxy::ServiceProxy;
+use cache::SessionCache;
 use axum::{
     body::Body,
     extract::{Extension, Json, State},
@@ -75,7 +76,7 @@ pub struct ValidateRegisterAvatarRequest {
 pub async fn build_routes(
     service_proxy: ServiceProxy,
     config: Arc<AppConfig>,
-    cache_instance: Arc<dyn cache::Cache>,
+    cache_instance: Arc<dyn SessionCache>,
 ) -> anyhow::Result<Router> {
     let gateway_config = &config.gateway;
     // 创建用户服务客户端
@@ -140,7 +141,7 @@ fn add_service_route(
     router: Router<Arc<AppConfig>>,
     route: &RouteRule,
     service_proxy: Arc<ServiceProxy>,
-    cache_instance: Arc<dyn cache::Cache>,
+    cache_instance: Arc<dyn SessionCache>,
     config: Arc<AppConfig>,
 ) -> Router<Arc<AppConfig>> {
     let path = route.path_prefix.clone();

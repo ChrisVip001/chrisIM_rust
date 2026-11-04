@@ -1,0 +1,93 @@
+# 关系服务：用户/好友/群组（模块化单体）
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relation-service
+  namespace: rustim
+  labels:
+    app: relation-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: relation-service
+  template:
+    metadata:
+      labels:
+        app: relation-service
+    spec:
+      containers:
+        - name: relation-service
+          image: rustim/relation-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 50004
+              name: grpc
+          readinessProbe:
+            grpc:
+              port: 50004
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            grpc:
+              port: 50004
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: rustim-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relation-service
+  namespace: rustim
+spec:
+  selector:
+    app: relation-service
+  ports:
+    - port: 50004
+      targetPort: 50004
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: relation-service
+  namespace: rustim
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: relation-service
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: relation-service
+  namespace: rustim
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: relation-service

@@ -8,7 +8,7 @@ use crate::group::repository::group_settings_repository::GroupSettingsRepository
 use crate::group::repository::member_repository::MemberRepository;
 use crate::group::repository::member_settings_repository::MemberSettingsRepository;
 use runtime::config::AppConfig;
-use runtime::grpc_client::base::get_rpc_client;
+use runtime::grpc_client::base::{get_rpc_client, service_names as sn};
 use contract::proto::group::group_service_server::GroupService;
 use contract::proto::group::{AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse, CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest, CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse, GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest, GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest, GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse, GroupResponse, GroupSettingsResponse, LeaveGroupRequest, LeaveGroupResponse, MemberResponse, MemberRole, MemberSettingsResponse, MuteMemberRequest, MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest, RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse, UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest, UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest};
 use contract::proto::user::user_service_server::UserService;
@@ -20,7 +20,8 @@ use cache::Cache;
 use contract::proto::message::chat_service_client::ChatServiceClient;
 use contract::proto::message::{ContentType, Msg, MsgType, PlatformType, SendMsgRequest};
 use contract::proto::message::msg_service_client::MsgServiceClient;
-use msg_storage::read_spread::{group_conversation_id, ConversationRepo, MsgMetaRepo};
+use contract::types::conversation::group_conversation_id;
+use msg_storage::read_spread::{ConversationRepo, MsgMetaRepo};
 use msg_storage::ReadSpreadRepo;
 use crate::group::model::group::Group;
 use serde_json;
@@ -48,7 +49,7 @@ impl GroupServiceImpl {
         config: &AppConfig,
     ) -> anyhow::Result<Self> {
         let chat_service_client =
-            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(config, "chat".to_string())
+            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(config, sn::CHAT.to_string())
                 .await?;
 
         // 初始化读扩散消息存储

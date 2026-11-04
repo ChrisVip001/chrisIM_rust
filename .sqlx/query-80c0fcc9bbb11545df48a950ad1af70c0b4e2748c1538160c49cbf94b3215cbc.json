@@ -1,0 +1,130 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO users (id, username, email, password, nickname, avatar_url, custom_id)\n            VALUES ($1, $2, $3, $4, $5, $6, $7)\n            RETURNING id, username, email, password, nickname, avatar_url, created_at, updated_at,\n            phone, address, head_image, head_image_thumb, sex, user_stat, tenant_id, last_login_time, custom_id ,sign\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "password",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "phone",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "head_image",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 11,
+        "name": "head_image_thumb",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "sex",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "user_stat",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "tenant_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 15,
+        "name": "last_login_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "custom_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 17,
+        "name": "sign",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "80c0fcc9bbb11545df48a950ad1af70c0b4e2748c1538160c49cbf94b3215cbc"
+}

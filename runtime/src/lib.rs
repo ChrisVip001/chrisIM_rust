@@ -32,6 +32,7 @@ pub mod logging;
 pub mod service;
 pub mod service_discovery;
 pub mod service_register_center;
+pub mod shutdown;
 pub mod sms;
 pub mod snowflake;
 pub mod utils;

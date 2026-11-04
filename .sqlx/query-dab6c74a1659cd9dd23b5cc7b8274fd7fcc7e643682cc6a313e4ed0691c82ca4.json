@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT g.id, g.user_id, g.group_name, g.sort_order, g.created_at, g.updated_at\n            FROM friend_group g\n            WHERE g.user_id = $1\n            AND g.id IN (\n                SELECT group_id FROM friend_group_relation \n                WHERE user_id = $1 AND friend_id = $2\n            )\n            ORDER BY g.sort_order ASC, g.created_at ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "group_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "sort_order",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "dab6c74a1659cd9dd23b5cc7b8274fd7fcc7e643682cc6a313e4ed0691c82ca4"
+}

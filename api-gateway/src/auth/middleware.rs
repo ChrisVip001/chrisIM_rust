@@ -1,3 +1,4 @@
+use cache::SessionCache;
 use axum::{
     extract::{Extension, Request, State},
     http::StatusCode,
@@ -18,7 +19,7 @@ use crate::proxy::services::common::{
 /// 认证中间件
 pub async fn auth_middleware(
     State(config): State<Arc<AppConfig>>,
-    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(cache_instance): Extension<Arc<dyn SessionCache>>,
     req: Request,
     next: Next,
 ) -> Response {

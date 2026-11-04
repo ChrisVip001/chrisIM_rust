@@ -1,7 +1,7 @@
 use tracing::info;
 use std::env;
 use std::sync::Arc;
-use runtime::config::{ConfigLoader, AppConfig};
+use runtime::config::AppConfig;
 
 use msg_server::productor::ChatRpcService;
 use msg_server::consumer::ConsumerService;
@@ -17,7 +17,7 @@ use msg_server::consumer::ConsumerService;
 /// 服务架构:
 /// - 生产者服务(ChatRpcService): 通过gRPC接收消息，生成消息ID，发送到Kafka
 /// - 消费者服务(ConsumerService): 从Kafka消费消息，存储并推送给用户
-/// - 存储服务: 将消息持久化到PostgreSQL和MongoDB
+/// - 存储服务: 将消息持久化到PostgreSQL（读扩散模型）
 /// - 推送服务: 将消息推送到在线用户的WebSocket连接
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -36,7 +36,6 @@ async fn main() -> anyhow::Result<()> {
     // 设置全局配置，使得整个应用可以访问配置信息
     // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
     let config = std::sync::Arc::new(app_config.clone());
-    ConfigLoader::set_global(app_config);
 
     // 初始化日志和分布式链路追踪系统
     // 根据配置判断是否启用分布式链路追踪功能
@@ -73,25 +72,52 @@ async fn main() -> anyhow::Result<()> {
     });
     
     // 启动消费者服务
-    // 该服务从Kafka消费消息，处理消息存储和推送
-    // 并行消费需要在多个任务间共享同一实例
+    // 同一消费组内运行 N 个消费者，Kafka 自动在它们之间均衡分配分区；
+    // 分区数是并行度上限，实际消费者数取配置值与分区数的较小者
     let consumer_service = Arc::new(consumer_service);
-    let consumer_task = tokio::spawn(async move {
-        if let Err(e) = consumer_service.consume().await {
+    let parallelism = config
+        .kafka
+        .consumer
+        .effective_parallelism()
+        .min(config.kafka.effective_partitions() as usize);
+    let mut consumer_tasks = Vec::with_capacity(parallelism);
+    for _ in 1..parallelism {
+        let sibling = Arc::new(consumer_service.fork(&config).await?);
+        consumer_tasks.push(tokio::spawn(async move {
+            if let Err(e) = sibling.consume().await {
+                tracing::error!("消费者服务运行失败: {:?}", e);
+            }
+        }));
+    }
+    let first = consumer_service.clone();
+    consumer_tasks.push(tokio::spawn(async move {
+        if let Err(e) = first.consume().await {
             tracing::error!("消费者服务运行失败: {:?}", e);
         }
-    });
-    
-    info!("消息生产者和消费者服务已启动");
-    
+    }));
+
+    info!(
+        "消息生产者和消费者服务已启动（消费者并行度={}）",
+        parallelism
+    );
+
+    // 优雅停机：监听 SIGTERM/SIGINT。此前进程完全没有信号处理，
+    // 容器滚动发布会硬断 gRPC 服务与 Kafka 消费循环。
+    // 消费位点为手动提交，信号到达时未处理完的批次在重启后重新消费
+    // （at-least-once + 幂等落库，不丢不重）。
+    let shutdown_task = tokio::spawn(runtime::shutdown::wait_for_shutdown_signal());
+
     // 等待任一服务结束（正常情况下服务会一直运行，除非出现错误）
     // 使用tokio::select!来并发等待多个异步任务
     tokio::select! {
         _ = producer_task => {
             info!("生产者服务已结束");
         }
-        _ = consumer_task => {
+        _ = &mut consumer_tasks[0] => {
             info!("消费者服务已结束");
+        }
+        _ = shutdown_task => {
+            info!("收到停机信号，msg-server 开始退出（服务实例的健康检查失效后由注册中心自动摘除）");
         }
     }
     

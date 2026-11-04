@@ -18,7 +18,7 @@ use contract::proto::user::user_service_client::UserServiceClient;
 use runtime::service_discovery::LbWithServiceDiscovery;
 use crate::proxy::extract_request_body;
 use crate::proxy::services::{ChatServiceHandler, CommonServiceHandler, FriendServiceHandler, GroupServiceHandler, UserServiceHandler};
-use tokio::sync::{OnceCell, RwLock};
+use tokio::sync::{Mutex, RwLock};
 use contract::proto::message::chat_service_client::ChatServiceClient;
 
 /// 服务客户端连接池
@@ -47,8 +47,8 @@ pub struct ServiceProxy {
     config: Arc<AppConfig>,
     // 服务客户端连接池
     clients: Arc<RwLock<ServiceClients>>,
-    // 用于确保只初始化一次
-    init_once: Arc<OnceCell<()>>,
+    // 串行化连接池重建，避免并发请求触发多次重建
+    rebuild_lock: Arc<Mutex<()>>,
 }
 
 impl ServiceProxy {
@@ -60,23 +60,39 @@ impl ServiceProxy {
         let proxy = Self {
             config,
             clients: Arc::new(RwLock::new(ServiceClients::new())),
-            init_once: Arc::new(OnceCell::new()),
+            rebuild_lock: Arc::new(Mutex::new(())),
         };
 
-        // 异步初始化服务客户端
-        proxy.ensure_clients_initialized().await;
+        // 启动时初始化服务客户端；个别失败不阻塞启动，
+        // 后续请求发现客户端缺失时会自动重建（见 get_or_rebuild）
+        if let Err(e) = proxy.initialize_clients().await {
+            warn!("启动时初始化服务客户端失败（将在请求时自动重试）: {}", e);
+        }
         proxy
     }
 
-    /// 确保服务客户端已初始化（只初始化一次）
-    async fn ensure_clients_initialized(&self) {
-        self.init_once
-            .get_or_init(|| async {
-                if let Err(e) = self.initialize_clients().await {
-                    error!("初始化服务客户端失败: {}", e);
-                }
-            })
-            .await;
+    /// 获取客户端；缺失时尝试重建连接池
+    ///
+    /// 此前初始化只有 OnceCell 一次机会，后端服务不可用时客户端
+    /// 永远为 None，对应路由持续 503 直到进程重启。
+    /// 现在请求路径发现缺失即按需重建，重建期间并发请求串行等待。
+    async fn get_or_rebuild<T>(&self, extract: impl Fn(&ServiceClients) -> Option<T>) -> Option<T> {
+        if let Some(client) = extract(&*self.clients.read().await) {
+            return Some(client);
+        }
+
+        let _guard = self.rebuild_lock.lock().await;
+        // 双检：等待期间可能已被其他请求重建
+        if let Some(client) = extract(&*self.clients.read().await) {
+            return Some(client);
+        }
+
+        warn!("服务客户端缺失，尝试重建连接池...");
+        if let Err(e) = self.initialize_clients().await {
+            error!("重建服务客户端连接池失败: {}", e);
+            return None;
+        }
+        extract(&*self.clients.read().await)
     }
 
     /// 异步初始化所有服务客户端
@@ -150,26 +166,22 @@ impl ServiceProxy {
 
     /// 获取用户服务客户端
     async fn get_user_client(&self) -> Option<UserServiceGrpcClient> {
-        self.ensure_clients_initialized().await;
-        self.clients.read().await.user_client.clone()
+        self.get_or_rebuild(|c| c.user_client.clone()).await
     }
 
     /// 获取好友服务客户端
     async fn get_friend_client(&self) -> Option<FriendServiceGrpcClient> {
-        self.ensure_clients_initialized().await;
-        self.clients.read().await.friend_client.clone()
+        self.get_or_rebuild(|c| c.friend_client.clone()).await
     }
 
     /// 获取群组服务客户端
     async fn get_group_client(&self) -> Option<GroupServiceGrpcClient> {
-        self.ensure_clients_initialized().await;
-        self.clients.read().await.group_client.clone()
+        self.get_or_rebuild(|c| c.group_client.clone()).await
     }
-    
+
     /// 获取chat服务客户端
     async fn get_chat_client(&self) -> Option<ChatServiceClient<LbWithServiceDiscovery>> {
-        self.ensure_clients_initialized().await;
-        self.clients.read().await.chat_client.clone()
+        self.get_or_rebuild(|c| c.chat_client.clone()).await
     }
 
     /// 转发请求到后端服务

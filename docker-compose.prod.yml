@@ -1,6 +1,40 @@
 version: '3.8'
 
+# 生产环境编排
+#
+# 与旧版的差异：
+# - 删除 user/friend/group 三个独立容器（已合并为 relation-service 模块化单体）
+# - 新增 Consul 服务注册中心（所有服务的发现依赖它，此前是外部依赖，编排里没有）
+# - Kafka 3 broker 副本集群（消息主题 replication=3, min.insync.replicas=2）
+# - 密钥全部通过环境变量注入（OSS_ACCESS_KEY 等），config.yaml 不再落盘密钥
+# - 业务服务去掉 container_name，支持 `--scale` 水平扩展
+
 services:
+  # 服务注册中心（必须最先就绪，业务服务启动即注册）
+  consul:
+    image: hashicorp/consul:1.18
+    container_name: rustim_consul
+    restart: unless-stopped
+    ports:
+      - "8500:8500"
+    environment:
+      CONSUL_LOCAL_CONFIG: |
+        {
+          "server": true,
+          "bootstrap_expect": 1,
+          "ui_config": { "enabled": false }
+        }
+    volumes:
+      - consul_data:/consul/data
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   # API 网关服务
   api-gateway:
     build:
@@ -8,22 +42,22 @@ services:
       dockerfile: Dockerfile
       target: runtime
     image: rustim/api-gateway:latest
-    container_name: rustim_api_gateway
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8080:8000"
     environment:
       - RUST_LOG=info
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
       - REDIS_URL=redis://redis:6379
-      - KAFKA_BROKERS=kafka:9092
       - JWT_SECRET=${JWT_SECRET}
+      - OSS_ACCESS_KEY=${OSS_ACCESS_KEY}
+      - OSS_SECRET_KEY=${OSS_SECRET_KEY}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      kafka:
+      consul:
         condition: service_healthy
     volumes:
       - ./config:/app/config:ro
@@ -31,21 +65,20 @@ services:
     networks:
       - rustim-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     command: ["api-gateway"]
 
-  # 消息网关服务
+  # 消息网关服务（长连接接入层，可 --scale msg-gateway=N 水平扩展）
   msg-gateway:
     build:
       context: .
       dockerfile: Dockerfile
       target: runtime
     image: rustim/msg-gateway:latest
-    container_name: rustim_msg_gateway
     restart: unless-stopped
     ports:
       - "8085:8085"
@@ -53,13 +86,12 @@ services:
       - RUST_LOG=info
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
       - REDIS_URL=redis://redis:6379
-      - KAFKA_BROKERS=kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      kafka:
+      consul:
         condition: service_healthy
     volumes:
       - ./config:/app/config:ro
@@ -74,113 +106,13 @@ services:
       start_period: 40s
     command: ["msg-gateway"]
 
-  # 用户服务
-  user-service:
+  # 关系服务（模块化单体：用户/好友/群组）
+  relation-service:
     build:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    image: rustim/user-service:latest
-    container_name: rustim_user_service
-    restart: unless-stopped
-    ports:
-      - "50001:50001"
-    environment:
-      - RUST_LOG=info
-      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./config:/app/config:ro
-      - ./logs:/app/logs
-    networks:
-      - rustim-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:50001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    command: ["user-service"]
-
-  # 好友服务
-  friend-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    image: rustim/friend-service:latest
-    container_name: rustim_friend_service
-    restart: unless-stopped
-    ports:
-      - "50002:50002"
-    environment:
-      - RUST_LOG=info
-      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./config:/app/config:ro
-      - ./logs:/app/logs
-    networks:
-      - rustim-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:50002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    command: ["friend-service"]
-
-  # 群组服务
-  group-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    image: rustim/group-service:latest
-    container_name: rustim_group_service
-    restart: unless-stopped
-    ports:
-      - "50003:50003"
-    environment:
-      - RUST_LOG=info
-      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./config:/app/config:ro
-      - ./logs:/app/logs
-    networks:
-      - rustim-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:50003/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    command: ["group-service"]
-
-  # 消息服务
-  msg-server:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    image: rustim/msg-server:latest
-    container_name: rustim_msg_server
+    image: rustim/relation-service:latest
     restart: unless-stopped
     ports:
       - "50004:50004"
@@ -188,13 +120,12 @@ services:
       - RUST_LOG=info
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
       - REDIS_URL=redis://redis:6379
-      - KAFKA_BROKERS=kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      kafka:
+      consul:
         condition: service_healthy
     volumes:
       - ./config:/app/config:ro
@@ -202,7 +133,43 @@ services:
     networks:
       - rustim-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:50004/health"]
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50004"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["relation-service"]
+
+  # 消息服务（消息生产/消费/落库/推送）
+  msg-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rustim/msg-server:latest
+    restart: unless-stopped
+    ports:
+      - "50010:50010"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-cluster:
+        condition: service_healthy
+      consul:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50010"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -216,18 +183,18 @@ services:
       dockerfile: Dockerfile
       target: runtime
     image: rustim/oss:latest
-    container_name: rustim_oss
     restart: unless-stopped
     ports:
       - "50005:50005"
     environment:
       - RUST_LOG=info
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - OSS_ACCESS_KEY=${OSS_ACCESS_KEY}
+      - OSS_SECRET_KEY=${OSS_SECRET_KEY}
     depends_on:
       postgres:
+        condition: service_healthy
+      consul:
         condition: service_healthy
     volumes:
       - ./config:/app/config:ro
@@ -244,6 +211,8 @@ services:
     command: ["oss"]
 
   # PostgreSQL 数据库
+  # 更高可用请使用 PostgreSQL 流复制主从或 Kubernetes 上的 CloudNativePG Operator，
+  # 本文件保持单实例以维持编排简洁（应用层经 Consul 重连，可容忍短暂重启）。
   postgres:
     image: postgres:16-alpine
     container_name: rustim_postgres
@@ -270,10 +239,10 @@ services:
       postgres
       -c shared_preload_libraries=pg_stat_statements
       -c pg_stat_statements.track=all
-      -c max_connections=200
-      -c shared_buffers=256MB
-      -c effective_cache_size=1GB
-      -c maintenance_work_mem=64MB
+      -c max_connections=400
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+      -c maintenance_work_mem=128MB
       -c checkpoint_completion_target=0.9
       -c wal_buffers=16MB
       -c default_statistics_target=100
@@ -298,7 +267,7 @@ services:
       start_period: 30s
     command: redis-server /usr/local/etc/redis/redis.conf
 
-  # Zookeeper (Kafka 依赖)
+  # Zookeeper（Kafka 依赖）
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: rustim_zookeeper
@@ -322,42 +291,128 @@ services:
       retries: 5
       start_period: 30s
 
-  # Kafka 消息队列
-  kafka:
+  # Kafka 3 broker 集群：消息主题在编排层保证 replication=3
+  kafka-1:
     image: confluentinc/cp-kafka:7.5.0
-    container_name: rustim_kafka
     restart: unless-stopped
     depends_on:
       zookeeper:
         condition: service_healthy
     ports:
       - "9092:9092"
-      - "29092:29092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_NUM_PARTITIONS: 3
-      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_NUM_PARTITIONS: 16
       KAFKA_LOG_RETENTION_HOURS: 168
-      KAFKA_LOG_SEGMENT_BYTES: 1073741824
-      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
     volumes:
-      - kafka_data:/var/lib/kafka/data
+      - kafka1_data:/var/lib/kafka/data
     networks:
       - rustim-network
     healthcheck:
-      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
 
-  # Nginx 负载均衡器 (可选)
+  kafka-2:
+    image: confluentinc/cp-kafka:7.5.0
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_NUM_PARTITIONS: 16
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka2_data:/var/lib/kafka/data
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9093"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  kafka-3:
+    image: confluentinc/cp-kafka:7.5.0
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_NUM_PARTITIONS: 16
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka3_data:/var/lib/kafka/data
+    networks:
+      - rustim-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9094"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Kafka 集群健康聚合：业务服务依赖它而不是单个 broker
+  kafka-cluster:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: rustim_kafka_cluster
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+    entrypoint: ["sh", "-c", "sleep infinity"]
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka-1:9092 --list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rustim-network
+
+  # Nginx 负载均衡器
   nginx:
     image: nginx:alpine
     container_name: rustim_nginx
@@ -389,7 +444,13 @@ volumes:
     driver: local
   zookeeper_logs:
     driver: local
-  kafka_data:
+  kafka1_data:
+    driver: local
+  kafka2_data:
+    driver: local
+  kafka3_data:
+    driver: local
+  consul_data:
     driver: local
 
 networks:
@@ -397,4 +458,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16 
+        - subnet: 172.20.0.0/16

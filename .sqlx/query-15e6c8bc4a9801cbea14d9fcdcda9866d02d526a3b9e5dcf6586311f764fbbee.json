@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, user_id, allow_phone_search, allow_id_search, auto_load_video, auto_load_pic, msg_read_flag,\n                   sound_enabled, vibration_enabled, show_phone, create_time, update_time\n            FROM user_config\n            WHERE user_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "allow_phone_search",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "allow_id_search",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "auto_load_video",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "auto_load_pic",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "msg_read_flag",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "sound_enabled",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "vibration_enabled",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "show_phone",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "create_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "update_time",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "15e6c8bc4a9801cbea14d9fcdcda9866d02d526a3b9e5dcf6586311f764fbbee"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM friend_group_relation\n            WHERE group_id = $1 AND user_id = $2 AND friend_id = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "401ea87682707f13d555bea252b8e58e66fad5e739e126c9af54215da9d0b535"
+}

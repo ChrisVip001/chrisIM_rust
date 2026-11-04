@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT \n                ub.id, \n                ub.user_id, \n                ub.blocked_user_id, \n                ub.reason, \n                ub.created_at,\n                u.username,\n                u.nickname,\n                u.avatar_url\n            FROM user_blacklist ub\n            LEFT JOIN users u ON ub.blocked_user_id = u.id\n            WHERE ub.user_id = $1\n            ORDER BY ub.created_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "blocked_user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "reason",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 5,
+        "name": "username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7faf2d59a9716b9673c7f4a30202503b5e509dc968c4ecba958517bcd2b5e327"
+}

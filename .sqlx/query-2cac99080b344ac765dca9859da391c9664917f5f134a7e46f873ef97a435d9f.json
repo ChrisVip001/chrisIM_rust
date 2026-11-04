@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE group_settings SET\n                allow_member_friendship = COALESCE($2, allow_member_friendship),\n                join_approval_required = COALESCE($3, join_approval_required),\n                only_admin_can_invite = COALESCE($4, only_admin_can_invite),\n                only_admin_can_modify = COALESCE($5, only_admin_can_modify),\n                notify_member_join = COALESCE($6, notify_member_join),\n                all_member_muted = COALESCE($7, all_member_muted),\n                updated_at = $8\n            WHERE group_id = $1\n            RETURNING  group_id, allow_member_friendship, join_approval_required,\n                     only_admin_can_invite, only_admin_can_modify, updated_at, notify_member_join, all_member_muted\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "allow_member_friendship",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "join_approval_required",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "only_admin_can_invite",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "only_admin_can_modify",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 6,
+        "name": "notify_member_join",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "all_member_muted",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2cac99080b344ac765dca9859da391c9664917f5f134a7e46f873ef97a435d9f"
+}

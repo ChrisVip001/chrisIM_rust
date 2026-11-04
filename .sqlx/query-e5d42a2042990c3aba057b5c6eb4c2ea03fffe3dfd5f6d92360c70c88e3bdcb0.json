@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM group_mutes\n            WHERE is_permanent = 0 AND mute_until IS NOT NULL AND mute_until <= $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e5d42a2042990c3aba057b5c6eb4c2ea03fffe3dfd5f6d92360c70c88e3bdcb0"
+}

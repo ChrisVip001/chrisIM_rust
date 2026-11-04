@@ -1,0 +1,105 @@
+# 消息网关：WebSocket 长连接接入层
+#
+# 扩容注意：
+# - 客户端经负载均衡连接任意实例，在线表在实例内存中（Redis 路由表定向推送），
+#   扩缩容时旧连接随优雅停机摘流量后迁移重连
+# - 长连接数量优先按内存水位评估，CPU HPA 仅兜底
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: msg-gateway
+  namespace: rustim
+  labels:
+    app: msg-gateway
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0   # 优雅停机先摘流量再终止，保证不断新连接
+  selector:
+    matchLabels:
+      app: msg-gateway
+  template:
+    metadata:
+      labels:
+        app: msg-gateway
+    spec:
+      terminationGracePeriodSeconds: 60   # 与优雅停机摘流量→排空流程匹配
+      containers:
+        - name: msg-gateway
+          image: rustim/msg-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8085
+              name: ws
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: rustim-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: msg-gateway
+  namespace: rustim
+spec:
+  type: ClusterIP
+  selector:
+    app: msg-gateway
+  ports:
+    - port: 8085
+      targetPort: 8085
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: msg-gateway
+  namespace: rustim
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: msg-gateway
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: msg-gateway
+  namespace: rustim
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: msg-gateway

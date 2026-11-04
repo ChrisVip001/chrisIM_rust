@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
+use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
@@ -41,28 +42,66 @@ pub(crate) fn build_producer(config: &AppConfig) -> Result<FutureProducer, Error
 ///
 /// 采用「先创建后判断」的策略：已存在时 AdminClient 会返回
 /// `AdminOpCreation` 错误，这里视作成功。
-pub(crate) async fn ensure_topic(
+///
+/// 确保业务主题存在（统一 interface）
+///
+/// 调用方只需给出配置与主题名；broker 列表、超时、分区数、副本数
+/// 以及「主题已存在视为成功」「副本数收敛到 broker 数」这些细节
+/// 全部留在本模块的 implementation 内，不再泄漏给每个启动点。
+pub(crate) async fn ensure_topic_for(
+    config: &AppConfig,
+    topic: &str,
+) -> Result<(), KafkaError> {
+    ensure_topic(
+        topic,
+        &config.kafka.hosts.join(","),
+        config.kafka.connect_timeout as u16,
+        config.kafka.effective_partitions(),
+        config.kafka.effective_replication(),
+    )
+    .await
+}
+
+/// 低层建主题动作（内部 seam，仅供本模块与集成测试使用）
+///
+/// 分区数与副本数由配置决定（`kafka.topic_partitions` / `kafka.topic_replication`）。
+/// 副本数会自动收敛到不超过当前 broker 数——开发环境往往只有单 broker，
+/// 直接按生产副本数建主题会失败。
+async fn ensure_topic(
     topic: &str,
     brokers: &str,
     timeout: u16,
+    num_partitions: i32,
+    replication: i32,
 ) -> Result<(), KafkaError> {
     let admin_client: AdminClient<DefaultClientContext> = ClientConfig::new()
         .set("bootstrap.servers", brokers)
         .set("socket.timeout.ms", timeout.to_string())
         .create()?;
 
-    // 分区数与副本数保持与历史配置一致，避免既有部署发生重平衡
+    // 查询在线 broker 数，把副本数收敛到可用范围内
+    // （AdminClient 不暴露元数据查询，用轻量的 BaseConsumer 代劳）
+    let probe: BaseConsumer = ClientConfig::new()
+        .set("bootstrap.servers", brokers)
+        .create()?;
+    let metadata = probe.fetch_metadata(None, Duration::from_millis(timeout as u64))?;
+    let broker_count = metadata.brokers().len().max(1) as i32;
+    let replication = replication.min(broker_count);
+
     let new_topics = [NewTopic {
         name: topic,
-        num_partitions: 1,
-        replication: TopicReplication::Fixed(1),
+        num_partitions,
+        replication: TopicReplication::Fixed(replication),
         config: vec![],
     }];
 
     let options = AdminOptions::new();
     match admin_client.create_topics(&new_topics, &options).await {
         Ok(_) => {
-            info!("Kafka主题 '{}' 不存在，已成功创建", topic);
+            info!(
+                "Kafka主题 '{}' 不存在，已成功创建（分区数={}, 副本数={}）",
+                topic, num_partitions, replication
+            );
             Ok(())
         }
         Err(KafkaError::AdminOpCreation(_)) => {
@@ -119,7 +158,7 @@ mod tests {
 
         // 每次运行使用独立主题，避免读到历史消息导致断言失败
         let topic = format!("im-test-dlq-{}", std::process::id());
-        ensure_topic(&topic, &brokers, 5000)
+        ensure_topic(&topic, &brokers, 5000, 1, 1)
             .await
             .expect("创建测试主题失败");
 

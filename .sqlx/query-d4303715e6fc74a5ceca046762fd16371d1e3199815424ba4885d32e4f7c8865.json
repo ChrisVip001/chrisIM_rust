@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO friend_group_relation (id, user_id, friend_id, group_id, created_at, updated_at)\n            VALUES ($1, $2, $3, $4, $5, $6)\n            ON CONFLICT (user_id, friend_id, group_id) DO UPDATE\n            SET updated_at = $6\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d4303715e6fc74a5ceca046762fd16371d1e3199815424ba4885d32e4f7c8865"
+}

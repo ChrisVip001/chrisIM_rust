@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE group_mutes\n                SET creator_id = $1, reason = $2, mute_until = $3, is_permanent = $4, updated_at = $5\n                WHERE group_id = $6 AND user_id = $7\n                RETURNING id\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Timestamp",
+        "Int4",
+        "Timestamp",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fae9e1df492fbf7b723fca3d84d17e2620cb6fcbc647a1408a3e29a9df2b6f87"
+}

@@ -12,7 +12,7 @@
 //! 
 //! ### `consumer` 模块 - 消息消费者服务  
 //! - 从Kafka消息队列消费消息
-//! - 将消息存储到数据库（PostgreSQL + MongoDB）
+//! - 将消息存储到数据库（PostgreSQL，读扩散模型）
 //! - 推送消息到在线用户
 //! - 处理离线消息存储
 //! 
@@ -33,7 +33,7 @@
 //! ```text
 //! 客户端消息 -> ChatRpcService(生产者) -> Kafka队列 -> ConsumerService(消费者) 
 //!                                                          ↓
-//! WebSocket推送 <- PushService <- 存储服务 <- 消息持久化(PostgreSQL + MongoDB)
+//! WebSocket推送 <- PushService <- 存储服务 <- 消息持久化(PostgreSQL)
 //! ```
 //! 
 //! ## 服务特性

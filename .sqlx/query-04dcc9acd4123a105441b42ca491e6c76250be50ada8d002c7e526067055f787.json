@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE friend_relation\n            SET remark = $1, updated_at = $2\n            WHERE user_id = $3 AND friend_id = $4 AND status = 1\n            RETURNING 1 as updated\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "updated",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Timestamp",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "04dcc9acd4123a105441b42ca491e6c76250be50ada8d002c7e526067055f787"
+}

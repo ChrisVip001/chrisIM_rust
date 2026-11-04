@@ -7,14 +7,17 @@ use runtime::auth::jwt;
 use runtime::config::AppConfig;
 use contract::error::Error;
 use contract::proto::message::PlatformType;
+use runtime::grpc_client::base::service_names as sn;
 use runtime::service_register_center::{service_register_center, Registration};
+use cache::SessionCache;
 use futures::{SinkExt, StreamExt};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::client::Client;
+use crate::client::{Client, OUTBOUND_CHANNEL_CAP};
 use crate::manager::Manager;
 use crate::rpc::MsgRpcService;
 
@@ -48,10 +51,13 @@ pub struct AppState {
     /// JWT配置
     /// 用于验证客户端连接时提供的JWT令牌
     jwt_config: runtime::configs::auth_config::JwtConfig,
-    
+
     /// 缓存实例
     /// 用于验证redis中的token
-    cache_instance: Arc<dyn cache::Cache>,
+    cache_instance: Arc<dyn SessionCache>,
+
+    /// 心跳死链判定阈值（连续未收到Pong的心跳周期数）
+    heartbeat_max_missed: u32,
 }
 
 /// WebSocket服务器
@@ -69,9 +75,9 @@ impl WsServer {
     /// * `config` - 应用配置
     ///
     /// # 返回值
-    /// * `Ok(String)` - 注册成功，返回服务ID
+    /// * `Ok((String, String))` - 注册成功，返回（WebSocket服务ID, gRPC服务ID）
     /// * `Err(Error)` - 注册失败
-    async fn register_service(config: &AppConfig) -> Result<String, Error> {
+    async fn register_service(config: &AppConfig) -> Result<(String, String), Error> {
         let registry = service_register_center(config);
 
         // 注册WebSocket服务（面向客户端）
@@ -91,12 +97,13 @@ impl WsServer {
         info!("WebSocket服务注册成功，服务ID: {}", websocket_service_id);
 
         // 注册gRPC服务（面向内部服务）
+        // 名字与发现端共用 service_names::WS，避免配置字段值与常量漂移
         let grpc_registration = Registration {
             id: format!(
                 "{}-{}-{}",
-                config.rpc.ws.name, config.rpc.ws.host, config.rpc.ws.port
+                sn::WS, config.rpc.ws.host, config.rpc.ws.port
             ),
-            name: config.rpc.ws.name.clone(),
+            name: sn::WS.to_string(),
             host: config.rpc.ws.host.clone(),
             port: config.rpc.ws.port,
             tags: config.rpc.ws.tags.clone(),
@@ -106,7 +113,7 @@ impl WsServer {
         let grpc_service_id = registry.register(grpc_registration).await?;
         info!("gRPC服务注册成功，服务ID: {}", grpc_service_id);
 
-        Ok(websocket_service_id)
+        Ok((websocket_service_id, grpc_service_id))
     }
 
     /// 测试接口
@@ -128,7 +135,7 @@ impl WsServer {
     /// 启动WebSocket服务器
     ///
     /// 这是WebSocket服务器的主入口点，负责：
-    /// 1. 初始化连接管理器
+    /// 1. 初始化连接管理器（内部按配置启动 N 个上行处理 worker）
     /// 2. 启动WebSocket HTTP服务器
     /// 3. 启动gRPC服务器
     /// 4. 注册服务到服务发现中心
@@ -136,19 +143,12 @@ impl WsServer {
     /// # 参数
     /// * `config` - 应用配置
     pub async fn start(config: Arc<AppConfig>) {
-        // 创建连接管理器和消息通道
-        let (tx, rx) = mpsc::channel(1024);
-        let hub = Manager::new(tx, &config).await;
-        let mut cloned_hub = hub.clone();
-
-        // 在单独的任务中运行连接管理器
-        // 这样可以并发处理消息而不阻塞WebSocket连接
-        tokio::spawn(async move {
-            cloned_hub.run(rx).await;
-        });
+        // 创建连接管理器；上行 worker 在其内部启动，
+        // 不再需要外部创建通道和单独 spawn
+        let hub = Manager::new(&config).await;
 
         // 初始化缓存实例
-        let cache_instance = cache::cache(&config)
+        let cache_instance: Arc<dyn SessionCache> = cache::cache(&config)
             .await;
 
         // 创建应用状态，包含管理器、JWT配置和缓存实例
@@ -156,6 +156,7 @@ impl WsServer {
             manager: hub.clone(),
             jwt_config: config.gateway.auth.jwt.clone(),
             cache_instance,
+            heartbeat_max_missed: config.websocket.heartbeat_max_missed(),
         };
 
         // 配置Axum路由
@@ -187,24 +188,39 @@ impl WsServer {
         });
 
         // 向服务注册中心注册WebSocket服务
-        Self::register_service(&config).await.unwrap();
+        let (ws_service_id, grpc_service_id) = Self::register_service(&config).await.unwrap();
 
-        // 克隆配置用于RPC服务
-        let config = config.clone();
+        // 克隆配置用于RPC服务（保留一份给停机分支摘除注册流量）
+        let config_for_rpc = config.clone();
 
         // 在独立任务中启动RPC服务
         let mut rpc = tokio::spawn(async move {
             // 启动RPC服务器，用于接收来自msg-server的消息推送请求
-            MsgRpcService::start(hub, &config)
+            MsgRpcService::start(hub, &config_for_rpc)
                 .await
                 .expect("RPC服务器启动失败");
         });
 
-        // 等待任一任务完成，并中止另一个任务
-        // 正常情况下两个服务都会一直运行
+        // 等待任一任务完成，并中止其余任务。
+        // 停机分支先从注册中心摘除两个入口（gRPC推送、WS连接），
+        // 让负载均衡把新流量导向其他实例，再中止本地服务。
+        // 正常情况下服务会一直运行。
         tokio::select! {
             _ = (&mut ws) => ws.abort(),
             _ = (&mut rpc) => rpc.abort(),
+            _ = runtime::shutdown::wait_for_shutdown_signal() => {
+                info!("收到停机信号：先从注册中心摘除流量，再关闭本地服务");
+                let registry = service_register_center(&config);
+                // 先摘 gRPC 推送入口（停止新消息流入），再摘 WS 接入入口
+                if let Err(e) = registry.deregister(&grpc_service_id).await {
+                    error!("注销gRPC服务失败: {}", e);
+                }
+                if let Err(e) = registry.deregister(&ws_service_id).await {
+                    error!("注销WebSocket服务失败: {}", e);
+                }
+                rpc.abort();
+                ws.abort();
+            }
         }
     }
 
@@ -222,7 +238,7 @@ impl WsServer {
     async fn verify_and_parse_token(
         token: &str,
         jwt_config: &runtime::configs::auth_config::JwtConfig,
-        cache_instance: &Arc<dyn cache::Cache>,
+        cache_instance: &Arc<dyn SessionCache>,
     ) -> Result<jwt::Claims, Error> {
         // 验证JWT令牌并获取用户信息
         let user_info = jwt::verify_token(token, jwt_config)
@@ -282,6 +298,10 @@ impl WsServer {
     /// 4. 处理消息收发
     /// 5. 管理连接生命周期
     ///
+    /// 写路径模型：连接的发送端由唯一的「写任务」持有，
+    /// 心跳、踢下线、消息推送统一通过有界队列排队写入，
+    /// 慢客户端只会占满自己的队列（背压），不会阻塞其他连接。
+    ///
     /// # 参数
     /// * `token` - JWT令牌
     /// * `ws` - WebSocket连接
@@ -292,7 +312,7 @@ impl WsServer {
         app_state: AppState,
     ) {
         // 将WebSocket分为发送和接收两部分
-        // 这样可以在不同的任务中并发处理发送和接收
+        // 发送端移交给下方唯一的写任务，接收端留在本任务
         let (mut ws_tx, mut ws_rx) = ws.split();
 
         // 验证JWT令牌并解析用户信息
@@ -325,8 +345,20 @@ impl WsServer {
             platform
         );
 
-        // 创建共享的发送通道，支持多线程安全访问
-        let shared_tx = Arc::new(RwLock::new(ws_tx));
+        // 下行队列：所有写操作经此排队，由唯一写任务消费
+        let (outbound_tx, mut outbound_rx) = mpsc::channel::<Message>(OUTBOUND_CHANNEL_CAP);
+
+        // 唯一写任务：持有发送端，串行写WebSocket
+        // 退出条件：队列关闭（Client 全部销毁）或写入失败（连接已断）
+        let mut writer_task = tokio::spawn(async move {
+            while let Some(msg) = outbound_rx.recv().await {
+                if ws_tx.send(msg).await.is_err() {
+                    break;
+                }
+            }
+            // 队列关闭后补发 Close 帧，确保服务端主动关闭的语义完整
+            let _ = ws_tx.close().await;
+        });
 
         // 创建通知通道，用于踢下线等控制信号
         let (notify_sender, mut notify_receiver) = mpsc::channel(1);
@@ -335,7 +367,7 @@ impl WsServer {
         // 创建客户端对象
         let client = Client {
             user_id: user_id.clone(),
-            sender: shared_tx.clone(),
+            sender: outbound_tx.clone(),
             platform,
             notify_sender,
         };
@@ -345,18 +377,35 @@ impl WsServer {
         let conn_id = hub.register(user_id.clone(), client).await;
 
         // 启动心跳检测任务
-        // 定期向客户端发送ping消息，检查连接是否活跃
-        let cloned_tx = shared_tx.clone();
+        // 定期向客户端发送ping消息，检查连接是否活跃；
+        // 连续 N 个周期未收到 Pong 判定为死链并主动断开。
+        // 此前 Pong 只打日志，半开连接（客户端假在线）会一直占用资源。
+        let ping_sender = outbound_tx.clone();
+        let pong_alive = Arc::new(AtomicBool::new(false));
+        let missed_pongs = Arc::new(AtomicU32::new(0));
+        let max_missed = app_state.heartbeat_max_missed;
+        let ping_alive = pong_alive.clone();
+        let ping_missed = missed_pongs.clone();
         let mut ping_task = tokio::spawn(async move {
+            let ping = Message::Ping(Default::default());
             loop {
-                if let Err(e) = cloned_tx
-                    .write()
-                    .await
-                    .send(Message::Ping(Default::default()))
-                    .await
-                {
-                    error!("发送心跳消息失败：{:?}", e);
-                    // 发送失败表示连接已断开，退出心跳任务
+                if ping_alive.load(Ordering::Relaxed) {
+                    // 上个周期收到了 Pong，重置计数
+                    ping_missed.store(0, Ordering::Relaxed);
+                    ping_alive.store(false, Ordering::Relaxed);
+                } else {
+                    let missed = ping_missed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if missed > max_missed {
+                        error!(
+                            "连续 {} 个心跳周期未收到Pong，判定死链，断开连接",
+                            missed - 1
+                        );
+                        break;
+                    }
+                    warn!("第 {} 个心跳周期未收到Pong", missed);
+                }
+                if ping_sender.send(ping.clone()).await.is_err() {
+                    error!("发送心跳消息失败，连接已不可用");
                     break;
                 }
                 // 等待下一次心跳间隔
@@ -366,16 +415,13 @@ impl WsServer {
 
         // 启动踢下线监听任务
         // 监听来自其他地方的踢下线信号
-        let shared_clone = shared_tx.clone();
-        let user_id_clone = user_id.clone();
+        let kick_sender = outbound_tx.clone();
         let mut watch_task = tokio::spawn(async move {
             if notify_receiver.recv().await.is_none() {
-                info!("用户 {} 在平台 {:?} 被踢下线", user_id_clone, platform);
+                info!("用户在平台 {:?} 被踢下线", platform);
 
                 // 向客户端发送踢下线信号
-                if let Err(e) = shared_clone
-                    .write()
-                    .await
+                if let Err(e) = kick_sender
                     .send(Message::Close(Some(CloseFrame {
                         code: KNOCK_OFF_CODE,
                         reason: "账号在其他地方登录".into(),
@@ -390,16 +436,17 @@ impl WsServer {
         // 启动消息接收任务
         // 处理来自客户端的所有消息
         let cloned_hub = hub.clone();
-        let shared_tx = shared_tx.clone();
+        let pong_sender = outbound_tx.clone();
+        let pong_received = pong_alive.clone();
         let mut rec_task = tokio::spawn(async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 // 根据消息类型进行不同处理
                 match msg {
                     Message::Text(text) => {
                         // 处理JSON格式的文本消息
-                        let result = serde_json::from_str(&text);
-                        if result.is_err() {
-                            error!("JSON反序列化失败: {:?}；原始内容: {}", result.err(), text);
+                        let result = serde_json::from_str::<contract::proto::message::Msg>(&text);
+                        if let Err(e) = result {
+                            error!("JSON反序列化失败: {:?}；原始内容: {}", e, text);
                             continue;
                         }
 
@@ -411,19 +458,14 @@ impl WsServer {
                     }
                     Message::Ping(_) => {
                         // 响应客户端的ping消息
-                        if let Err(e) = shared_tx
-                            .write()
-                            .await
-                            .send(Message::Pong(Default::default()))
-                            .await
-                        {
-                            error!("回复ping消息失败: {:?}", e);
+                        if pong_sender.send(Message::Pong(Default::default())).await.is_err() {
+                            error!("回复ping消息失败，连接已不可用");
                             break;
                         }
                     }
                     Message::Pong(_) => {
-                        // 收到客户端的pong响应，连接正常
-                        info!("收到客户端pong响应，连接正常");
+                        // 收到客户端的pong响应：复位心跳计数，连接确认存活
+                        pong_received.store(true, Ordering::Relaxed);
                     }
                     Message::Close(_) => {
                         // 客户端主动关闭连接
@@ -438,20 +480,31 @@ impl WsServer {
             }
         });
 
-        // 等待任一任务完成，然后清理资源
+        // 等待任一任务完成，然后清理资源。
+        // 写任务退出意味着连接已不可写，同样需要终止其余任务。
         tokio::select! {
+            _ = (&mut writer_task) => {
+                info!("写任务结束，连接关闭");
+                ping_task.abort();
+                rec_task.abort();
+                watch_task.abort();
+            }
             _ = (&mut ping_task) => {
                 info!("心跳任务结束");
+                writer_task.abort();
                 rec_task.abort();
                 watch_task.abort();
             }
             _ = (&mut rec_task) => {
                 info!("消息接收任务结束");
+                // 接收端已结束（客户端断开/发来Close），未写出的帧直接丢弃
+                writer_task.abort();
                 ping_task.abort();
                 watch_task.abort();
             }
             _ = (&mut watch_task) => {
                 info!("踢下线监听任务结束");
+                writer_task.abort();
                 ping_task.abort();
                 rec_task.abort();
             }

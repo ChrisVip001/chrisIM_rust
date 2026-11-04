@@ -1,6 +1,6 @@
 use tracing::info;
 
-use runtime::config::ConfigLoader;
+
 use msg_gateway::ws_server::WsServer;
 
 /// msg-gateway 主程序入口
@@ -33,7 +33,6 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| panic!("无法从路径加载配置: {}", config_path));
     // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
     let config = std::sync::Arc::new(app_config.clone());
-    ConfigLoader::set_global(app_config);
 
     // 初始化日志和链路追踪系统
     // 根据配置判断是否启用分布式链路追踪

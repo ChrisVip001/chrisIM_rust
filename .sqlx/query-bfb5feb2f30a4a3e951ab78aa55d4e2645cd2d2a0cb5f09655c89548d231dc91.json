@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT \n                g.id,\n                g.name,\n                g.avatar_url,\n                m.role,\n                m.joined_at,\n                ms.remark,\n                ms.mute_notifications,\n                ms.nickname_in_group,\n                ms.is_top,\n                ms.recall_notification,\n                ms.show_nickname,\n                (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count\n            FROM groups g\n            LEFT JOIN group_members m ON g.id = m.group_id\n            LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id\n            WHERE m.user_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "role",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "joined_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 5,
+        "name": "remark",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "mute_notifications",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "nickname_in_group",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_top",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "recall_notification",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "show_nickname",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "member_count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "bfb5feb2f30a4a3e951ab78aa55d4e2645cd2d2a0cb5f09655c89548d231dc91"
+}

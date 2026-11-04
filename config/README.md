@@ -1,106 +1,42 @@
-# 全局配置加载器
+# 配置说明
 
-本项目实现了一个强大的配置系统，支持全局配置和服务特定配置的智能合并。
+配置只经 `runtime::config::AppConfig::from_file` 读取，再以构造参数注入各模块；
+不存在进程级全局单例，也不支持配置热重载（修改配置需重启进程）。
 
-## 特性
+## 文件
 
-- **分层配置**：支持全局配置和服务特定配置
-- **智能合并**：服务特定配置可以覆盖全局配置中的特定字段，而不需要复制全部配置
-- **全局单例**：使用静态全局配置单例，方便在代码任何地方访问
-- **配置热重载**：支持配置文件变更监控和自动重新加载（需启用 `dynamic-config` 特性）
-- **环境变量支持**：配置可以通过环境变量覆盖
+| 文件 | 用途 |
+|---|---|
+| `config.yaml` | 本地开发默认配置 |
+| `config-prod.yaml` | 生产环境配置样例 |
+| `filebeat/`、`logstash/` | 日志采集链路（`docker-compose.telemetry.yml` 挂载） |
+| `legacy/` | 配置中心时代遗留文件归档，不参与运行 |
 
-## 目录结构
-
-```
-config/
-  ├── config.yaml         # 全局配置文件
-  ├── services/           # 服务特定配置目录
-  │   ├── api-gateway.yaml
-  │   ├── user-service.yaml
-  │   ├── friend-service.yaml
-  │   ├── group-service.yaml
-  │   ├── msg-server.yaml
-  │   └── msg-gateway.yaml
-  ├── README.md           # 本文档
-  └── ...
-```
-
-## 使用方法
-
-### 1. 基本用法
-
-在服务启动时初始化配置：
+## 用法
 
 ```rust
-use common::config::{Component, ConfigLoader};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 初始化服务配置（自动合并全局配置和服务特定配置）
-    let mut loader = ConfigLoader::new(Component::UserServer);
-    let config = loader.load()?;
-    
-    // 使用配置
-    println!("服务器端口: {}", config.server.port);
-    println!("数据库连接: {}@{}", config.database.postgres.user, config.database.postgres.host);
-    
-    Ok(())
-}
+let config = std::sync::Arc::new(runtime::config::AppConfig::from_file(None)?);
+// 把 config 传给各服务的构造函数，例如 ServiceProxy::new(config.clone())
 ```
 
-### 2. 使用全局配置单例
+`from_file(None)` 会优先读取 `./config/config.yaml`；也可显式传入路径。
 
-初始化全局配置单例以便在代码的任何地方访问配置：
+## 敏感信息
 
-```rust
-// 在应用启动时初始化
-ConfigLoader::init_global()?;
+密钥不在配置文件中落盘，由以下环境变量覆盖（存在且非空时优先级更高）：
 
-// 在代码任何地方访问
-if let Some(config) = ConfigLoader::get_global() {
-    let redis_url = config.redis.url();
-    // ...
-}
-```
+| 环境变量 | 覆盖字段 |
+|---|---|
+| `OSS_ACCESS_KEY` | `oss.access_key` |
+| `OSS_SECRET_KEY` | `oss.secret_key` |
+| `SMS_SECRET_ID` | `sms.tencent.secret_id` |
+| `SMS_SECRET_KEY` | `sms.tencent.secret_key` |
+| `JWT_SECRET` | `gateway.auth.jwt.secret` |
 
-### 3. 监控配置文件变更
+## 关键配置项
 
-启用配置文件监控以支持配置热重载（需要 `dynamic-config` 特性）：
-
-```rust
-#[cfg(feature = "dynamic-config")]
-ConfigLoader::watch_config_changes(Component::UserServer)?;
-```
-
-当配置文件变更时，系统会自动重新加载配置并更新全局单例。
-
-### 4. 服务配置示例
-
-在 `config/services/` 目录下创建与服务对应的配置文件，只需要包含你想要覆盖的字段，例如：
-
-```yaml
-# config/services/user-service.yaml
-component: UserServer
-
-server:
-  port: 50002  # 覆盖全局配置中的端口
-
-database:
-  postgres:
-    user: user_service_user
-    password: user_service_password
-    database: user_db
-```
-
-## 开启动态配置监控
-
-在 `Cargo.toml` 中启用 `dynamic-config` 特性：
-
-```toml
-[dependencies]
-common = { path = "../common", features = ["dynamic-config"] }
-```
-
-## 贡献
-
-欢迎提交 Pull Request 以改进配置系统。 
+- `websocket.upstream_workers`：上行并行 worker 数（默认 8，组内保序）
+- `websocket.heartbeat_max_missed`：连续未收到 Pong 的心跳周期阈值（默认 2）
+- `kafka.topic_partitions` / `kafka.topic_replication`：主题分区/副本（默认 16/3，仅在创建主题时生效）
+- `kafka.consumer.parallelism`：消费端并行度
+- `validation.fail_open`：权限校验链路故障时是否放行（默认 false）

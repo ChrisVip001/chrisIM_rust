@@ -128,124 +128,40 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
     // 获取服务注册中心
     let service_registry = service_register_center(config);
 
-    let (name, host, port, tags, health_check) = match com {
-        Component::MessageServer => {
-            let name = sn::CHAT.to_string();
-            let host = config.rpc.chat.host.clone();
-            let port = config.rpc.chat.port;
-            let tags = config.rpc.chat.tags.clone();
-            let health_check = config.rpc.chat.health_check.as_ref().map(|hc| {
-                typos::HealthCheck {
-                    health_type: hc.health_type.clone(),
-                    name: hc.name.clone(),
-                    url: hc.url.clone(),
-                    interval: hc.interval.to_string(),
-                    timeout: hc.timeout.to_string(),
-                    deregister_after: hc.deregister_after.to_string(),
-                }
-            });
-            (name, host, port, tags, health_check)
-        }
-        Component::MessageGateway => {
-            let name = sn::WS.to_string();
-            let host = config.rpc.ws.host.clone();
-            let port = config.rpc.ws.port;
-            let tags = config.rpc.ws.tags.clone();
-            let health_check = config.rpc.ws.health_check.as_ref().map(|hc| {
-                typos::HealthCheck {
-                    health_type: hc.health_type.clone(),
-                    name: hc.name.clone(),
-                    url: hc.url.clone(),
-                    interval: hc.interval.to_string(),
-                    timeout: hc.timeout.to_string(),
-                    deregister_after: hc.deregister_after.to_string(),
-                }
-            });
-            (name, host, port, tags, health_check)
-        }
-        Component::UserServer => {
-            let name = config.rpc.user.name.clone();
-            let host = config.rpc.user.host.clone();
-            let port = config.rpc.user.port;
-            let tags = config.rpc.user.tags.clone();
-            let health_check = config.rpc.user.health_check.as_ref().map(|hc| {
-                typos::HealthCheck {
-                    health_type: hc.health_type.clone(),
-                    name: hc.name.clone(),
-                    url: hc.url.clone(),
-                    interval: hc.interval.to_string(),
-                    timeout: hc.timeout.to_string(),
-                    deregister_after: hc.deregister_after.to_string(),
-                }
-            });
-            (name, host, port, tags, health_check)
-        }
-        Component::RelationServer => {
-            // 模块化单体：用户/好友/群组同进程同端口，只注册一次。
-            // 监听地址沿用 rpc.user（字段名为历史遗留，语义已是 relation 服务）。
-            let name = sn::RELATION.to_string();
-            let host = config.rpc.user.host.clone();
-            let port = config.rpc.user.port;
-            let tags = config.rpc.user.tags.clone();
-            let health_check = config.rpc.user.health_check.as_ref().map(|hc| {
-                typos::HealthCheck {
-                    health_type: hc.health_type.clone(),
-                    name: hc.name.clone(),
-                    url: hc.url.clone(),
-                    interval: hc.interval.to_string(),
-                    timeout: hc.timeout.to_string(),
-                    deregister_after: hc.deregister_after.to_string(),
-                }
-            });
-            (name, host, port, tags, health_check)
-        }
-        Component::FriendServer => {
-            let name = config.rpc.friend.name.clone();
-            let host = config.rpc.friend.host.clone();
-            let port = config.rpc.friend.port;
-            let tags = config.rpc.friend.tags.clone();
-            let health_check = config.rpc.friend.health_check.as_ref().map(|hc| {
-                typos::HealthCheck {
-                    health_type: hc.health_type.clone(),
-                    name: hc.name.clone(),
-                    url: hc.url.clone(),
-                    interval: hc.interval.to_string(),
-                    timeout: hc.timeout.to_string(),
-                    deregister_after: hc.deregister_after.to_string(),
-                }
-            });
-            (name, host, port, tags, health_check)
-        }
-        Component::GroupServer => {
-            let name = config.rpc.group.name.clone();
-            let host = config.rpc.group.host.clone();
-            let port = config.rpc.group.port;
-            let tags = config.rpc.group.tags.clone();
-            let health_check = config.rpc.group.health_check.as_ref().map(|hc| {
-                typos::HealthCheck {
-                    health_type: hc.health_type.clone(),
-                    name: hc.name.clone(),
-                    url: hc.url.clone(),
-                    interval: hc.interval.to_string(),
-                    timeout: hc.timeout.to_string(),
-                    deregister_after: hc.deregister_after.to_string(),
-                }
-            });
-            (name, host, port, tags, health_check)
-        }
+    // 组件 → (RPC配置段, Consul服务名) 的映射表。
+    // 此前六个分支逐字重复构造注册信息；服务名来源有两种：
+    // - 用服务名常量（注册端与发现端共用同一组名字，见 service_names）
+    // - 取配置段自带名称（兼容历史 user/friend/group 配置项）
+    let (rpc, name) = match com {
+        Component::MessageServer => (&config.rpc.chat, sn::CHAT.to_string()),
+        Component::MessageGateway => (&config.rpc.ws, sn::WS.to_string()),
+        Component::UserServer => (&config.rpc.user, config.rpc.user.name.clone()),
+        // 模块化单体：用户/好友/群组同进程同端口，只注册一次。
+        // 监听地址沿用 rpc.user（字段名为历史遗留，语义已是 relation 服务）。
+        Component::RelationServer => (&config.rpc.user, sn::RELATION.to_string()),
+        Component::FriendServer => (&config.rpc.friend, config.rpc.friend.name.clone()),
+        Component::GroupServer => (&config.rpc.group, config.rpc.group.name.clone()),
         Component::All => {
-            // TODO 要完善
             return Err(Error::Internal("不支持注册所有服务".to_string()));
         }
     };
 
+    let health_check = rpc.health_check.as_ref().map(|hc| typos::HealthCheck {
+        health_type: hc.health_type.clone(),
+        name: hc.name.clone(),
+        url: hc.url.clone(),
+        interval: hc.interval.to_string(),
+        timeout: hc.timeout.to_string(),
+        deregister_after: hc.deregister_after.to_string(),
+    });
+
     // 构建服务注册信息
     let registration = typos::Registration {
-        id: format!("{}-{}-{}", name, host, port),
+        id: format!("{}-{}-{}", name, rpc.host, rpc.port),
         name,
-        host,
-        port,
-        tags,
+        host: rpc.host.clone(),
+        port: rpc.port,
+        tags: rpc.tags.clone(),
         check: health_check,
     };
 

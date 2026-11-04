@@ -95,10 +95,10 @@ gateway:
 
   # 认证配置
   auth:
-    # JWT配置
+    # JWT配置（密钥通过环境变量 JWT_SECRET 注入，严禁写入本文件）
     jwt:
       enabled: true
-      secret: "change_this_to_a_secure_random_string"
+      secret: ""
       issuer: "api-gateway"
       expiry_seconds: 86400  # 24小时
       refresh_expiry_seconds: 604800  # 7天
@@ -194,7 +194,7 @@ database:
     user: kelisi
     password: 123456
     database: rustim
-  xdb: ./ip2region.xdb
+  xdb: ./assets/ip2region.xdb
 
 # 消息存储配置（统一读扩散，一条消息恒定 1 行元数据）
 # 该段缺省时使用 MessageStorageConfig::default()，服务级 yaml 不参与覆盖。
@@ -210,7 +210,8 @@ message_storage:
 
 # 服务配置
 server:
-  host: 127.0.0.1
+  # 0.0.0.0 以便容器内可被端口映射访问；本地开发同样可用
+  host: 0.0.0.0
   port: 8000
   ws_lb_strategy: RoundRobin # Random, RoundRobin
   # TLS/HTTPS配置
@@ -233,6 +234,11 @@ server:
     tcp_nodelay: true          # 禁用Nagle算法
 
 
+# 消息发送权限校验配置
+validation:
+  # 校验服务（Redis缓存+关系服务RPC）故障时是否放行消息：false=拒绝（安全优先），true=放行（可用性优先）
+  fail_open: false
+
 # consul服务注册与发现配置
 service_center:
   host: 127.0.0.1   # "0.0.0.0" 在Docker中使用0.0.0.0绑定所有接口
@@ -250,6 +256,10 @@ websocket:
   tags:
     - websocket
     - http
+  # 上行消息处理worker数：按会话哈希分散到多个worker并行处理，组内保序
+  upstream_workers: 8
+  # 心跳死链判定阈值：连续N个心跳周期未收到Pong即断开连接（默认2，约60秒）
+  heartbeat_max_missed: 2
   health_check:
     health_type: "http"
     name: "websocket"
@@ -364,6 +374,10 @@ redis:
 
 # Kafka配置
 kafka:
+  # 消息主题分区数：决定消费端并行度上限，按 conversation_id 哈希分区保序
+  topic_partitions: 16
+  # 消息主题副本数：生产环境建议3（配合min.insync.replicas=2），自动收敛到不超过broker数
+  topic_replication: 3
   hosts:
     - 127.0.0.1:9092
   topic: rustIM-chat
@@ -377,6 +391,8 @@ kafka:
   consumer:
     auto_offset_reset: earliest # earliest, latest
     session_timeout: 20000
+    # 消费者并行度：同组内运行N个消费者，分区自动均衡分配
+    parallelism: 4
 
 # OSS配置
 oss:
@@ -384,8 +400,10 @@ oss:
   provider: cos  # 使用腾讯云COS
   # S3兼容存储(MinIO)配置 - 使用腾讯云COS时可以忽略这些配置
   endpoint: https://suixiangliao-im-1359819014.cos.ap-guangzhou.myqcloud.com/
-  access_key: AKIDV1KRPAh196qMhohPyNhqnUhpupjhZHm8  # 腾讯云的SecretId
-  secret_key: LYZNyNZdVCg7QXRGsywhEXgdUAe3HI6j  # 腾讯云的SecretKey
+  # 密钥严禁写入本文件，请通过环境变量注入：
+  #   OSS_ACCESS_KEY / OSS_SECRET_KEY
+  access_key: ""
+  secret_key: ""
   bucket: suixiangliao-im-1359819014
   avatar_bucket: rust-im-1359819014
   region: ap-guangzhou  # 腾讯云地域
@@ -396,8 +414,10 @@ oss:
 # 腾讯云短信配置
 sms:
   tencent:
-    secret_id: AKIDBXjhiYBboqtmTzLYaVHuStDcvJdrv0uf    # 替换为您的腾讯云SecretId
-    secret_key: fBYv79yaClDVaR7f3GLH3c2FH6h9QZXH       # 替换为您的腾讯云SecretKey
+    # 密钥严禁写入本文件，请通过环境变量注入：
+    #   SMS_SECRET_ID / SMS_SECRET_KEY
+    secret_id: ""
+    secret_key: ""
     app_id: 1400971247                                 # 替换为您的腾讯云短信应用ID
     sign_name: 蚂蚁密信App                              # 替换为您的短信签名名称
     template_id: 2381850                               # 替换为您的验证码短信模板ID

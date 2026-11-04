@@ -7,3 +7,5 @@ Cargo.lock
 .ci
 .cursor
 .codebuddy/
+# 运行时产物
+logs/

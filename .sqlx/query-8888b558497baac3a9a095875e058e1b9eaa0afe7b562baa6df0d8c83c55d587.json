@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        UPDATE groups\n                        SET announcement_id = NULL\n                        WHERE id = $1\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8888b558497baac3a9a095875e058e1b9eaa0afe7b562baa6df0d8c83c55d587"
+}

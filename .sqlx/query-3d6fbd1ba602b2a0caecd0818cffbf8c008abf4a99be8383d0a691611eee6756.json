@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT m.id, m.group_id, m.user_id, m.role, m.joined_at, \n                   u.username, u.nickname, u.avatar_url, m.is_muted\n            FROM group_members m\n            JOIN users u ON m.user_id = u.id\n            WHERE m.group_id = $1 AND m.user_id = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "role",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "joined_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 5,
+        "name": "username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_muted",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "3d6fbd1ba602b2a0caecd0818cffbf8c008abf4a99be8383d0a691611eee6756"
+}

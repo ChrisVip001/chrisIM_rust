@@ -1,0 +1,62 @@
+# Consul：服务注册与发现（业务服务启动即注册，全部通过它寻址）
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: consul
+  namespace: rustim
+spec:
+  serviceName: consul
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consul
+  template:
+    metadata:
+      labels:
+        app: consul
+    spec:
+      containers:
+        - name: consul
+          image: hashicorp/consul:1.18
+          ports:
+            - containerPort: 8500
+              name: http
+            - containerPort: 8301
+              name: serf
+          args: ["agent", "-server", "-bootstrap-expect=1", "-ui=false"]
+          readinessProbe:
+            httpGet:
+              path: /v1/status/leader
+              port: 8500
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/status/leader
+              port: 8500
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /consul/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+  namespace: rustim
+spec:
+  selector:
+    app: consul
+  ports:
+    - name: http
+      port: 8500
+      targetPort: 8500

@@ -42,19 +42,6 @@ services:
       timeout: 10s
       retries: 3
 
-  mongodb:
-    image: mongo:5
-    container_name: rustim_mongodb
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodb_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     container_name: rustim_zookeeper
@@ -92,4 +79,3 @@ services:
 
 volumes:
   postgres_data:
-  mongodb_data:

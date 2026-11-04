@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE group_announcements\n                SET is_pinned = 0, updated_at = $1\n                WHERE group_id = $2 AND id != $3 AND is_pinned = 1\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamp",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2b56fb8c6bf2086602f9e6d985d5005409cdad46b5e5079672b320005e807d4c"
+}

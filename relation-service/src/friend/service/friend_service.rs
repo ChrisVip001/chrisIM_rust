@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 use runtime::config::AppConfig;
-use runtime::grpc_client::base::get_rpc_client;
+use runtime::grpc_client::base::{get_rpc_client, service_names as sn};
 use contract::proto::message::chat_service_client::ChatServiceClient;
 use contract::proto::message::SendMsgRequest;
 use contract::proto::user::user_service_server::UserService;
@@ -38,7 +38,7 @@ impl FriendServiceImpl {
         config: &AppConfig,
     ) -> anyhow::Result<Self> {
         let chat_service_client =
-            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(config, "chat".to_string())
+            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(config, sn::CHAT.to_string())
                 .await?;
 
         // 初始化Redis缓存连接

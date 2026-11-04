@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ::sqlx::PgPool;
 
-use cache::Cache;
+use cache::SeqCache;
 use contract::{error::Error, proto::message::Msg};
 use runtime::config::AppConfig;
 
@@ -98,14 +98,14 @@ impl ReadSpreadRepo {
 #[derive(Debug)]
 pub struct MessageWriter {
     repo: Arc<ReadSpreadRepo>,
-    cache: Arc<dyn Cache>,
+    cache: Arc<dyn SeqCache>,
     inline_max_bytes: usize,
 }
 
 impl MessageWriter {
     pub fn new(
         repo: Arc<ReadSpreadRepo>,
-        cache: Arc<dyn Cache>,
+        cache: Arc<dyn SeqCache>,
         inline_max_bytes: usize,
     ) -> Self {
         Self {

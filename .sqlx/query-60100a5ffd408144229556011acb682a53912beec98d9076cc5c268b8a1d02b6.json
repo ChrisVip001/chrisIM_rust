@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE friend_relation\n            SET is_starred = $1, updated_at = $2\n            WHERE user_id = $3 AND friend_id = $4 AND status = 1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Timestamp",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "60100a5ffd408144229556011acb682a53912beec98d9076cc5c268b8a1d02b6"
+}

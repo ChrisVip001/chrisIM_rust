@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE users\n            SET \n                username = $1,\n                email = NULL,\n                password = $2,\n                nickname = '已注销用户',\n                avatar_url = NULL,\n                phone = $3,\n                address = NULL,\n                head_image = NULL,\n                head_image_thumb = NULL,\n                user_stat = 3,\n                updated_at = NOW()\n            WHERE id = $4\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa2357cfd0b2af8424fcd6c859466e1485022df772e9fc1b25795f497a6b7406"
+}

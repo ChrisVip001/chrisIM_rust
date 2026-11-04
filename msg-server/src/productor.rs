@@ -7,13 +7,11 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 use tonic::transport::Server;
 use tracing::{debug, error, info, warn};
 
-use cache::Cache;
+use cache::{RelationCache, UnreadCache};
 use runtime::grpc_client::base::get_rpc_client;
 use runtime::grpc_client::base::service_names as sn;
 use contract::proto::friend::friend_service_client::FriendServiceClient;
-use contract::proto::friend::{CheckFriendshipRequest, FriendRelationType, IsBlockedRequest};
 use contract::proto::group::group_service_client::GroupServiceClient;
-use contract::proto::group::{CheckMembershipRequest, GetGroupRequest};
 use contract::proto::message::chat_service_server::{ChatService, ChatServiceServer};
 use contract::proto::message::{
     DeleteMessagesRequest, DeleteMessagesResponse, ForwardMessageRequest, ForwardMessageResponse,
@@ -26,7 +24,7 @@ use runtime::service_discovery::LbWithServiceDiscovery;
 use runtime::config::{AppConfig, Component};
 use runtime::grpc::LoggingInterceptor;
 use contract::Error;
-use msg_storage::read_spread::{conversation_id_of, peer_of_single};
+use contract::types::conversation::{conversation_id_of, peer_of_single};
 use msg_storage::ReadSpreadRepo;
 
 use crate::kafka;
@@ -76,15 +74,23 @@ pub struct ChatRpcService {
     /// 读扩散仓储（会话、消息元数据、已读游标）
     read: Arc<ReadSpreadRepo>,
 
-    /// 缓存接口，用于获取用户序列号等信息
-    cache: Arc<dyn Cache>,
-    
+    /// 关系缓存（好友/黑名单校验），只依赖 RelationCache 窄接口
+    relation: Arc<dyn RelationCache>,
+
+    /// 未读计数缓存，只依赖 UnreadCache 窄接口
+    unread: Arc<dyn UnreadCache>,
+
     /// 好友服务客户端
     friend_client: FriendServiceClient<LbWithServiceDiscovery>,
-    
+
     /// 群组服务客户端
     /// 用于查询群组成员信息、处理群组相关操作
     group_client: GroupServiceClient<LbWithServiceDiscovery>,
+
+    /// 校验链路故障时是否放行（fail-open）
+    ///
+    /// false（默认）：故障即拒绝，安全优先；true：故障放行，可用性优先。
+    fail_open: bool,
 }
 
 impl ChatRpcService {
@@ -104,17 +110,21 @@ impl ChatRpcService {
         kafka: FutureProducer,
         topic: String,
         read: Arc<ReadSpreadRepo>,
-        cache: Arc<dyn Cache>,
+        relation: Arc<dyn RelationCache>,
+        unread: Arc<dyn UnreadCache>,
         friend_client: FriendServiceClient<LbWithServiceDiscovery>,
         group_client: GroupServiceClient<LbWithServiceDiscovery>,
+        fail_open: bool,
     ) -> Self {
         Self {
             kafka,
             topic,
             read,
-            cache,
+            relation,
+            unread,
             friend_client,
             group_client,
+            fail_open,
         }
     }
 
@@ -132,12 +142,8 @@ impl ChatRpcService {
         // 创建Kafka生产者（参数见 kafka 模块，与消费者侧共用同一套可靠投递配置）
         let producer = kafka::build_producer(config)?;
 
-        // 确保Kafka主题存在
-        kafka::ensure_topic(
-            &config.kafka.topic,
-            &config.kafka.hosts.join(","),
-            config.kafka.connect_timeout as u16,
-        )
+        // 确保Kafka主题存在（broker/超时/分区/副本由 kafka 模块从配置推导）
+        kafka::ensure_topic_for(config, &config.kafka.topic)
         .await
         .map_err(|e| Error::Internal(format!("确保Kafka主题存在失败: {}", e)))?;
 
@@ -150,9 +156,12 @@ impl ChatRpcService {
         info!("聊天RPC服务已注册到服务注册中心");
 
         // 初始化读扩散仓储与缓存
+        // 同一 Redis 实例按各模块的真实依赖收窄为领域 trait
         let read = Arc::new(ReadSpreadRepo::from_config(config).await?);
 
-        let cache = cache::cache(config).await;
+        let redis = cache::cache(config).await;
+        let relation: Arc<dyn RelationCache> = redis.clone();
+        let unread: Arc<dyn UnreadCache> = redis.clone();
 
         // 初始化好友和群组服务客户端
         // 用户/好友/群组是模块化单体，统一注册在 relation 服务名下
@@ -177,7 +186,7 @@ impl ChatRpcService {
         let logging_interceptor = LoggingInterceptor::new();
 
         // 创建聊天RPC服务实例并包装为gRPC服务
-        let chat_rpc = Self::new(producer, config.kafka.topic.clone(), read, cache, friend_client, group_client);
+        let chat_rpc = Self::new(producer, config.kafka.topic.clone(), read, relation, unread, friend_client, group_client, config.validation.fail_open);
         let service = ChatServiceServer::with_interceptor(chat_rpc, logging_interceptor);
 
         info!(
@@ -194,311 +203,13 @@ impl ChatRpcService {
                 .map_err(|e| Error::Internal(format!("解析服务器地址失败: {}", e)))?)
             .await
             .map_err(|e| Error::Internal(format!("启动gRPC服务器失败: {}", e)))?;
-        
-        Ok(())
-    }
-
-    /// 检查好友关系和拉黑状态
-    ///
-    /// # 参数
-    /// * `send_id` - 发送者ID
-    /// * `receiver_id` - 接收者ID
-    ///
-    /// # 返回值
-    /// * `Ok(true)` - 可以发送消息
-    /// * `Ok(false)` - 不能发送消息（被拉黑或非好友）
-    /// * `Err(Status)` - 检查失败
-    async fn check_friend_relation(&self, send_id: &str, receiver_id: &str) -> Result<bool, tonic::Status> {
-        let mut friend_client = self.friend_client.clone();
-        match friend_client.is_blocked(IsBlockedRequest {
-            user_id: receiver_id.to_string(),
-            blocked_user_id: send_id.to_string(),
-        }).await {
-            Ok(response) => {
-                let is_blocked = response.into_inner().is_blocked;
-                if is_blocked {
-                    debug!("用户 {} 已被 {} 拉黑（RPC确认），无法发送消息", send_id, receiver_id);
-                    return Ok(false);
-                }
-            }
-            Err(e) => {
-                error!("检查拉黑状态失败: {}", e);
-                return Err(tonic::Status::internal("检查拉黑状态失败"));
-            }
-        }
-        match friend_client.is_blocked(IsBlockedRequest {
-            blocked_user_id: receiver_id.to_string(),
-            user_id: send_id.to_string(),
-        }).await {
-            Ok(response) => {
-                let is_blocked = response.into_inner().is_blocked;
-                if is_blocked {
-                    debug!("用户 {} 已被 {} 拉黑（RPC确认），无法发送消息", receiver_id, send_id);
-                    return Ok(false);
-                }
-            }
-            Err(_) => {
-                // 对方是否把我拉黑不阻断发送，仅作参考
-            }
-        }
-
-        // 使用RPC调用检查好友关系
-        let mut friend_client = self.friend_client.clone();
-        match friend_client.check_friendship(CheckFriendshipRequest {
-            user_id: send_id.to_string(),
-            friend_id: receiver_id.to_string(),
-        }).await {
-            Ok(response) => {
-                let friendship_status = response.into_inner().status;
-                if friendship_status == FriendRelationType::IsFriend as i32 {
-                    debug!("用户 {} 和 {} 是好友关系（RPC确认）", send_id, receiver_id);
-                    Ok(true)
-                } else {
-                    debug!("用户 {} 和 {} 不是好友关系，好友状态: {}", send_id, receiver_id, friendship_status);
-                    Ok(false)
-                }
-            }
-            Err(e) => {
-                error!("检查好友关系失败: {}", e);
-                Err(tonic::Status::internal("检查好友关系失败"))
-            }
-        }
-    }
-
-    /// 检查群组成员身份
-    ///
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// * `group_id` - 群组ID
-    ///
-    /// # 返回值
-    /// * `Ok(true)` - 用户是群组成员
-    /// * `Ok(false)` - 用户不是群组成员
-    /// * `Err(Status)` - 检查失败
-    async fn check_group_membership(&self, user_id: &str, group_id: &str) -> Result<bool, tonic::Status> {
-        let mut group_client = self.group_client.clone();
-        match group_client.check_membership(CheckMembershipRequest {
-            group_id: group_id.to_string(),
-            user_id: user_id.to_string(),
-        }).await {
-            Ok(response) => {
-                let membership = response.into_inner();
-                Ok(membership.is_member)
-            }
-            Err(e) => {
-                error!("检查群组成员身份失败: {}", e);
-                Err(tonic::Status::internal("检查群组成员身份失败"))
-            }
-        }
-    }
-
-    /// 检查拉黑状态
-    ///
-    /// # 参数
-    /// * `user_id` - 用户ID
-    /// * `target_user_id` - 目标用户ID
-    ///
-    /// # 返回值
-    /// * `Ok(true)` - 被拉黑
-    /// * `Ok(false)` - 未被拉黑
-    /// * `Err(Status)` - 检查失败
-    async fn check_blocked_status(&self, user_id: &str, target_user_id: &str) -> Result<bool, tonic::Status> {
-        // 缓存未命中，使用RPC调用
-        let mut friend_client = self.friend_client.clone();
-        match friend_client.is_blocked(IsBlockedRequest {
-            user_id: user_id.to_string(),
-            blocked_user_id: target_user_id.to_string(),
-        }).await {
-            Ok(response) => {
-                let is_blocked = response.into_inner().is_blocked;
-                if is_blocked {
-                    debug!("用户 {} 已被 {} 拉黑（RPC确认）", target_user_id, user_id);
-                }
-                Ok(is_blocked)
-            }
-            Err(e) => {
-                error!("检查拉黑状态失败: {}", e);
-                Err(tonic::Status::internal("检查拉黑状态失败"))
-            }
-        }
-    }
-
-    /// 根据消息类型校验发送权限
-    ///
-    /// # 参数
-    /// * `msg` - 消息对象
-    ///
-    /// # 返回值
-    /// * `Ok(())` - 校验通过，可以发送
-    /// * `Err(Status)` - 校验失败，包含错误信息
-    async fn validate_message_permissions(&self, msg: &Msg) -> Result<(), tonic::Status> {
-        let msg_type = MsgType::try_from(msg.msg_type)
-            .map_err(|_| tonic::Status::invalid_argument("无效的消息类型"))?;
-
-        // 根据消息类型进行校验
-        match msg_type {
-            // 单聊消息需要校验好友关系
-            MsgType::SingleMsg => {
-                if !self.check_friend_relation(&msg.send_id, &msg.receiver_id).await? {
-                    return Err(tonic::Status::permission_denied("无法发送消息：用户不是好友或已被拉黑"));
-                }
-            }
-
-            // 群聊消息需要校验群是否存在和群组成员身份
-            MsgType::GroupMsg => {
-                // 检查群组是否存在
-                if !self.check_group_exists(&msg.group_id).await? {
-                    return Err(tonic::Status::permission_denied("无法发送消息：群组不存在"));
-                }
-
-                // 对于群聊消息，receiver_id 应该是群组ID
-                let group_id = if !msg.group_id.is_empty() {
-                    &msg.group_id
-                } else {
-                    &msg.receiver_id
-                };
-                
-                if !self.check_group_membership(&msg.send_id, group_id).await? {
-                    return Err(tonic::Status::permission_denied("无法发送消息：用户不是群组成员"));
-                }
-            }
-
-            // 好友相关消息类型（好友申请、响应等）需要检查拉黑状态
-            MsgType::FriendApplyReq | MsgType::FriendApplyResp => {
-                // 检查是否被拉黑（不检查好友关系，因为这些消息可能在非好友间发送）
-                if self.check_blocked_status(&msg.receiver_id, &msg.send_id).await? {
-                    return Err(tonic::Status::permission_denied("无法发送消息：已被对方拉黑"));
-                }
-            }
-
-            // 群组相关消息需要校验群组成员身份
-            // MsgType::GroupInvitation | MsgType::GroupInviteNew | MsgType::GroupUpdate => {
-            //     let group_id = if !msg.group_id.is_empty() && msg.group_id != ""{
-            //         &msg.group_id
-            //     } else {
-            //         &msg.receiver_id
-            //     };
-            //     
-            //     if !self.check_group_membership(&msg.send_id, group_id).await? {
-            //         return Err(tonic::Status::permission_denied("无法发送消息：用户不是群组成员"));
-            //     }
-            // }
-
-            // 通话相关消息需要校验好友关系
-            MsgType::SingleCallInvite | MsgType::RejectSingleCall | MsgType::AgreeSingleCall |
-            MsgType::SingleCallInviteNotAnswer | MsgType::SingleCallInviteCancel |
-            MsgType::SingleCallOffer | MsgType::Hangup | MsgType::ConnectSingleCall |
-            MsgType::Candidate => {
-                if !self.check_friend_relation(&msg.send_id, &msg.receiver_id).await? {
-                    return Err(tonic::Status::permission_denied("无法发起通话：用户不是好友或已被拉黑"));
-                }
-            }
-
-            // 系统消息和其他特殊消息类型暂不校验
-            _ => {
-                debug!("消息类型 {:?} 无需权限校验", msg_type);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// 检查群组是否存在
-    ///
-    /// # 参数
-    /// * `group_id` - 群组ID
-    ///
-    /// # 返回值
-    /// * `Ok(true)` - 群组存在
-    /// * `Ok(false)` - 群组不存在
-    /// * `Err(Status)` - 检查失败
-    async fn check_group_exists(&self, group_id: &str) -> Result<bool, tonic::Status> {
-        // 使用RPC调用检查群组是否存在
-        let mut group_client = self.group_client.clone();
-        match group_client.get_group(GetGroupRequest {
-            group_id: group_id.to_string(),
-        }).await {
-            Ok(_) => {
-                debug!("群组 {} 存在（RPC确认）", group_id);
-                Ok(true)
-            }
-            Err(e) => {
-                if e.code() == tonic::Code::NotFound {
-                    debug!("群组 {} 不存在（RPC确认）", group_id);
-                    Ok(false)
-                } else {
-                    error!("检查群组存在性失败: {}", e);
-                    Err(tonic::Status::internal("检查群组存在性失败"))
-                }
-            }
-        }
-    }
-
-    /// 检查消息是否允许转发
-    async fn is_message_forwardable(&self, msg: &Msg) -> Result<bool, tonic::Status> {
-        let msg_type = MsgType::try_from(msg.msg_type)
-            .map_err(|_| tonic::Status::invalid_argument("无效的消息类型"))?;
-
-        // 检查消息类型是否允许转发
-        match msg_type {
-            // 允许转发的消息类型
-            MsgType::SingleMsg | MsgType::GroupMsg => {
-                // 检查消息是否已被撤回
-                if msg.is_revoked {
-                    return Ok(false);
-                }
-                Ok(true)
-            }
-            
-            // 不允许转发的消息类型
-            MsgType::FriendApplyReq | MsgType::FriendApplyResp |
-            MsgType::GroupInvitation | MsgType::GroupDismiss |
-            MsgType::GroupMemberExit | MsgType::GroupRemoveMember |
-            MsgType::SingleCallInvite | MsgType::RejectSingleCall |
-            MsgType::AgreeSingleCall | MsgType::SingleCallInviteNotAnswer |
-            MsgType::SingleCallInviteCancel | MsgType::SingleCallOffer |
-            MsgType::Hangup | MsgType::ConnectSingleCall | MsgType::Candidate |
-            MsgType::Read => {
-                Ok(false)
-            }
-            
-            // 其他消息类型默认不允许转发
-            _ => {
-                debug!("消息类型 {:?} 默认不允许转发", msg_type);
-                Ok(false)
-            }
-        }
-    }
-
-    /// 检查转发到用户的权限
-    async fn check_forward_to_user_permission(&self, sender_id: &str, target_user_id: &str) -> Result<(), tonic::Status> {
-        // 检查好友关系
-        if !self.check_friend_relation(sender_id, target_user_id).await? {
-            return Err(tonic::Status::permission_denied("无法转发：用户不是好友或已被拉黑"));
-        }
-        Ok(())
-    }
-
-    /// 检查转发到群组的权限
-    async fn check_forward_to_group_permission(&self, sender_id: &str, target_group_id: &str) -> Result<(), tonic::Status> {
-        // 检查群组是否存在
-        if !self.check_group_exists(target_group_id).await? {
-            return Err(tonic::Status::permission_denied("无法转发：群组不存在"));
-        }
-
-        // 检查用户是否是群组成员
-        if !self.check_group_membership(sender_id, target_group_id).await? {
-            return Err(tonic::Status::permission_denied("无法转发：用户不是群组成员"));
-        }
-
-        // TODO: 可以添加更多群组权限检查，如：
-        // - 检查用户是否被禁言
-        // - 检查群组是否允许转发消息
-        // - 检查群组设置等
 
         Ok(())
     }
 }
+
+/// 消息发送权限校验（拆分至独立子模块，关注点：「能不能发」）
+mod validation;
 
 /// 实现gRPC的ChatService trait
 /// 提供消息发送的具体业务逻辑
@@ -673,7 +384,7 @@ impl ChatService for ChatRpcService {
         let count = (before - after).max(0) as i32;
 
         if let Err(e) = self
-            .cache
+            .unread
             .unread_count_remove(&req.user_id, &req.conversation_id)
             .await
         {
@@ -846,7 +557,7 @@ impl ChatService for ChatRpcService {
             };
 
             if let Err(e) = self
-                .cache
+                .unread
                 .unread_count_set(&req.user_id, &conv_id, &unread)
                 .await
             {
@@ -1271,5 +982,70 @@ impl ChatService for ChatRpcService {
             forward_count: success_count,
             error: error_message,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contract::proto::message::{Msg, MsgType};
+
+    #[test]
+    fn fill_single_receiver_resolves_peer() {
+        // 单聊：会话 ID 反推对端，补齐 receiver_id
+        let mut messages = vec![Msg {
+            send_id: "u1".into(),
+            receiver_id: String::new(),
+            msg_type: MsgType::SingleMsg as i32,
+            ..Default::default()
+        }];
+        fill_single_receiver(&mut messages, "d:u1:u2", "u1");
+        assert_eq!(messages[0].receiver_id, "u2");
+
+        // 视角反转：对端仍是 u1
+        let mut messages = vec![Msg {
+            send_id: "u2".into(),
+            receiver_id: String::new(),
+            msg_type: MsgType::SingleMsg as i32,
+            ..Default::default()
+        }];
+        fill_single_receiver(&mut messages, "d:u1:u2", "u2");
+        assert_eq!(messages[0].receiver_id, "u1");
+    }
+
+    #[test]
+    fn fill_single_receiver_skips_group_and_explicit_receiver() {
+        // 群聊会话：不反推 receiver_id（群消息由 group_id 定位会话）
+        let mut messages = vec![Msg {
+            send_id: "u1".into(),
+            receiver_id: String::new(),
+            msg_type: MsgType::GroupMsg as i32,
+            ..Default::default()
+        }];
+        fill_single_receiver(&mut messages, "g:g1", "u1");
+        assert_eq!(messages[0].receiver_id, "");
+
+        // 已有 receiver_id 的消息不被覆盖
+        let mut messages = vec![Msg {
+            send_id: "u1".into(),
+            receiver_id: "keep".into(),
+            msg_type: MsgType::SingleMsg as i32,
+            ..Default::default()
+        }];
+        fill_single_receiver(&mut messages, "d:u1:u2", "u1");
+        assert_eq!(messages[0].receiver_id, "keep");
+    }
+
+    #[test]
+    fn fill_single_receiver_ignores_invalid_conversation() {
+        // 非法会话 ID（无对端可解析）：保持原样，不 panic
+        let mut messages = vec![Msg {
+            send_id: "u1".into(),
+            receiver_id: String::new(),
+            msg_type: MsgType::SingleMsg as i32,
+            ..Default::default()
+        }];
+        fill_single_receiver(&mut messages, "g:g1", "u1");
+        assert_eq!(messages[0].receiver_id, "");
     }
 }

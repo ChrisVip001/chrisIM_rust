@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT \n                f.id, \n                f.user_id, \n                f.friend_id, \n                f.message, \n                f.status, \n                f.created_at, \n                f.updated_at, \n                f.reject_reason,\n                u.username as friend_username,\n                u.nickname as friend_nickname,\n                u.avatar_url as friend_avatar_url,\n                -- 如果是好友关系，查询好友备注\n                (CASE \n                    WHEN EXISTS(\n                        SELECT 1 FROM friend_relation \n                        WHERE (user_id = $1 AND friend_id = CASE \n                                WHEN f.user_id = $1 THEN f.friend_id\n                                ELSE f.user_id\n                            END)\n                    ) THEN \n                        (SELECT remark FROM friend_relation \n                         WHERE user_id = $1 AND friend_id = CASE \n                                WHEN f.user_id = $1 THEN f.friend_id\n                                ELSE f.user_id\n                            END)\n                    ELSE NULL\n                END) as friend_remark\n            FROM friendships f\n            LEFT JOIN users u ON (\n                CASE \n                    WHEN f.user_id = $1 THEN f.friend_id = u.id\n                    ELSE f.user_id = u.id\n                END\n            )\n            WHERE f.friend_id = $1 OR f.user_id = $1\n            ORDER BY f.created_at DESC\n            LIMIT $2 OFFSET $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "friend_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "message",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 7,
+        "name": "reject_reason",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "friend_username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "friend_nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "friend_avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 11,
+        "name": "friend_remark",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "1bbbdbbe085b3f8b5496f57f3cceeaa0e0945807b81a75a931106dae866dc679"
+}

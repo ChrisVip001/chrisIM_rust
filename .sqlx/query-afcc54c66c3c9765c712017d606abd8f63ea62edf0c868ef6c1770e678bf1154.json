@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, group_id, user_id, mute_notifications, nickname_in_group, updated_at, remark, is_top, recall_notification, show_nickname\n            FROM group_member_settings\n            WHERE user_id = $1 AND group_id = ANY($2)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "mute_notifications",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "nickname_in_group",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 6,
+        "name": "remark",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "is_top",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "recall_notification",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "show_nickname",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "afcc54c66c3c9765c712017d606abd8f63ea62edf0c868ef6c1770e678bf1154"
+}

@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT u.id as friend_id, u.username, u.nickname, u.avatar_url, \n                   fr.created_at as friendship_created_at, fr.remark as remark\n            FROM friend_group_relation gr\n            JOIN users u ON gr.friend_id = u.id\n            JOIN friend_relation fr ON (fr.user_id = gr.user_id AND fr.friend_id = gr.friend_id)\n            WHERE gr.group_id = $1 AND gr.user_id = $2\n            ORDER BY fr.created_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "friend_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "avatar_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "friendship_created_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 5,
+        "name": "remark",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "08894ed2b4960b412f8c503f61495d47b1bd6da626f794eac6e96fc9d34036a8"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO user_blacklist (id, user_id, blocked_user_id, reason, created_at)\n            VALUES ($1, $2, $3, $4, $5)\n            ON CONFLICT (user_id, blocked_user_id) \n            DO UPDATE SET reason = $4, created_at = $5\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9a15cc2d1266218a1090a3105aa9539df3c83ea30a0e32793257bc7df0c8af03"
+}

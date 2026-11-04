@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use runtime::config::{AppConfig, Component, ConfigLoader};
+use runtime::config::{AppConfig, Component};
 use runtime::grpc::LoggingInterceptor;
 use runtime::grpc_client::base::{register_service, service_register_center};
 use contract::proto::friend::friend_service_server::FriendServiceServer;
@@ -43,7 +43,6 @@ async fn main() -> Result<()> {
         .expect(&format!("无法从路径加载配置: {}", config_path));
     // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
     let config = std::sync::Arc::new(app_config.clone());
-    ConfigLoader::set_global(app_config);
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {

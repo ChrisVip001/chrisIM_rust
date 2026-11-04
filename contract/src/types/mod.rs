@@ -1,5 +1,6 @@
 use tonic::Status;
 
+pub mod conversation;
 mod friend;
 mod group;
 pub mod msg;

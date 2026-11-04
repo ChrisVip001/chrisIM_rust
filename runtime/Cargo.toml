@@ -40,7 +40,7 @@ rand = { workspace = true }
 argon2 = "0.5.3"
 
 config = { workspace = true, features = ["yaml", "toml", "json"] }
-notify = { version = "8.0.0", optional = true }
+
 
 rustls = "0.23.26"
 hmac = "0.12.1"
@@ -61,7 +61,6 @@ ab_glyph = "0.2"
 
 [features]
 default = []
-dynamic-config = ["notify"]
 # 分布式链路追踪（默认关闭：opentelemetry-otlp 0.13 会引入旧版 tonic 0.9 ->
 # axum 0.6 -> hyper 0.14 -> h2 0.3，命中 RUSTSEC-2026-0258）
 telemetry = ["dep:opentelemetry", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]

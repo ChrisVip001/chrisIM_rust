@@ -7,12 +7,13 @@ use rdkafka::producer::FutureProducer;
 use rdkafka::{ClientConfig, Message, Offset};
 use tracing::{debug, error, info, warn};
 
-use cache::Cache;
+use cache::RelationCache;
 use runtime::config::AppConfig;
 use contract::error::Error;
 use contract::proto::message::{GroupMemSeq, Msg, MsgRead, MsgType};
 use contract::types::msg::MsgType2;
-use msg_storage::read_spread::{conversation_id_of, MsgMetaRepo};
+use contract::types::conversation::conversation_id_of;
+use msg_storage::read_spread::MsgMetaRepo;
 use msg_storage::{MessageWriter, ReadSpreadRepo};
 
 use runtime::grpc_client::base::service_names as sn;
@@ -63,7 +64,7 @@ const DEAD_LETTER_SUFFIX: &str = ".dlq";
 /// 1. 从Kafka消息队列消费消息
 /// 2. 解析和验证消息格式
 /// 3. 分配消息序列号
-/// 4. 将消息存储到数据库（PostgreSQL + MongoDB）
+/// 4. 将消息存储到数据库（PostgreSQL，读扩散模型）
 /// 5. 推送消息到在线用户
 /// 6. 处理群聊消息的成员分发
 /// 7. 处理已读消息状态更新
@@ -92,7 +93,7 @@ pub struct ConsumerService {
     pusher: Arc<dyn Pusher>,
 
     /// 缓存接口
-    cache: Arc<dyn Cache>,
+    cache: Arc<dyn RelationCache>,
 
     /// 群组服务客户端
     group_client: GroupServiceClient<LbWithServiceDiscovery>,
@@ -110,42 +111,21 @@ pub struct ConsumerService {
 impl ConsumerService {
     /// 创建新的消息消费者服务实例
     pub async fn new(config: &AppConfig) -> Result<Self, Error> {
-        // 关闭自动提交：位点必须由业务处理结果决定
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("group.id", &config.kafka.group)
-            .set("bootstrap.servers", config.kafka.hosts.join(","))
-            .set("enable.partition.eof", "false")
-            .set("session.timeout.ms", config.kafka.consumer.session_timeout.to_string())
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", &config.kafka.consumer.auto_offset_reset)
-            .create()
-            .map_err(|e| Error::Internal(format!("Kafka消费者创建失败: {}", e)))?;
-
         // 先确保主题存在再订阅：Kafka 重启后元数据可能丢失，
         // 若先订阅会在启动瞬间刷 UnknownTopicOrPartition 错误
-        let brokers = config.kafka.hosts.join(",");
-        kafka::ensure_topic(
-            &config.kafka.topic,
-            &brokers,
-            config.kafka.connect_timeout as u16,
-        )
+        kafka::ensure_topic_for(config, &config.kafka.topic)
         .await
         .map_err(|e| Error::Internal(format!("确保Kafka主题存在失败: {}", e)))?;
 
-        consumer
-            .subscribe(&[&config.kafka.topic])
-            .map_err(|e| Error::Internal(format!("无法订阅Kafka主题 '{}': {}", config.kafka.topic, e)))?;
+        let consumer = Self::build_consumer(config)?;
 
         info!("Kafka消费者已初始化（手动提交），订阅主题: {}", config.kafka.topic);
 
         // 死信主题与生产者：处理失败的消息最终落到这里，而不是被静默丢弃
         let dead_letter_topic = format!("{}{}", config.kafka.topic, DEAD_LETTER_SUFFIX);
         let dlq_producer = kafka::build_producer(config)?;
-        kafka::ensure_topic(
-            &dead_letter_topic,
-            &brokers,
-            config.kafka.connect_timeout as u16,
-        )
+        // 死信主题与主主题分区对齐，重放时可按分区一一对应回主主题
+        kafka::ensure_topic_for(config, &dead_letter_topic)
         .await
         .map_err(|e| Error::Internal(format!("确保死信主题存在失败: {}", e)))?;
 
@@ -154,11 +134,13 @@ impl ConsumerService {
         let pusher = push_service(config).await?;
         // 读扩散仓储：独立连接池，避免历史拉取挤占消息写入
         let read = Arc::new(ReadSpreadRepo::from_config(config).await?);
-        let cache = cache::cache(config).await;
+        // 同一 Redis 实例：writer 用 SeqCache，本服务用 RelationCache
+        let redis = cache::cache(config).await;
+        let seq_cache: Arc<dyn cache::SeqCache> = redis.clone();
         // 号段分配依赖缓存：热群不再对 conversation 行加锁
         let writer = Arc::new(MessageWriter::new(
             read.clone(),
-            cache.clone(),
+            seq_cache,
             config.message_storage.inline_content_max_bytes,
         ));
         let group_client =
@@ -172,11 +154,52 @@ impl ConsumerService {
             read,
             writer,
             pusher,
-            cache,
+            cache: redis,
             group_client,
             dlq_producer,
             dead_letter_topic,
             topic: config.kafka.topic.clone(),
+        })
+    }
+
+    /// 构建并订阅主主题的消费者（关闭自动提交，位点由业务结果决定）
+    fn build_consumer(config: &AppConfig) -> Result<StreamConsumer, Error> {
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("group.id", &config.kafka.group)
+            .set("bootstrap.servers", config.kafka.hosts.join(","))
+            .set("enable.partition.eof", "false")
+            .set("session.timeout.ms", config.kafka.consumer.session_timeout.to_string())
+            .set("enable.auto.commit", "false")
+            .set("auto.offset.reset", &config.kafka.consumer.auto_offset_reset)
+            .create()
+            .map_err(|e| Error::Internal(format!("Kafka消费者创建失败: {}", e)))?;
+
+        consumer
+            .subscribe(&[&config.kafka.topic])
+            .map_err(|e| Error::Internal(format!("无法订阅Kafka主题 '{}': {}", config.kafka.topic, e)))?;
+
+        Ok(consumer)
+    }
+
+    /// 派生共享依赖、独立订阅的兄弟消费者
+    ///
+    /// 同一消费组内的多个消费者由 Kafka 自动分配不同分区，
+    /// 以此获得跨批次的真并行；每个消费者内部仍保持
+    /// 「批内组间并行、组内串行保序」的处理语义。
+    /// 复用读扩散仓储、缓存、推送器等重资源，新增开销仅一条消费连接。
+    pub async fn fork(&self, config: &AppConfig) -> Result<Self, Error> {
+        let consumer = Self::build_consumer(config)?;
+        info!("已派生兄弟消费者加入消费组: {}", config.kafka.group);
+        Ok(Self {
+            consumer,
+            read: self.read.clone(),
+            writer: self.writer.clone(),
+            pusher: self.pusher.clone(),
+            cache: self.cache.clone(),
+            group_client: self.group_client.clone(),
+            dlq_producer: self.dlq_producer.clone(),
+            dead_letter_topic: self.dead_letter_topic.clone(),
+            topic: self.topic.clone(),
         })
     }
 
@@ -637,9 +660,31 @@ fn retry_backoff(attempt: u32, max_attempts: u32, base: Duration) -> Option<Dura
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use contract::proto::message::Msg;
+    use contract::proto::message::{Msg, MsgType};
     use msg_storage::read_spread::MsgEntry;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn payload_group_uses_the_shared_conversation_key() {
+        // 跨 crate 契约：Kafka JSON 回读后的分组键，必须与发送端分区键、
+        // 网关上行保序键来自同一推导（conversation_id_of）
+        let single = Msg {
+            send_id: "u2".into(),
+            receiver_id: "u1".into(),
+            msg_type: MsgType::SingleMsg as i32,
+            ..Default::default()
+        };
+        let group = Msg {
+            send_id: "u2".into(),
+            group_id: "g1".into(),
+            msg_type: MsgType::GroupMsg as i32,
+            ..Default::default()
+        };
+        for msg in [single, group] {
+            let payload = serde_json::to_string(&msg).unwrap();
+            assert_eq!(ConsumerService::group_of_payload(&payload), conversation_id_of(&msg));
+        }
+    }
 
     /// 只实现幂等闸门用得到的 `get`，其余方法不应被调用
     #[derive(Debug)]

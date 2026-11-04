@@ -183,77 +183,12 @@ pub trait UserConversationRepo: Sync + Send + Debug {
 // ---------------------------------------------------------------------------
 // 会话 ID 生成
 // ---------------------------------------------------------------------------
-
-/// 单聊会话 ID：`d:{较小的 user_id}:{较大的 user_id}`
-///
-/// 两侧调用必须得到同一结果，因此按字典序排序而不是「发送者/接收者」。
-pub fn single_conversation_id(a: &str, b: &str) -> String {
-    if a <= b {
-        format!("d:{}:{}", a, b)
-    } else {
-        format!("d:{}:{}", b, a)
-    }
-}
-
-/// 群聊会话 ID：`g:{group_id}`
-pub fn group_conversation_id(group_id: &str) -> String {
-    format!("g:{}", group_id)
-}
-
-/// 根据消息类型推导会话 ID
-///
-/// 群操作类消息（入群、退群、解散等）同样归属群会话。
-pub fn conversation_id_of(msg: &Msg) -> String {
-    let msg_type = MsgType::try_from(msg.msg_type).unwrap_or(MsgType::SingleMsg);
-    match msg_type {
-        MsgType::GroupMsg
-        | MsgType::GroupInvitation
-        | MsgType::GroupInviteNew
-        | MsgType::GroupMemberExit
-        | MsgType::GroupRemoveMember
-        | MsgType::GroupDismiss
-        | MsgType::GroupDismissOrExitReceived
-        | MsgType::GroupInvitationReceived
-        | MsgType::GroupUpdate => {
-            if msg.group_id.is_empty() {
-                group_conversation_id(&msg.receiver_id)
-            } else {
-                group_conversation_id(&msg.group_id)
-            }
-        }
-        _ => single_conversation_id(&msg.send_id, &msg.receiver_id),
-    }
-}
-
-/// 会话是单聊还是群聊
-pub fn conv_type_of(msg: &Msg) -> i16 {
-    let msg_type = MsgType::try_from(msg.msg_type).unwrap_or(MsgType::SingleMsg);
-    match msg_type {
-        MsgType::GroupMsg
-        | MsgType::GroupInvitation
-        | MsgType::GroupInviteNew
-        | MsgType::GroupMemberExit
-        | MsgType::GroupRemoveMember
-        | MsgType::GroupDismiss
-        | MsgType::GroupDismissOrExitReceived
-        | MsgType::GroupInvitationReceived
-        | MsgType::GroupUpdate => 2,
-        _ => 1,
-    }
-}
-
-/// 从单聊会话 ID 解析出对端用户
-pub fn peer_of_single(conversation_id: &str, user_id: &str) -> Option<String> {
-    let rest = conversation_id.strip_prefix("d:")?;
-    let (a, b) = rest.split_once(':')?;
-    if a == user_id {
-        Some(b.to_string())
-    } else if b == user_id {
-        Some(a.to_string())
-    } else {
-        None
-    }
-}
+// 会话键同时决定 Kafka 分区、落库序号与网关上行保序，推导只保留一份实现：
+// 放在 contract（所有 crate 共享），此处 re-export 维持既有调用路径。
+pub use contract::types::conversation::{
+    conv_type_of, conversation_id_of, group_conversation_id, peer_of_single,
+    single_conversation_id,
+};
 
 #[cfg(test)]
 mod tests {

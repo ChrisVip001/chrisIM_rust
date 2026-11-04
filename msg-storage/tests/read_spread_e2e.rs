@@ -19,7 +19,7 @@ use msg_storage::{MessageWriter, ReadSpreadRepo};
 use runtime::config::AppConfig;
 
 fn load_config() -> AppConfig {
-    // 用 include_str 而不是 ConfigLoader：测试的工作目录是 crate 根，
+    // 用 include_str 而不是运行时配置文件查找：测试的工作目录是 crate 根，
     // 而配置文件在仓库根，靠当前目录找会失败。
     Cfg::builder()
         .add_source(File::from_str(

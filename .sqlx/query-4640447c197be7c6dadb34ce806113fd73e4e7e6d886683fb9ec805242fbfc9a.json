@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO group_settings (group_id, allow_member_friendship, join_approval_required, \n                                       only_admin_can_invite, only_admin_can_modify, updated_at, all_member_muted,  notify_member_join)\n            VALUES ($1, $2, $3, $4, $5, $6,  $7, $8)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Timestamp",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4640447c197be7c6dadb34ce806113fd73e4e7e6d886683fb9ec805242fbfc9a"
+}

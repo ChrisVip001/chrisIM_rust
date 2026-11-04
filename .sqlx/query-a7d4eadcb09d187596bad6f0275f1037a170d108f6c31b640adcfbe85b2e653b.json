@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    UPDATE friend_relation\n                    SET status = 1, updated_at = $1\n                    WHERE id = $2\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamp",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a7d4eadcb09d187596bad6f0275f1037a170d108f6c31b640adcfbe85b2e653b"
+}

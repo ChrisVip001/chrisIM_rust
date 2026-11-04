@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT COUNT(*) as count\n                FROM groups g\n                JOIN group_members m ON g.id = m.group_id\n                WHERE m.user_id = $1\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2ab632fe29e307a71f21b53a5a1c77c757f8bdcaa1f2ed7469f5f3f7b7d6c5b2"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO group_member_settings \n            (id, group_id, user_id, mute_notifications, nickname_in_group, updated_at, remark, is_top, recall_notification, show_nickname)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Varchar",
+        "Timestamp",
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d22f11a1620d8099342e40fdd5671781c565a246e5a1a5fb3c710fe635872c01"
+}

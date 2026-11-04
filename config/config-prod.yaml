@@ -194,7 +194,7 @@ database:
     user: kelisi
     password: 123456
     database: rustim
-  xdb: ./ip2region.xdb
+  xdb: ./assets/ip2region.xdb
 
 
 # 服务配置

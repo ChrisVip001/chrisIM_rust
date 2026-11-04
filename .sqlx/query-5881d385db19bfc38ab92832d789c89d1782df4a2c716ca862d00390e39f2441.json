@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT COUNT(*) as count\n                FROM groups g\n                JOIN group_members m ON g.id = m.group_id\n                LEFT JOIN group_member_settings ms ON g.id = ms.group_id AND m.user_id = ms.user_id\n                WHERE m.user_id = $1\n                AND (g.name ILIKE $2 OR g.description ILIKE $2 OR ms.remark ILIKE $2)\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5881d385db19bfc38ab92832d789c89d1782df4a2c716ca862d00390e39f2441"
+}
