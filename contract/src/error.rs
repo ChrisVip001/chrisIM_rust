@@ -43,9 +43,6 @@ pub enum Error {
     #[error("数据库错误: {0}")]
     Database(#[from] sqlx::Error),
     
-    #[error("mongodb错误: {0}")]
-    MongoDB(#[from] mongodb::error::Error),
-
     #[error("Redis错误: {0}")]
     Redis(String),
 

@@ -111,8 +111,8 @@ pub fn setup_panic_hook() {
 /// 
 /// # 示例
 /// ```
-/// use common::logging;
-/// 
+/// use runtime::logging;
+///
 /// fn main() -> anyhow::Result<()> {
 ///     // 使用默认配置初始化日志
 ///     logging::init()?;
@@ -364,9 +364,9 @@ fn cleanup_old_log_files(directory: &str, filename_prefix: &str, max_files: usiz
 /// * `Result<()>` - 成功或失败的结果
 /// 
 /// # 示例
-/// ```
-/// use common::config::AppConfig;
-/// use common::logging;
+/// ```no_run
+/// use runtime::config::AppConfig;
+/// use runtime::logging;
 /// 
 /// fn main() -> anyhow::Result<()> {
 ///     let config = AppConfig::new()?;

@@ -1,9 +1,6 @@
-/// PostgreSQL数据库相关实现模块
-/// 包含消息存储和序列号管理的PostgreSQL实现
+/// PostgreSQL 存储实现
+///
+/// 统一读扩散：会话序号、消息元数据与正文、用户已读游标。
+mod read_spread;
 
-mod message;
-mod seq;
-mod test;
-
-pub(crate) use message::*;
-pub(crate) use seq::*;
+pub(crate) use read_spread::*;

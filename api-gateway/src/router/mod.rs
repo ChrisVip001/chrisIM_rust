@@ -15,6 +15,7 @@ use runtime::{
     config::AppConfig,
     configs::routes_config::RouteRule,
     grpc_client::base::get_rpc_client,
+    grpc_client::base::service_names as sn,
     service_discovery::LbWithServiceDiscovery,
 };
 use oss::{oss, BucketType};
@@ -80,7 +81,7 @@ pub async fn build_routes(
     // 创建用户服务客户端
     let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
         &config,
-        "relation".to_string(),
+        sn::RELATION.to_string(),
     )
     .await?;
 

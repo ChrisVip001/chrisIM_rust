@@ -194,27 +194,18 @@ database:
     user: kelisi
     password: 123456
     database: rustim
-  mongodb:
-    host: 127.0.0.1
-    port: 27017
-    user:
-    password:
-    database: im
-    clean:
-      period: 3600 # days
-      except_types:
-        - "MsgTypeGroupInvitation"
-        - "MsgTypeGroupInviteNew"
-        - "MsgTypeGroupMemberExit"
-        - "MsgTypeGroupRemoveMember"
-        - "MsgTypeGroupDismiss"
-        - "MsgTypeGroupUpdate"
-        - "MsgTypeFriendApplyReq"
-        - "MsgTypeFriendApplyResp"
-        - "MsgTypeFriendBlack"
-        - "MsgTypeFriendDelete"
-
   xdb: ./ip2region.xdb
+
+# 消息存储配置（统一读扩散，一条消息恒定 1 行元数据）
+# 该段缺省时使用 MessageStorageConfig::default()，服务级 yaml 不参与覆盖。
+message_storage:
+  inline_content_max_bytes: 1024   # 不超过该值的正文内联进 msg_meta，省一次回表
+  fetch_default_limit: 50          # 客户端未指定时的拉取条数
+  fetch_max_limit: 500             # 单次拉取硬上限，防止超大页占满连接池
+  hot_cache_messages: 200          # Redis 缓存的最近消息条数，规避复制延迟
+  archive_after_days: 365          # 超过该天数由归档任务迁移
+  batch_insert: true               # 单语句多行批量写入
+  read_from_replica: false         # 历史拉取是否走只读副本（初期关闭）
 
 
 # 服务配置
@@ -364,7 +355,9 @@ rpc:
 redis:
   host: 127.0.0.1
   port: 6379
-  seq_step: 10000
+  # 会话号段的预留步长：越大回写 PG 越少，但崩溃后跳号越多。
+  # IM 场景 100 左右较为均衡（跳号不影响未读，未读用 last_msg_seq 计算）。
+  seq_step: 100
   max_connections: 100
   pool_timeout_ms:  5000
   connection_timeout_ms:  5000

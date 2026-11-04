@@ -1,0 +1,608 @@
+use async_trait::async_trait;
+use sqlx::{PgPool, Row};
+
+use contract::error::Error;
+use contract::proto::message::Msg;
+
+use crate::read_spread::{
+    ConversationRepo, ConversationState, MsgEntry, MsgMetaRepo, UserConversationRepo,
+    UserConversationState,
+};
+
+/// 会话仓库（`conversation` 表）
+#[derive(Debug)]
+pub struct PgConversationRepo {
+    pool: PgPool,
+}
+
+impl PgConversationRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ConversationRepo for PgConversationRepo {
+    async fn next_seq(&self, conversation_id: &str, conv_type: i16) -> Result<i64, Error> {
+        // 单条 SQL 完成「不存在则建、存在则自增」，避免先查后改的竞态。
+        // 热群会在此处产生行锁争用，后续由 Redis 号段承担分配、此处只做水位回写。
+        let row = sqlx::query(
+            "INSERT INTO conversation (conversation_id, conv_type, last_seq)
+             VALUES ($1, $2, 1)
+             ON CONFLICT (conversation_id)
+             DO UPDATE SET last_seq = conversation.last_seq + 1, updated_at = NOW()
+             RETURNING last_seq",
+        )
+        .bind(conversation_id)
+        .bind(conv_type)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.try_get::<i64, _>("last_seq")?)
+    }
+
+    async fn ensure(
+        &self,
+        conversation_id: &str,
+        conv_type: i16,
+    ) -> Result<ConversationState, Error> {
+        let row = sqlx::query(
+            "INSERT INTO conversation (conversation_id, conv_type)
+             VALUES ($1, $2)
+             ON CONFLICT (conversation_id)
+             DO UPDATE SET conv_type = conversation.conv_type
+             RETURNING conversation_id, conv_type, last_seq, last_msg_seq, last_msg_time",
+        )
+        .bind(conversation_id)
+        .bind(conv_type)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row_to_conversation(&row)?)
+    }
+
+    async fn get(&self, conversation_id: &str) -> Result<Option<ConversationState>, Error> {
+        let row = sqlx::query(
+            "SELECT conversation_id, conv_type, last_seq, last_msg_seq, last_msg_time
+             FROM conversation WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row_to_conversation(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn flush_seq(&self, conversation_id: &str, last_seq: i64) -> Result<(), Error> {
+        sqlx::query(
+            "UPDATE conversation SET last_seq = GREATEST(last_seq, $2), updated_at = NOW()
+             WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .bind(last_seq)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn touch(
+        &self,
+        conversation_id: &str,
+        last_msg_seq: i64,
+        last_msg_time: i64,
+    ) -> Result<(), Error> {
+        sqlx::query(
+            "UPDATE conversation
+             SET last_msg_seq = GREATEST(last_msg_seq, $2),
+                 last_msg_time = GREATEST(last_msg_time, $3),
+                 updated_at = NOW()
+             WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .bind(last_msg_seq)
+        .bind(last_msg_time)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete(&self, conversation_id: &str) -> Result<(), Error> {
+        sqlx::query("DELETE FROM conversation WHERE conversation_id = $1")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+fn row_to_conversation(row: &sqlx::postgres::PgRow) -> Result<ConversationState, Error> {
+    Ok(ConversationState {
+        conversation_id: row.try_get("conversation_id")?,
+        conv_type: row.try_get("conv_type")?,
+        last_seq: row.try_get("last_seq")?,
+        last_msg_seq: row.try_get("last_msg_seq")?,
+        last_msg_time: row.try_get("last_msg_time")?,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 消息元数据 + 正文
+// ---------------------------------------------------------------------------
+
+/// 消息仓库（`msg_meta` + `msg_content`）
+#[derive(Debug)]
+pub struct PgMsgMetaRepo {
+    pool: PgPool,
+}
+
+impl PgMsgMetaRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl MsgMetaRepo for PgMsgMetaRepo {
+    async fn insert(&self, entry: &MsgEntry, inline_max_bytes: usize) -> Result<bool, Error> {
+        let inline = entry.should_inline(inline_max_bytes);
+        let mut tx = self.pool.begin().await?;
+
+        let result = sqlx::query(
+            "INSERT INTO msg_meta
+                (conversation_id, seq, server_id, send_id, msg_type, content_type,
+                 send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13)
+             ON CONFLICT (conversation_id, server_id) DO NOTHING",
+        )
+        .bind(&entry.conversation_id)
+        .bind(entry.seq)
+        .bind(&entry.msg.server_id)
+        .bind(&entry.msg.send_id)
+        .bind(entry.msg.msg_type)
+        .bind(entry.msg.content_type)
+        .bind(entry.msg.send_time)
+        .bind(entry.msg.content.len() as i32)
+        .bind(if inline { Some(&entry.msg.content) } else { None })
+        .bind(detail_json(&entry.msg))
+        .bind(entry.msg.is_revoked)
+        .bind(entry.msg.revoke_time)
+        .bind(&entry.msg.revoked_by)
+        .execute(&mut *tx)
+        .await?;
+
+        // 重复消息（重放）不写正文，保持幂等
+        if result.rows_affected() == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        if !inline {
+            sqlx::query(
+                "INSERT INTO msg_content (server_id, content) VALUES ($1, $2)
+                 ON CONFLICT (server_id) DO NOTHING",
+            )
+            .bind(&entry.msg.server_id)
+            .bind(&entry.msg.content)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    async fn insert_batch(
+        &self,
+        entries: &[MsgEntry],
+        inline_max_bytes: usize,
+    ) -> Result<u64, Error> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let mut written = 0u64;
+
+        // 逐条仍在同一事务内，网络往返一次；
+        // 真正的多行单语句批量写需要 unnest 数组参数，留待批处理通道接入。
+        for entry in entries {
+            let inline = entry.should_inline(inline_max_bytes);
+            let result = sqlx::query(
+                "INSERT INTO msg_meta
+                    (conversation_id, seq, server_id, send_id, msg_type, content_type,
+                     send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13)
+                 ON CONFLICT (conversation_id, server_id) DO NOTHING",
+            )
+            .bind(&entry.conversation_id)
+            .bind(entry.seq)
+            .bind(&entry.msg.server_id)
+            .bind(&entry.msg.send_id)
+            .bind(entry.msg.msg_type)
+            .bind(entry.msg.content_type)
+            .bind(entry.msg.send_time)
+            .bind(entry.msg.content.len() as i32)
+            .bind(if inline { Some(&entry.msg.content) } else { None })
+            .bind(detail_json(&entry.msg))
+            .bind(entry.msg.is_revoked)
+            .bind(entry.msg.revoke_time)
+            .bind(&entry.msg.revoked_by)
+            .execute(&mut *tx)
+            .await?;
+
+            if result.rows_affected() == 0 {
+                continue;
+            }
+            written += 1;
+
+            if !inline {
+                sqlx::query(
+                    "INSERT INTO msg_content (server_id, content) VALUES ($1, $2)
+                     ON CONFLICT (server_id) DO NOTHING",
+                )
+                .bind(&entry.msg.server_id)
+                .bind(&entry.msg.content)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        tx.commit().await?;
+        Ok(written)
+    }
+
+    async fn fetch_after(
+        &self,
+        conversation_id: &str,
+        after_seq: i64,
+        limit: i64,
+    ) -> Result<Vec<Msg>, Error> {
+        let rows = sqlx::query(
+            "SELECT server_id, seq, send_id, msg_type, content_type, send_time,
+                    content_size, inline_content, detail::text AS detail,
+                    is_revoked, revoke_time, revoked_by
+             FROM msg_meta
+             WHERE conversation_id = $1 AND seq > $2
+             ORDER BY seq
+             LIMIT $3",
+        )
+        .bind(conversation_id)
+        .bind(after_seq)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        self.assemble(conversation_id, rows).await
+    }
+
+    async fn fetch_range(
+        &self,
+        conversation_id: &str,
+        start_seq: i64,
+        end_seq: i64,
+    ) -> Result<Vec<Msg>, Error> {
+        let rows = sqlx::query(
+            "SELECT server_id, seq, send_id, msg_type, content_type, send_time,
+                    content_size, inline_content, detail::text AS detail,
+                    is_revoked, revoke_time, revoked_by
+             FROM msg_meta
+             WHERE conversation_id = $1 AND seq BETWEEN $2 AND $3
+             ORDER BY seq",
+        )
+        .bind(conversation_id)
+        .bind(start_seq)
+        .bind(end_seq)
+        .fetch_all(&self.pool)
+        .await?;
+
+        self.assemble(conversation_id, rows).await
+    }
+
+    async fn get(&self, conversation_id: &str, server_id: &str) -> Result<Option<Msg>, Error> {
+        let rows = sqlx::query(
+            "SELECT server_id, seq, send_id, msg_type, content_type, send_time,
+                    content_size, inline_content, detail::text AS detail,
+                    is_revoked, revoke_time, revoked_by
+             FROM msg_meta
+             WHERE conversation_id = $1 AND server_id = $2",
+        )
+        .bind(conversation_id)
+        .bind(server_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut msgs = self.assemble(conversation_id, rows).await?;
+        Ok(msgs.pop())
+    }
+
+    async fn revoke(
+        &self,
+        conversation_id: &str,
+        seq: i64,
+        revoked_by: &str,
+        revoke_time: i64,
+    ) -> Result<(), Error> {
+        sqlx::query(
+            "UPDATE msg_meta
+             SET is_revoked = TRUE, revoked_by = $3, revoke_time = $4
+             WHERE conversation_id = $1 AND seq = $2",
+        )
+        .bind(conversation_id)
+        .bind(seq)
+        .bind(revoked_by)
+        .bind(revoke_time)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_by_server_id(
+        &self,
+        conversation_id: &str,
+        server_ids: &[String],
+    ) -> Result<u64, Error> {
+        if server_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            "DELETE FROM msg_meta WHERE conversation_id = $1 AND server_id = ANY($2)",
+        )
+        .bind(conversation_id)
+        .bind(server_ids)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_conversation(&self, conversation_id: &str) -> Result<u64, Error> {
+        let result = sqlx::query("DELETE FROM msg_meta WHERE conversation_id = $1")
+            .bind(conversation_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+impl PgMsgMetaRepo {
+    /// 把元数据行组装成 `Msg`，并为外置正文批量回表
+    async fn assemble(
+        &self,
+        conversation_id: &str,
+        rows: Vec<sqlx::postgres::PgRow>,
+    ) -> Result<Vec<Msg>, Error> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 需要回表取正文的 server_id
+        let missing: Vec<String> = rows
+            .iter()
+            .filter(|r| {
+                let size: i32 = r.try_get("content_size").unwrap_or(0);
+                let inline: Option<Vec<u8>> = r.try_get("inline_content").unwrap_or(None);
+                size > 0 && inline.is_none()
+            })
+            .filter_map(|r| r.try_get::<String, _>("server_id").ok())
+            .collect();
+
+        let contents = if missing.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query("SELECT server_id, content FROM msg_content WHERE server_id = ANY($1)")
+                .bind(&missing)
+                .fetch_all(&self.pool)
+                .await?
+        };
+
+        let content_map: std::collections::HashMap<String, Vec<u8>> = contents
+            .into_iter()
+            .filter_map(|r| {
+                let id: String = r.try_get("server_id").ok()?;
+                let c: Vec<u8> = r.try_get("content").ok()?;
+                Some((id, c))
+            })
+            .collect();
+
+        let group_id = conversation_id
+            .strip_prefix("g:")
+            .unwrap_or("")
+            .to_string();
+
+        let mut msgs = Vec::with_capacity(rows.len());
+        for row in rows {
+            let server_id: String = row.try_get("server_id")?;
+            let inline: Option<Vec<u8>> = row.try_get("inline_content")?;
+            let content = inline
+                .or_else(|| content_map.get(&server_id).cloned())
+                .unwrap_or_default();
+
+            let detail: String = row.try_get("detail")?;
+            let detail: serde_json::Value = serde_json::from_str(&detail).unwrap_or_default();
+
+            // receiver_id 属于用户视角（单聊取对端），此处留空由上层补齐
+            msgs.push(Msg {
+                server_id,
+                seq: row.try_get("seq")?,
+                send_id: row.try_get("send_id")?,
+                receiver_id: String::new(),
+                msg_type: row.try_get("msg_type")?,
+                content_type: row.try_get("content_type")?,
+                send_time: row.try_get("send_time")?,
+                content,
+                group_id: group_id.clone(),
+                platform: detail
+                    .get("platform")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0) as i32,
+                related_msg_id: detail
+                    .get("related_msg_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                is_revoked: row.try_get("is_revoked")?,
+                revoke_time: row.try_get("revoke_time")?,
+                revoked_by: row.try_get("revoked_by")?,
+                // 读扩散下不存在「发送者序列号」，保持 0
+                send_seq: 0,
+                // 已读状态由上层按用户游标填充
+                is_read: false,
+                ..Default::default()
+            });
+        }
+
+        Ok(msgs)
+    }
+}
+
+/// 只保存无法从其他服务取到的低频字段。
+/// 刻意不存 avatar / nickname：从用户缓存取，避免昵称修改后历史消息显示旧值。
+fn detail_json(msg: &Msg) -> String {
+    serde_json::json!({
+        "platform": msg.platform,
+        "related_msg_id": msg.related_msg_id,
+    })
+    .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// 用户会话游标
+// ---------------------------------------------------------------------------
+
+/// 用户会话仓库（`user_conversation` 表）
+#[derive(Debug)]
+pub struct PgUserConversationRepo {
+    pool: PgPool,
+}
+
+impl PgUserConversationRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl UserConversationRepo for PgUserConversationRepo {
+    async fn ensure_member(&self, user_id: &str, conversation_id: &str) -> Result<(), Error> {
+        sqlx::query(
+            "INSERT INTO user_conversation (user_id, conversation_id) VALUES ($1, $2)
+             ON CONFLICT (user_id, conversation_id) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(conversation_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_members(
+        &self,
+        user_ids: &[String],
+        conversation_id: &str,
+    ) -> Result<u64, Error> {
+        if user_ids.is_empty() {
+            return Ok(0);
+        }
+
+        // 单语句多行写入：群成员登记一次往返完成
+        let result = sqlx::query(
+            "INSERT INTO user_conversation (user_id, conversation_id)
+             SELECT u, $2 FROM unnest($1::varchar[]) AS u
+             ON CONFLICT (user_id, conversation_id) DO NOTHING",
+        )
+        .bind(user_ids)
+        .bind(conversation_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn mark_read(
+        &self,
+        user_id: &str,
+        conversation_id: &str,
+        read_seq: i64,
+    ) -> Result<(), Error> {
+        // 只增不减：乱序到达的旧回执不会把游标往回拖
+        sqlx::query(
+            "INSERT INTO user_conversation (user_id, conversation_id, last_read_seq)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, conversation_id)
+             DO UPDATE SET
+                 last_read_seq = GREATEST(user_conversation.last_read_seq, EXCLUDED.last_read_seq),
+                 updated_at = NOW()",
+        )
+        .bind(user_id)
+        .bind(conversation_id)
+        .bind(read_seq)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_cursor(&self, user_id: &str, conversation_id: &str) -> Result<i64, Error> {
+        let row = sqlx::query(
+            "SELECT last_read_seq FROM user_conversation
+             WHERE user_id = $1 AND conversation_id = $2",
+        )
+        .bind(user_id)
+        .bind(conversation_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(row.try_get::<i64, _>("last_read_seq")?),
+            None => Ok(0),
+        }
+    }
+
+    async fn list(
+        &self,
+        user_id: &str,
+        limit: i64,
+    ) -> Result<Vec<UserConversationState>, Error> {
+        let rows = sqlx::query(
+            "SELECT conversation_id, last_read_seq, is_pinned, is_muted
+             FROM user_conversation WHERE user_id = $1 LIMIT $2",
+        )
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                Ok(UserConversationState {
+                    conversation_id: row.try_get("conversation_id")?,
+                    last_read_seq: row.try_get("last_read_seq")?,
+                    is_pinned: row.try_get("is_pinned")?,
+                    is_muted: row.try_get("is_muted")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?)
+    }
+
+    async fn unread(&self, user_id: &str, conversation_id: &str) -> Result<i64, Error> {
+        let row = sqlx::query(
+            "SELECT GREATEST(c.last_msg_seq - COALESCE(uc.last_read_seq, 0), 0) AS unread
+             FROM conversation c
+             LEFT JOIN user_conversation uc
+                    ON uc.conversation_id = c.conversation_id AND uc.user_id = $1
+             WHERE c.conversation_id = $2",
+        )
+        .bind(user_id)
+        .bind(conversation_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(row.try_get::<i64, _>("unread")?),
+            None => Ok(0),
+        }
+    }
+}

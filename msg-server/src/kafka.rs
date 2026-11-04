@@ -83,8 +83,9 @@ pub(crate) async fn send_to_topic(
     producer: &FutureProducer,
     topic: &str,
     payload: &str,
+    key: &str,
 ) -> Result<(), KafkaError> {
-    let record: FutureRecord<'_, (), str> = FutureRecord::to(topic).payload(payload);
+    let record: FutureRecord<'_, str, str> = FutureRecord::to(topic).payload(payload).key(key);
     producer
         .send(record, Duration::from_secs(10))
         .await
@@ -128,7 +129,7 @@ mod tests {
             .expect("创建测试生产者失败");
 
         let payload = r#"{"server_id":"s-dlq-1","reason":"handler failed"}"#;
-        send_to_topic(&producer, &topic, payload)
+        send_to_topic(&producer, &topic, payload, "test-key")
             .await
             .expect("死信投递失败");
 

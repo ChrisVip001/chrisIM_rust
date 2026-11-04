@@ -1,5 +1,6 @@
 use tracing::info;
 use std::env;
+use std::sync::Arc;
 use runtime::config::{ConfigLoader, AppConfig};
 
 use msg_server::productor::ChatRpcService;
@@ -52,19 +53,11 @@ async fn main() -> anyhow::Result<()> {
     
     info!("正在启动消息服务器...");
 
-    // 初始化序列号缓存
-    // 从数据库加载所有用户的序列号到Redis缓存中
-    // 这是确保序列号连续性的重要步骤
-    info!("正在初始化序列号缓存...");
-    if let Err(e) = msg_storage::init_seq_cache(&config).await {
-        tracing::error!("序列号缓存初始化失败: {:?}", e);
-        return Err(e.into());
-    }
-    info!("序列号缓存初始化完成");
+
     
     // 创建并初始化消费者服务实例
     // 消费者服务负责从Kafka消费消息，并进行后续处理
-    let mut consumer_service = ConsumerService::new(&config).await?;
+    let consumer_service = ConsumerService::new(&config).await?;
     info!("消费者服务已初始化");
     
     // 克隆配置以便在异步任务中使用
@@ -81,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
     
     // 启动消费者服务
     // 该服务从Kafka消费消息，处理消息存储和推送
+    // 并行消费需要在多个任务间共享同一实例
+    let consumer_service = Arc::new(consumer_service);
     let consumer_task = tokio::spawn(async move {
         if let Err(e) = consumer_service.consume().await {
             tracing::error!("消费者服务运行失败: {:?}", e);

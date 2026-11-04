@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use notify::{Event, RecursiveMode, Watcher};
 use once_cell::sync::Lazy;
 use tracing::{error, info, warn};
-use crate::configs::{DatabaseConfig, GatewayConfig, LogConfig, OssConfig, TelemetryConfig, SmsConfig};
+use crate::configs::{DatabaseConfig, GatewayConfig, LogConfig, MessageStorageConfig, OssConfig, TelemetryConfig, SmsConfig};
 use crate::utils::url;
 
 // 定义一个静态全局配置，可以在任何地方访问
@@ -39,6 +39,12 @@ pub struct AppConfig {
     pub kafka: KafkaConfig,
     pub oss: OssConfig,
     pub sms: SmsConfig,
+    /// 消息存储分流配置
+    ///
+    /// 允许整个段落缺省（现有配置文件无需改动即可启动），
+    /// 缺省时使用 [`MessageStorageConfig::default`] 的阈值。
+    #[serde(default)]
+    pub message_storage: MessageStorageConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -383,30 +389,6 @@ impl ConfigLoader {
             target.postgres.database = source.postgres.database.clone();
         }
 
-        // 合并MongoDB配置
-        if !source.mongodb.host.is_empty() {
-            target.mongodb.host = source.mongodb.host.clone();
-        }
-        if source.mongodb.port != 0 {
-            target.mongodb.port = source.mongodb.port;
-        }
-        if Some(source.mongodb.user.as_ref()) != None {
-            target.mongodb.user = source.mongodb.user.clone();
-        }
-        if Some (source.mongodb.password.as_ref()) != None{ 
-            target.mongodb.password = source.mongodb.password.clone();
-        }
-        if !source.mongodb.database.is_empty() {
-            target.mongodb.database = source.mongodb.database.clone();
-        }
-        
-        // 合并clean配置
-        if source.mongodb.clean.period != 0 {
-            target.mongodb.clean.period = source.mongodb.clean.period;
-        }
-        if !source.mongodb.clean.except_types.is_empty() {
-            target.mongodb.clean.except_types = source.mongodb.clean.except_types.clone();
-        }
     }
     
     // 合并服务器配置

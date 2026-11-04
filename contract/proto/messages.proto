@@ -122,9 +122,13 @@ message Msg {
 }
 
 /// 消息已读信息
+///
+/// 读扩散下已读是会话级游标，不再逐条上报序列号。
 message MsgRead {
-  repeated int64 msg_seq = 1;  // 已读消息的序列号列表
-  string user_id = 2;          // 用户ID
+  repeated int64 msg_seq = 1;   // [deprecated] 读扩散下改用 conversation_id + read_seq
+  string user_id = 2;           // 用户ID
+  string conversation_id = 3;   // 会话ID（单聊 d:{小id}:{大id}，群聊 g:{group_id}）
+  int64 read_seq = 4;           // 已读到的会话内最大序号
 }
 
 /// 消息已读请求
@@ -329,7 +333,8 @@ message SaveMaxSeqRequest {
 /// 标记消息已读请求
 message MarkMessagesAsReadRequest {
   string user_id = 1;           // 用户ID
-  repeated int64 msg_seqs = 2;  // 要标记已读的消息序列号列表
+  repeated int64 msg_seqs = 2;  // 要标记已读的会话内序号列表（取最大值作为游标）
+  string conversation_id = 3;   // 消息所属会话（读扩散下必需）
 }
 
 /// 标记消息已读响应
@@ -352,14 +357,25 @@ message GetMessageHistoryResponse {
   string conversation_id = 4;   // 会话ID
 }
 
+/// 单个会话的同步游标
+///
+/// 读扩散下消息序号是会话级的，客户端本地持有的水位也必须按会话上报。
+/// 服务端从 `since_seq + 1` 开始补齐，客户端负责按 `conversation_id` 合并。
+message ConversationCursor {
+  string conversation_id = 1;  // 会话ID（单聊 d:{小id}:{大id}，群聊 g:{group_id}）
+  int64 since_seq = 2;         // 客户端已持有的该会话最大序号
+}
+
 /// 获取会话列表请求
 message GetConversationsRequest {
   string user_id = 1;  // 用户ID
-  // 离线同步参数（可选）
-  // 用于客户端重连后的增量同步，只获取指定序列号之后的新消息
-  optional int64 since_seq = 2;        // 客户端最后的接收序列号，获取此序列号之后的接收消息
-  optional int64 since_send_seq = 3;   // 客户端最后的发送序列号，获取此序列号之后的发送消息
+  // 已废弃：user 级双水位在读扩散下不成立，改用 cursors。
+  // 为保证老客户端可启动，服务端仍接受这两个字段，但仅作为「全量首屏」的提示。
+  optional int64 since_seq = 2;        // [deprecated] 改用 cursors
+  optional int64 since_send_seq = 3;   // [deprecated] 改用 cursors
   optional bool sync_mode = 4;         // 是否为同步模式（true=增量同步，false=正常获取最近消息）
+  // 按会话上报的同步游标；为空表示首屏全量
+  repeated ConversationCursor cursors = 5;
 }
 
 /// 会话信息
@@ -382,7 +398,8 @@ message GetConversationsResponse {
 /// 撤回消息请求
 message RevokeMessageRequest {
   string user_id = 1;      // 用户ID
-  string message_id = 2;   // 要撤回的消息ID
+  string message_id = 2;   // 要撤回的消息ID（server_id）
+  string conversation_id = 3; // 消息所属会话（读扩散下必需）
 }
 
 /// 撤回消息响应
@@ -395,8 +412,9 @@ message RevokeMessageResponse {
 /// 删除消息请求
 message DeleteMessagesRequest {
   string user_id = 1;              // 用户ID
-  repeated string message_ids = 2; // 要删除的消息ID列表
-  repeated int64 message_seqs = 3; // 要删除的消息序列号列表（可选，用于批量删除）
+  repeated string message_ids = 2; // 要删除的消息ID列表（server_id）
+  repeated int64 message_seqs = 3; // 要删除的会话内序号列表（可选）
+  string conversation_id = 4;      // 消息所属会话（读扩散下必需）
 }
 
 /// 删除消息响应
@@ -413,6 +431,7 @@ message ForwardMessageRequest {
   repeated string target_user_ids = 3;   // 转发给的用户ID列表（单聊）
   repeated string target_group_ids = 4;  // 转发给的群组ID列表（群聊）
   optional string forward_comment = 5;   // 转发时的附加评论
+  string source_conversation_id = 6;     // 原始消息所属会话（读扩散下必需）
 }
 
 /// 转发消息响应

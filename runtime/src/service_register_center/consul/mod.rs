@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::config::AppConfig;
 use crate::service_register_center::typos::Registration;
@@ -84,7 +84,16 @@ impl Consul {
     }
 
     /// 启动一个后台任务来定期更新TTL健康检查状态，使用自定义更新间隔
-    pub async fn start_ttl_updater_with_interval(&self, service_id: String, interval_seconds: u64) {
+    ///
+    /// `registration_payload` 是注册时发给 Consul 的原始请求体：
+    /// Consul 重启会丢失全部注册信息，仅靠 TTL 上报无法恢复，
+    /// 任务会周期性核查注册是否存在，缺失时用这份载荷原样重建。
+    pub async fn start_ttl_updater_with_interval(
+        &self,
+        service_id: String,
+        interval_seconds: u64,
+        registration_payload: serde_json::Value,
+    ) {
         // 先检查是否已存在该服务的更新器，如果存在则先停止
         {
             let mut updaters = self.ttl_updaters.lock().await;
@@ -110,6 +119,14 @@ impl Consul {
                 "{}://{}:{}/v1/agent/check/pass/service:{}",
                 protocol, host, port, service_id_for_task
             );
+            let service_url = format!(
+                "{}://{}:{}/v1/agent/service/{}",
+                protocol, host, port, service_id_for_task
+            );
+            let register_url = format!(
+                "{}://{}:{}/v1/agent/service/register",
+                protocol, host, port
+            );
 
             // 使用自定义的更新间隔
             let interval = std::time::Duration::from_secs(interval_seconds);
@@ -117,6 +134,58 @@ impl Consul {
 
             loop {
                 tokio::time::sleep(interval).await;
+
+                // 就地核查注册是否还在：Consul 重启后注册会全部丢失，
+                // 这时 TTL 上报只会失败，必须先重建注册
+                match client
+                    .get(&service_url)
+                    .timeout(std::time::Duration::from_secs(timeout))
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
+                        warn!(
+                            "服务注册缺失（Consul可能重启过），正在重新注册: {}",
+                            service_id_for_task
+                        );
+                        if let Err(e) = client
+                            .put(&register_url)
+                            .json(&registration_payload)
+                            .timeout(std::time::Duration::from_secs(timeout))
+                            .send()
+                            .await
+                        {
+                            error!(
+                                "重新注册服务 {} 失败: {}，下个周期重试",
+                                service_id_for_task, e
+                            );
+                            continue;
+                        }
+                        info!("服务 {} 已重新注册", service_id_for_task);
+                        // 重建的 TTL 检查初始为 critical，立即上报通过
+                        let _ = client
+                            .put(&check_url)
+                            .timeout(std::time::Duration::from_secs(timeout))
+                            .send()
+                            .await;
+                    }
+                    Ok(resp) if !resp.status().is_success() => {
+                        error!(
+                            "查询服务注册状态异常: HTTP {}，跳过本轮TTL上报",
+                            resp.status()
+                        );
+                        continue;
+                    }
+                    Ok(resp) => {
+                        // 服务存在；消费掉响应体以便复用连接
+                        let _ = resp.bytes().await;
+                    }
+                    Err(e) => {
+                        // Consul 不可达时 TTL 上报同样会失败，跳过本轮
+                        error!("查询服务注册状态失败: {}，跳过本轮TTL上报", e);
+                        continue;
+                    }
+                }
 
                 match client
                     .put(&check_url)
@@ -166,11 +235,6 @@ impl Consul {
         }
     }
 
-    /// 启动一个后台任务来定期更新TTL健康检查状态
-    pub async fn start_ttl_updater(&self, service_id: String) {
-        // 使用默认的10秒更新间隔
-        self.start_ttl_updater_with_interval(service_id, 10).await;
-    }
 }
 
 #[async_trait]
@@ -297,8 +361,12 @@ impl ServiceRegister for Consul {
                         );
 
                         // 启动TTL更新器，使用配置的间隔
-                        self.start_ttl_updater_with_interval(registration.id.clone(), ttl_interval)
-                            .await;
+                        self.start_ttl_updater_with_interval(
+                            registration.id.clone(),
+                            ttl_interval,
+                            payload.clone(),
+                        )
+                        .await;
                     }
                     Err(e) => {
                         error!(
@@ -306,8 +374,12 @@ impl ServiceRegister for Consul {
                             registration.id, e
                         );
                         // 即使初始状态设置失败，仍然启动更新器尝试保持服务健康
-                        self.start_ttl_updater_with_interval(registration.id.clone(), ttl_interval)
-                            .await;
+                        self.start_ttl_updater_with_interval(
+                            registration.id.clone(),
+                            ttl_interval,
+                            payload.clone(),
+                        )
+                        .await;
                     }
                 }
             }

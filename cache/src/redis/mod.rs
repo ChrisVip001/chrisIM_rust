@@ -460,6 +460,67 @@ impl Cache for RedisCache {
         Ok(seq)
     }
 
+    /// 会话号段是否已初始化
+    async fn conversation_seq_exists(&self, conversation_id: &str) -> Result<bool, Error> {
+        let key = format!("cseq:{}", conversation_id);
+        let mut conn = self.get_connection().await?;
+        let exists: i64 = redis::cmd("EXISTS")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await?;
+        Ok(exists > 0)
+    }
+
+    /// 用持久化水位初始化会话号段
+    ///
+    /// 用 HSETNX 而不是 HSET：多个消费者同时首次访问同一会话时，
+    /// 只让第一个写入生效，避免互相覆盖号段。
+    async fn init_conversation_seq(
+        &self,
+        conversation_id: &str,
+        base_seq: i64,
+    ) -> Result<i64, Error> {
+        let key = format!("cseq:{}", conversation_id);
+        let reserved = base_seq + self.seq_step as i64;
+        let mut conn = self.get_connection().await?;
+
+        let _: i64 = redis::cmd("HSETNX")
+            .arg(&key)
+            .arg("cur_seq")
+            .arg(base_seq)
+            .query_async(&mut conn)
+            .await?;
+
+        let _: i64 = redis::cmd("HSETNX")
+            .arg(&key)
+            .arg("max_seq")
+            .arg(reserved)
+            .query_async(&mut conn)
+            .await?;
+
+        // 并发初始化时只有一个 HSETNX 生效，但两者算出的上界相同，返回值一致
+        Ok(reserved)
+    }
+
+    /// 领取会话下一个序号
+    async fn incr_conversation_seq(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(i64, i64, bool), Error> {
+        let key = format!("cseq:{}", conversation_id);
+        let mut conn = self.get_connection().await?;
+
+        let seq = redis::cmd(EVALSHA)
+            .arg(&self.single_seq_exe_sha)
+            .arg(1)
+            .arg(&key)
+            .arg(self.seq_step)
+            .query_async(&mut conn)
+            .await?;
+
+        Ok(seq)
+    }
+
     /// 增加群组成员序列号
     ///
     /// 一次性为多个群组成员增加序列号

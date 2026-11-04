@@ -10,25 +10,8 @@ pub struct PostgresConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct MongodbConfig {
-    pub host: String,
-    pub port: u16,
-    pub user: Option<String>,
-    pub password: Option<String>,
-    pub database: String,
-    pub clean: MongodbCleanConfig,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct MongodbCleanConfig {
-    pub period: i64,
-    pub except_types: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     pub postgres: PostgresConfig,
-    pub mongodb: MongodbConfig,
     pub xdb: String,
 }
 
@@ -42,27 +25,5 @@ impl DatabaseConfig {
             self.postgres.port,
             self.postgres.database
         )
-    }
-    pub fn mongo_url(&self) -> String {
-        match (&self.mongodb.user, &self.mongodb.password) {
-            (Some(user), Some(password)) => {
-                format!(
-                    "mongodb://{}:{}@{}:{}/{}",
-                    user,
-                    password,
-                    self.mongodb.host,
-                    self.mongodb.port,
-                    self.mongodb.database
-                )
-            }
-            _ => {
-                format!(
-                    "mongodb://{}:{}/{}",
-                    self.mongodb.host,
-                    self.mongodb.port,
-                    self.mongodb.database
-                )
-            }
-        }
     }
 }

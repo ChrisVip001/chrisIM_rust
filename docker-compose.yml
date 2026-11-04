@@ -1,14 +1,17 @@
 version: '3.8'
 
 services:
+  # 注意：本机现有 rustim_postgres 数据卷是用 kelisi/123456 初始化的。
+  # 若在此修改账号后首次 up，容器会被重建（数据卷保留，账号不生效于已初始化的库），
+  # 因此这里保持与实际初始化参数一致。
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     container_name: rustim_postgres
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: rustim
-      POSTGRES_PASSWORD: rustim_password
+      POSTGRES_USER: kelisi
+      POSTGRES_PASSWORD: "123456"
       POSTGRES_DB: rustim
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -18,19 +21,8 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    container_name: rustim_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
+  # redis 服务已于 2026-11-04 移除：
+  # 6379 端口由盒子IM的 boxim-redis 提供，ChrisIM 配置(config.yaml)直连 127.0.0.1:6379 复用
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: rustim_zookeeper
@@ -55,12 +47,12 @@ services:
       - zookeeper
     ports:
       - "9092:9092"
-      - "29092:29092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      # 宿主机服务直连 localhost:9092，advertised 必须与之匹配，
+      # 否则客户端 bootstrap 后拿到 kafka:9092 无法解析
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
@@ -74,7 +66,6 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   zookeeper_data:
   zookeeper_logs:
-  kafka_data: 
+  kafka_data:

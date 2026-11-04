@@ -18,6 +18,21 @@ use crate::service_discovery::{DynamicServiceDiscovery, LbWithServiceDiscovery, 
 // 重新导出服务注册中心模块
 pub use crate::service_register_center::{service_register_center, typos, ServiceRegister};
 
+/// 服务发现的注册名
+///
+/// 注册端（`register_service`）与发现端必须使用同一组名字，
+/// 否则发现端查不到任何实例，调用会在负载均衡通道里挂起。
+pub mod service_names {
+    /// 模块化单体：用户/好友/群组同进程同端口，只注册一次
+    pub const RELATION: &str = "relation";
+    /// 消息服务器（chat RPC）
+    pub const CHAT: &str = "chat";
+    /// WebSocket 网关 RPC
+    pub const WS: &str = "ws";
+}
+
+use service_names as sn;
+
 /// 服务解析器，用于从服务注册中心获取服务信息
 pub struct ServiceResolver {
     service_name: String,
@@ -98,7 +113,7 @@ pub async fn get_chan(config: &AppConfig, name: String) -> Result<LbWithServiceD
     discovery.discovery().await?;
     tokio::spawn(discovery.run());
 
-    Ok(LbWithServiceDiscovery(channel))
+    Ok(LbWithServiceDiscovery::new(channel))
 }
 
 /// 注册微服务到服务注册中心
@@ -115,7 +130,7 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
 
     let (name, host, port, tags, health_check) = match com {
         Component::MessageServer => {
-            let name = config.rpc.chat.name.clone();
+            let name = sn::CHAT.to_string();
             let host = config.rpc.chat.host.clone();
             let port = config.rpc.chat.port;
             let tags = config.rpc.chat.tags.clone();
@@ -132,7 +147,7 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
             (name, host, port, tags, health_check)
         }
         Component::MessageGateway => {
-            let name = config.rpc.ws.name.clone();
+            let name = sn::WS.to_string();
             let host = config.rpc.ws.host.clone();
             let port = config.rpc.ws.port;
             let tags = config.rpc.ws.tags.clone();
@@ -168,7 +183,7 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
         Component::RelationServer => {
             // 模块化单体：用户/好友/群组同进程同端口，只注册一次。
             // 监听地址沿用 rpc.user（字段名为历史遗留，语义已是 relation 服务）。
-            let name = "relation".to_string();
+            let name = sn::RELATION.to_string();
             let host = config.rpc.user.host.clone();
             let port = config.rpc.user.port;
             let tags = config.rpc.user.tags.clone();

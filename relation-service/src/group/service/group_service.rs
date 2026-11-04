@@ -20,7 +20,8 @@ use cache::Cache;
 use contract::proto::message::chat_service_client::ChatServiceClient;
 use contract::proto::message::{ContentType, Msg, MsgType, PlatformType, SendMsgRequest};
 use contract::proto::message::msg_service_client::MsgServiceClient;
-use msg_storage::{MsgStoreRepo, MsgRecBoxRepo};
+use msg_storage::read_spread::{group_conversation_id, ConversationRepo, MsgMetaRepo};
+use msg_storage::ReadSpreadRepo;
 use crate::group::model::group::Group;
 use serde_json;
 
@@ -36,7 +37,7 @@ pub struct GroupServiceImpl {
     /// 用户服务：进程内直调（合并后与 user 同进程，省去 gRPC 回环）
     user_service: Arc<crate::user::service::user_service::UserServiceImpl>,
     chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
-    msg_rec_box: Arc<dyn MsgRecBoxRepo>,
+    read: Arc<ReadSpreadRepo>,
     cache: Arc<dyn Cache>,
 }
 
@@ -50,8 +51,12 @@ impl GroupServiceImpl {
             get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(config, "chat".to_string())
                 .await?;
 
-        // 初始化消息存储
-        let msg_rec_box = msg_storage::msg_rec_box_repo(&config).await?;
+        // 初始化读扩散消息存储
+        let read = Arc::new(
+            msg_storage::ReadSpreadRepo::from_config(config)
+                .await
+                .map_err(|e| anyhow::anyhow!("初始化消息存储失败: {}", e))?,
+        );
 
         // 初始化Redis缓存连接
         // 用于缓存用户状态和序列号信息
@@ -66,7 +71,7 @@ impl GroupServiceImpl {
             member_settings_repository: MemberSettingsRepository::new(pool.clone()),
             user_service,
             chat_service_client,
-            msg_rec_box,
+            read,
             cache: cache
         })
     }
@@ -511,14 +516,18 @@ impl GroupService for GroupServiceImpl {
                 self.send_group_dismiss_message(&user_id, &group_id).await;
                 // 删除群组消息记录
                 info!("开始删除群组消息记录: {}", group_id);
-                // 删除MongoDB中的群组消息
-                match self.msg_rec_box.delete_group_messages(&group_id).await {
-                    Ok(deleted_count) => {
-                        info!("成功删除MongoDB中的群组消息: {} 条", deleted_count);
+                // 读扩散：整群一份，按会话直接删除，无需遍历成员副本
+                let conversation_id = group_conversation_id(&group_id);
+                match self.read.meta.delete_conversation(&conversation_id).await {
+                    Ok(deleted) => {
+                        info!("已删除群会话 {} 的消息: {} 条", conversation_id, deleted);
                     }
                     Err(e) => {
-                        error!("删除MongoDB中的群组消息失败: {}", e);
+                        error!("删除群会话消息失败: {}", e);
                     }
+                }
+                if let Err(e) = self.read.conversation.delete(&conversation_id).await {
+                    error!("删除群会话记录失败: {}", e);
                 }
                 //休眠0.05秒
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;

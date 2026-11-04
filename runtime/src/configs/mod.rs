@@ -6,6 +6,7 @@ mod log_config;
 mod oss_config;
 mod telemetry_config;
 mod database_config;
+mod message_config;
 mod sms_config;
 
 pub use gateway_config::*;
@@ -13,4 +14,5 @@ pub use log_config::*;
 pub use oss_config::*;
 pub use telemetry_config::*;
 pub use database_config::*;
+pub use message_config::*;
 pub use sms_config::*;

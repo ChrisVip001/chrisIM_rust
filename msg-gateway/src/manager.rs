@@ -4,6 +4,7 @@ use std::sync::Arc;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
+use futures::stream::{self, StreamExt};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -18,6 +19,12 @@ use runtime::service_discovery::LbWithServiceDiscovery;
 use contract::types::msg::MsgType2;
 
 use crate::push_payload::PushPayload;
+
+/// 群消息并发推送度
+///
+/// 上限同时约束三件事：并发 WebSocket 写入数、同时持有的连接引用数、
+/// 以及为了区分 `receiver_id` 而构造的消息副本数量（每份都含正文）。
+const GROUP_PUSH_CONCURRENCY: usize = 32;
 
 pub(crate) use crate::client::Client;
 
@@ -244,18 +251,29 @@ impl Manager {
         // 将发送序列号设置为0，因为这是推送给接收者的消息
         msg.send_seq = 0;
 
-        // 为每个群成员发送消息
-        for mem in obj_ids {
-            if let Some(clients) = self.hub.get(&mem.mem_id) {
-                // 为每个成员设置正确的接收序列号
-                msg.seq = mem.cur_seq;
-                // 为每个成员设置正确的接收者id
-                msg.receiver_id = mem.mem_id.clone();
+        // 读扩散下会话级序号对所有成员相同，成员之间只有 receiver_id 不同，
+        // 因此可以并发推送。串行推送在万人群里会累积成秒级延迟。
+        let base = Arc::new(msg);
 
-                // 向该成员的所有在线客户端发送消息
-                self.send_msg_to_clients(&clients, &msg).await;
-            }
-        }
+        stream::iter(obj_ids)
+            .map(|mem| {
+                let base = base.clone();
+                async move {
+                    let Some(clients) = self.hub.get(&mem.mem_id) else {
+                        // 不在线的成员直接跳过，不做任何推送准备
+                        return;
+                    };
+
+                    let mut msg = (*base).clone();
+                    msg.seq = mem.cur_seq;
+                    msg.receiver_id = mem.mem_id.clone();
+
+                    self.send_msg_to_clients(&clients, &msg).await;
+                }
+            })
+            .buffer_unordered(GROUP_PUSH_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
     }
 
     /// 向发送者的其他平台发送消息副本
@@ -360,16 +378,14 @@ impl Manager {
             MsgType2::Group => msg.group_id.clone(),
         };
 
-        // 发给自己的副本不计入未读
-        let unread_count = self
-            .calculate_and_update_unread_count(msg, &conversation_id, is_self)
-            .await;
-
+        // 读扩散下未读数由 conversation.last_msg_seq - user_conversation.last_read_seq
+        // 得出，由会话列表接口统一下发，客户端收到推送后本地自增即可。
+        // 推送时若逐成员读写 Redis，万人群一条消息就是 2 万次往返。
         PushPayload::single(
             msg.clone(),
             conversation_id,
             MsgType2::mt2_str(mt2),
-            unread_count,
+            0,
             is_self,
         )
     }
@@ -413,6 +429,33 @@ impl Manager {
                 self.create_error_message(message, err);
             }
         }
+
+        // 处理结果必须回传发送者：MsgRecResp 让客户端确认 local_id 已受理，
+        // 失败消息（ContentType::Error）让客户端知道消息没有发出去。
+        // 此前结果在这里被直接丢弃，发送失败时客户端永远无感知。
+        self.send_result_to_sender(message).await;
+    }
+
+    /// 把处理结果原样回传给发送者的全部在线连接
+    async fn send_result_to_sender(&self, msg: &Msg) {
+        let Some(clients) = self.hub.get(&msg.send_id) else {
+            warn!(
+                "处理结果无法回传：发送者 {} 已离线, local_id={}, msg_type={}",
+                msg.send_id, msg.local_id, msg.msg_type
+            );
+            return;
+        };
+
+        let content = match serde_json::to_string(msg) {
+            Ok(content) => content,
+            Err(e) => {
+                error!("处理结果JSON序列化失败: {}", e);
+                return;
+            }
+        };
+
+        let sent = Self::send_text_to_all(&clients, &content).await;
+        debug!("处理结果已回传给发送者 {} 的 {} 个连接", msg.send_id, sent);
     }
 
     /// 通过gRPC发送消息到msg-server
@@ -443,39 +486,6 @@ impl Manager {
             .map_err(|e| Error::BroadCastError(e.to_string()))
     }
 
-    /// 计算并更新未读数
-    async fn calculate_and_update_unread_count(
-        &self,
-        msg: &Msg,
-        conversation_id: &str,
-        is_self: bool,
-    ) -> i32 {
-        // 如果是发送给自己的消息副本，未读数为0，无需查询和更新缓存
-        if is_self {
-            return 0;
-        }
-
-        let user_id = &msg.receiver_id;
-
-        let old_unread = self
-            .cache
-            .unread_count_sum(user_id, conversation_id)
-            .await
-            .unwrap_or(0);
-
-        let unread_count = if msg.is_read {
-            old_unread
-        } else {
-            old_unread + 1
-        };
-
-        let _ = self
-            .cache
-            .unread_count_set(user_id, conversation_id, &unread_count)
-            .await;
-
-        unread_count
-    }
 }
 
 #[cfg(test)]

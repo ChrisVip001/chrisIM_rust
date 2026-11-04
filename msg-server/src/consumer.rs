@@ -12,8 +12,10 @@ use runtime::config::AppConfig;
 use contract::error::Error;
 use contract::proto::message::{GroupMemSeq, Msg, MsgRead, MsgType};
 use contract::types::msg::MsgType2;
-use msg_storage::message::MsgRecBoxRepo;
-use msg_storage::{msg_rec_box_repo, DbRepo};
+use msg_storage::read_spread::{conversation_id_of, MsgMetaRepo};
+use msg_storage::{MessageWriter, ReadSpreadRepo};
+
+use runtime::grpc_client::base::service_names as sn;
 
 use crate::kafka;
 use crate::pusher::{push_service, Pusher};
@@ -23,6 +25,28 @@ use runtime::grpc_client::base::get_rpc_client;
 use contract::proto::group::group_service_client::GroupServiceClient;
 use contract::proto::group::GetMembersRequest;
 use runtime::service_discovery::LbWithServiceDiscovery;
+
+/// 单批最多并行处理的消息条数
+const BATCH_SIZE: usize = 64;
+
+/// 排空批次时等待下一条消息的上限
+const BATCH_DRAIN_TIMEOUT: Duration = Duration::from_millis(20);
+
+/// 无法解析出会话的消息归到该组
+const INVALID_GROUP: &str = "__invalid__";
+
+/// 批量消费时的消息快照
+///
+/// `BorrowedMessage` 的生命周期绑定在 consumer 上，无法跨 await 持有，
+/// 因此先取成拥有所有权的数据再并行处理。
+struct PendingMessage {
+    payload: String,
+    topic: String,
+    partition: i32,
+    offset: i64,
+    /// 分组键：同一会话必须串行，保证序号顺序与消息顺序一致
+    group: String,
+}
 
 /// 单条消息的最大处理尝试次数（含首次）
 const MAX_ATTEMPTS: u32 = 3;
@@ -58,11 +82,11 @@ pub struct ConsumerService {
     /// Kafka流式消费者实例
     consumer: StreamConsumer,
 
-    /// 数据库操作仓库
-    db: Arc<DbRepo>,
+    /// 读扩散仓储（会话序号、消息元数据、已读游标）
+    read: Arc<ReadSpreadRepo>,
 
-    /// MongoDB消息盒子仓库
-    msg_box: Arc<dyn MsgRecBoxRepo>,
+    /// 消息写入器（幂等 → 分配序号 → 写元数据 → 登记成员）
+    writer: Arc<MessageWriter>,
 
     /// 消息推送器
     pusher: Arc<dyn Pusher>,
@@ -97,6 +121,17 @@ impl ConsumerService {
             .create()
             .map_err(|e| Error::Internal(format!("Kafka消费者创建失败: {}", e)))?;
 
+        // 先确保主题存在再订阅：Kafka 重启后元数据可能丢失，
+        // 若先订阅会在启动瞬间刷 UnknownTopicOrPartition 错误
+        let brokers = config.kafka.hosts.join(",");
+        kafka::ensure_topic(
+            &config.kafka.topic,
+            &brokers,
+            config.kafka.connect_timeout as u16,
+        )
+        .await
+        .map_err(|e| Error::Internal(format!("确保Kafka主题存在失败: {}", e)))?;
+
         consumer
             .subscribe(&[&config.kafka.topic])
             .map_err(|e| Error::Internal(format!("无法订阅Kafka主题 '{}': {}", config.kafka.topic, e)))?;
@@ -108,7 +143,7 @@ impl ConsumerService {
         let dlq_producer = kafka::build_producer(config)?;
         kafka::ensure_topic(
             &dead_letter_topic,
-            &config.kafka.hosts.join(","),
+            &brokers,
             config.kafka.connect_timeout as u16,
         )
         .await
@@ -117,19 +152,25 @@ impl ConsumerService {
         info!("死信主题已就绪: {}", dead_letter_topic);
 
         let pusher = push_service(config).await?;
-        let db = Arc::new(DbRepo::new(config).await);
+        // 读扩散仓储：独立连接池，避免历史拉取挤占消息写入
+        let read = Arc::new(ReadSpreadRepo::from_config(config).await?);
         let cache = cache::cache(config).await;
-        let msg_box = msg_rec_box_repo(config).await?;
+        // 号段分配依赖缓存：热群不再对 conversation 行加锁
+        let writer = Arc::new(MessageWriter::new(
+            read.clone(),
+            cache.clone(),
+            config.message_storage.inline_content_max_bytes,
+        ));
         let group_client =
-            get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(config, "group".to_string())
+            get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(config, sn::RELATION.to_string())
                 .await?;
 
         info!("消息消费者服务初始化完成");
 
         Ok(Self {
             consumer,
-            db,
-            msg_box,
+            read,
+            writer,
             pusher,
             cache,
             group_client,
@@ -141,15 +182,17 @@ impl ConsumerService {
 
     /// 启动消息消费循环
     ///
-    /// 会一直运行直到服务停止或发生致命错误。
-    pub async fn consume(&mut self) -> Result<(), Error> {
+    /// 批量拉取 → 按会话分组 → 组内串行（保序）、组间并行 → 整批提交位点。
+    /// 同一会话的消息严格串行，保证序号分配顺序与消息实际顺序一致。
+    pub async fn consume(self: Arc<Self>) -> Result<(), Error> {
         info!(
-            "开始消费Kafka消息: topic={}, 手动提交, 单条最多尝试 {} 次, 死信主题={}",
-            self.topic, MAX_ATTEMPTS, self.dead_letter_topic
+            "开始消费Kafka消息: topic={}, 批大小={}, 单条最多尝试 {} 次, 死信主题={}",
+            self.topic, BATCH_SIZE, MAX_ATTEMPTS, self.dead_letter_topic
         );
 
         loop {
-            let message = match self.consumer.recv().await {
+            // 阻塞等待首条，避免空转
+            let first = match self.consumer.recv().await {
                 Ok(message) => message,
                 Err(e) => {
                     error!("从Kafka接收消息失败: {}", e);
@@ -159,75 +202,157 @@ impl ConsumerService {
                 }
             };
 
-            // 先把负载取成拥有所有权的字符串，后续处理不再借用 message
-            let payload = match message.payload_view::<str>() {
-                Some(Ok(payload)) => payload.to_owned(),
-                Some(Err(e)) => {
-                    error!("消息负载不是合法的 UTF-8，无法重放，直接跳过: {}", e);
-                    Self::commit(&self.consumer, &message, "负载解码失败");
-                    continue;
-                }
-                None => {
-                    warn!("收到空消息，直接跳过");
-                    Self::commit(&self.consumer, &message, "空消息");
-                    continue;
-                }
-            };
+            let mut batch = Vec::with_capacity(BATCH_SIZE);
+            match Self::pending_from(&first) {
+                Some(p) => batch.push(p),
+                None => Self::commit(&self.consumer, &first, "负载不可用"),
+            }
+            drop(first);
 
-            match retry_with_backoff(MAX_ATTEMPTS, RETRY_BACKOFF, || self.handle_msg(&payload))
-                .await
+            // 非阻塞排空：凑满一批或短暂无新消息即停
+            while batch.len() < BATCH_SIZE {
+                match tokio::time::timeout(BATCH_DRAIN_TIMEOUT, self.consumer.recv()).await {
+                    Ok(Ok(message)) => match Self::pending_from(&message) {
+                        Some(p) => batch.push(p),
+                        None => Self::commit(&self.consumer, &message, "负载不可用"),
+                    },
+                    _ => break,
+                }
+            }
+
+            if !batch.is_empty() {
+                self.process_batch(batch).await;
+            }
+        }
+    }
+
+    /// 把 Kafka 消息取成拥有所有权的快照
+    ///
+    /// 同时提前解析会话ID，作为「同会话保序」的分组键。
+    fn pending_from(message: &BorrowedMessage<'_>) -> Option<PendingMessage> {
+        let payload = message.payload_view::<str>()?.ok()?.to_owned();
+        let group = Self::group_of_payload(&payload);
+
+        Some(PendingMessage {
+            payload,
+            topic: message.topic().to_string(),
+            partition: message.partition(),
+            offset: message.offset(),
+            group,
+        })
+    }
+
+    /// 从 Kafka 负载解析出会话分组键
+    ///
+    /// 外层信封由生产端用 serde_json 序列化，这里必须按 JSON 解析；
+    /// 只有 `content` 字段内部才是 bincode。解析失败只损失并行度
+    /// （全部落到同一分组串行处理），不影响业务正确性。
+    fn group_of_payload(payload: &str) -> String {
+        match serde_json::from_str::<Msg>(payload) {
+            Ok(msg) => conversation_id_of(&msg),
+            Err(_) => INVALID_GROUP.to_string(),
+        }
+    }
+
+    /// 并行处理一批消息，并按分区提交位点
+    async fn process_batch(self: &Arc<Self>, batch: Vec<PendingMessage>) {
+        // 批内每个分区的最大位点
+        let mut max_offsets: std::collections::HashMap<(String, i32), i64> =
+            std::collections::HashMap::new();
+        for m in &batch {
+            let entry = max_offsets
+                .entry((m.topic.clone(), m.partition))
+                .or_insert(m.offset);
+            if m.offset > *entry {
+                *entry = m.offset;
+            }
+        }
+
+        // 按会话分组：组内串行保序，组间并行
+        let mut groups: std::collections::HashMap<String, Vec<PendingMessage>> =
+            std::collections::HashMap::new();
+        for m in batch {
+            groups.entry(m.group.clone()).or_default().push(m);
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PendingMessage>();
+
+        let mut handles = Vec::with_capacity(groups.len());
+        for (_, msgs) in groups {
+            let svc = self.clone();
+            let tx = tx.clone();
+
+            handles.push(tokio::spawn(async move {
+                for m in msgs {
+                    let payload = m.payload.clone();
+                    let result =
+                        retry_with_backoff(MAX_ATTEMPTS, RETRY_BACKOFF, || svc.handle_msg(&payload))
+                            .await;
+
+                    if let Err(e) = result {
+                        error!("消息处理失败且重试耗尽: {:?}", e);
+                        // 优先转死信；死信也写不进去时，把该分区标记为需要回退
+                        if let Err(dlq_err) = kafka::send_to_topic(
+                            &svc.dlq_producer,
+                            &svc.dead_letter_topic,
+                            &m.payload,
+                            &m.group,
+                        )
+                        .await
+                        {
+                            warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
+                            let _ = tx.send(m);
+                        }
+                    }
+                }
+            }));
+        }
+        drop(tx);
+
+        for handle in handles {
+            if let Err(e) = handle.await {
+                error!("批处理任务异常退出: {:?}", e);
+            }
+        }
+
+        // 收集需要回退的分区及最小位点
+        let mut rollback: std::collections::HashMap<(String, i32), i64> =
+            std::collections::HashMap::new();
+        while let Some(m) = rx.recv().await {
+            let key = (m.topic, m.partition);
+            let entry = rollback.entry(key).or_insert(m.offset);
+            if m.offset < *entry {
+                *entry = m.offset;
+            }
+        }
+
+        let mut tpl = rdkafka::TopicPartitionList::new();
+        for ((topic, partition), offset) in max_offsets {
+            if let Some(&seek_to) = rollback.get(&(topic.clone(), partition)) {
+                // 有消息没能落库，该分区不提交，退回重新投递。
+                // 已处理过的消息会重复消费，由幂等闸门兜底。
+                if let Err(e) = self.consumer.seek(
+                    &topic,
+                    partition,
+                    Offset::Offset(seek_to),
+                    Duration::from_secs(1),
+                ) {
+                    error!("回退偏移量 {} 失败: {:?}", seek_to, e);
+                }
+                continue;
+            }
+
+            if let Err(e) = tpl.add_partition_offset(&topic, partition, Offset::Offset(offset + 1))
             {
-                Ok(()) => {
-                    debug!("消息处理成功，提交偏移量，长度: {} 字节", payload.len());
-                    Self::commit(&self.consumer, &message, "处理成功");
-                }
-                Err(e) => {
-                    error!("消息处理失败且重试耗尽: {:?}", e);
-                    self.handle_failure(&message, &payload, &e.to_string()).await;
-                }
+                error!("构造提交位点失败: {:?}", e);
             }
         }
-    }
 
-    /// 处理失败后的收尾：优先转入死信，失败则保留位点等待重投
-    async fn handle_failure(
-        &self,
-        message: &BorrowedMessage<'_>,
-        payload: &str,
-        reason: &str,
-    ) {
-        match kafka::send_to_topic(&self.dlq_producer, &self.dead_letter_topic, payload).await {
-            Ok(()) => {
-                error!(
-                    "消息处理失败({})，已转入死信主题 {}",
-                    reason, self.dead_letter_topic
-                );
-                Self::commit(&self.consumer, message, "已转入死信主题");
+        if !tpl.elements().is_empty() {
+            match self.consumer.commit(&tpl, CommitMode::Sync) {
+                Ok(()) => debug!("已提交 {} 个分区的位点", tpl.elements().len()),
+                Err(e) => error!("提交偏移量失败: {:?}", e),
             }
-            Err(e) => {
-                // 死信都写不进去说明下游整体不可用，此时提交位点等于丢消息。
-                // 必须把消费位置退回当前消息，否则下一条 recv 会直接越过它。
-                warn!(
-                    "死信投递失败({})，回退偏移量等待重新投递",
-                    e
-                );
-                Self::rewind(&self.consumer, message);
-                tokio::time::sleep(RETRY_BACKOFF).await;
-            }
-        }
-    }
-
-    /// 把消费位置退回指定消息，让下一次 `recv` 重新拿到它
-    fn rewind(consumer: &StreamConsumer, message: &BorrowedMessage<'_>) {
-        let offset = message.offset();
-        if let Err(e) = consumer.seek(
-            message.topic(),
-            message.partition(),
-            Offset::Offset(offset),
-            Duration::from_secs(1),
-        ) {
-            // 退不回去就只能记下来人工补偿
-            error!("回退偏移量 {} 失败，该消息可能丢失: {:?}", offset, e);
         }
     }
 
@@ -249,7 +374,7 @@ impl ConsumerService {
             .map_err(|e| Error::Internal(format!("消息JSON解析失败: {}", e)))?;
 
         // 幂等闸门：位点回退、重复投递都会让同一条消息再次进来
-        if already_processed(&*self.msg_box, &msg.server_id).await? {
+        if already_processed(&*self.read.meta, &msg).await? {
             info!(
                 "消息已处理过，跳过重复投递: server_id={}",
                 msg.server_id
@@ -266,46 +391,44 @@ impl ConsumerService {
             return self.handle_msg_read(msg).await;
         }
 
-        let (msg_type, need_increase_seq, need_history) = MsgType2::classify_msg_type(mt);
-        debug!(
-            "消息分类结果: {:?}, 需要序列号: {}, 需要历史: {}",
-            msg_type, need_increase_seq, need_history
-        );
+        let (msg_type, _need_increase_seq, need_history) = MsgType2::classify_msg_type(mt);
+        debug!("消息分类结果: {:?}, 需要历史: {}", msg_type, need_history);
 
-        // 接收序列号
-        if need_increase_seq {
-            let cur_seq = self.increase_message_seq(&msg.receiver_id).await?;
-            msg.seq = cur_seq;
-            debug!("为用户 {} 分配序列号: {}", msg.receiver_id, cur_seq);
+        // 群成员（不含发送者），用于登记 user_conversation 与推送路由
+        let member_ids = self.group_member_ids(&msg_type, &msg).await?;
+
+        // 读扩散：一条消息只写一次。序号是会话级的，与成员数量无关。
+        if Self::get_send_to_db_flag(&mt) && !msg.is_revoked && need_history {
+            let mut participants = member_ids.clone();
+            if !msg.send_id.is_empty() {
+                participants.push(msg.send_id.clone());
+            }
+            // 单聊的另一方不在 member_ids 里，需显式补上
+            if msg_type != MsgType2::Group && !msg.receiver_id.is_empty() {
+                participants.push(msg.receiver_id.clone());
+            }
+
+            let (conversation_id, seq, inserted) =
+                self.writer.save(msg.clone(), &participants).await?;
+            msg.seq = seq;
+            debug!(
+                "会话 {} 分配序号 {}（新写入: {}）server_id={}",
+                conversation_id, seq, inserted, msg.server_id
+            );
         }
 
-        // 群聊消息需要按成员维度各自分配序列号
-        let members = self.handle_group_seq(&msg_type, &mut msg).await?;
+        // 推送使用会话级序号：同一会话的所有成员看到同一个 seq
+        let members: Vec<GroupMemSeq> = member_ids
+            .into_iter()
+            .map(|mem_id| GroupMemSeq {
+                mem_id,
+                cur_seq: msg.seq,
+                max_seq: msg.seq,
+                need_update: false,
+            })
+            .collect();
 
-        let mut tasks = Vec::with_capacity(2);
-
-        if Self::get_send_to_db_flag(&mt) && !msg.is_revoked {
-            let cloned_msg = msg.clone();
-            let cloned_type = msg_type.clone();
-            let cloned_members = members.clone();
-            let db = self.db.clone();
-            let msg_box = self.msg_box.clone();
-
-            let to_db = tokio::spawn(async move {
-                debug!("开始存储消息到数据库: server_id={}", cloned_msg.server_id);
-                Self::send_to_db(
-                    db,
-                    msg_box,
-                    cloned_msg,
-                    cloned_type,
-                    need_history,
-                    cloned_members,
-                )
-                .await
-            });
-
-            tasks.push(to_db);
-        }
+        let mut tasks = Vec::with_capacity(1);
 
         let pusher = self.pusher.clone();
         let to_pusher = tokio::spawn(async move {
@@ -350,32 +473,37 @@ impl ConsumerService {
         }
     }
 
-    /// 为用户增加消息接收序列号
-    async fn increase_message_seq(&self, user_id: &str) -> Result<i64, Error> {
-        let (cur_seq, _, updated) = self.cache.increase_seq(user_id).await?;
-        if updated {
-            self.db.seq.save_max_seq(user_id).await?;
-        }
-        Ok(cur_seq)
-    }
-
     /// 处理消息已读状态更新
+    ///
+    /// 读扩散下已读是会话级游标，只写 1 行，与群成员数无关。
     async fn handle_msg_read(&self, msg: Msg) -> Result<(), Error> {
         let data: MsgRead = bincode::deserialize(&msg.content)
             .map_err(|_| Error::Internal("反序列化MsgRead失败".to_string()))?;
 
-        self.msg_box.msg_read(&data.user_id, &data.msg_seq).await?;
+        if data.conversation_id.is_empty() {
+            // 老客户端仍按 msg_seq 逐条上报，读扩散下无法映射到会话，只能忽略
+            warn!(
+                "已读消息缺少 conversation_id，已忽略: user_id={}",
+                data.user_id
+            );
+            return Ok(());
+        }
+
+        self.read
+            .user_conversation
+            .mark_read(&data.user_id, &data.conversation_id, data.read_seq)
+            .await?;
         Ok(())
     }
 
     /// 处理群聊消息的序列号分配
     ///
     /// 群解散、成员退出等操作会顺带清理缓存中的群成员信息。
-    async fn handle_group_seq(
+    async fn group_member_ids(
         &self,
         msg_type: &MsgType2,
-        msg: &mut Msg,
-    ) -> Result<Vec<GroupMemSeq>, Error> {
+        msg: &Msg,
+    ) -> Result<Vec<String>, Error> {
         if *msg_type != MsgType2::Group {
             return Ok(vec![]);
         }
@@ -385,7 +513,7 @@ impl ConsumerService {
         // 排除发送者自己（发送者不需要接收自己的消息）
         members.retain(|id| id != &msg.send_id);
 
-        self.cache.incr_group_seq(members).await
+        Ok(members)
     }
 
     /// 判断消息是否需要存储到数据库
@@ -402,31 +530,6 @@ impl ConsumerService {
                 | MsgType::SingleCallInvite
                 | MsgType::FriendApplyReq
         )
-    }
-
-    /// 将消息存储到数据库
-    async fn send_to_db(
-        db: Arc<DbRepo>,
-        msg_box: Arc<dyn MsgRecBoxRepo>,
-        msg: Msg,
-        msg_type: MsgType2,
-        need_to_history: bool,
-        members: Vec<GroupMemSeq>,
-    ) -> Result<(), Error> {
-        match msg_type {
-            MsgType2::Friend => {
-                Self::handle_message(db, msg_box, msg, need_to_history).await?;
-            }
-            MsgType2::Group => {
-                Self::handle_group_message(db, msg_box, msg, need_to_history, members).await?;
-            }
-            MsgType2::System => {
-                // TODO系统消息暂未实现
-                warn!("系统消息暂未实现")
-            }
-        }
-
-        Ok(())
     }
 
     /// 从群组服务查询群组成员ID并回填缓存
@@ -470,103 +573,22 @@ impl ConsumerService {
         }
     }
 
-    /// 处理单聊消息的存储
-    async fn handle_message(
-        db: Arc<DbRepo>,
-        msg_box: Arc<dyn MsgRecBoxRepo>,
-        message: Msg,
-        need_to_history: bool,
-    ) -> Result<(), Error> {
-        let mut tasks = Vec::with_capacity(2);
-
-        if need_to_history {
-            let cloned_msg = message.clone();
-            let db_task = tokio::spawn(async move { db.msg.save_message(cloned_msg).await });
-            tasks.push(db_task);
-        }
-
-        let msg_rec_box_task = tokio::spawn(async move {
-            // 群组操作确认 / 邀请确认类消息：从消息盒子删除而不是新增
-            if message.msg_type == MsgType::GroupDismissOrExitReceived as i32
-                || message.msg_type == MsgType::GroupInvitationReceived as i32
-            {
-                return msg_box.delete_message(&message.server_id).await;
-            }
-            msg_box.save_message(&message).await
-        });
-        tasks.push(msg_rec_box_task);
-
-        for task in tasks {
-            task.await
-                .map_err(|e| Error::Internal(e.to_string()))??;
-        }
-        Ok(())
-    }
-
-    /// 处理群聊消息的存储
-    async fn handle_group_message(
-        db: Arc<DbRepo>,
-        msg_box: Arc<dyn MsgRecBoxRepo>,
-        message: Msg,
-        need_to_history: bool,
-        members: Vec<GroupMemSeq>,
-    ) -> Result<(), Error> {
-        // 需要把序列号水位推进到数据库的成员
-        let need_update = members
-            .iter()
-            .filter(|item| item.need_update)
-            .map(|item| item.mem_id.clone())
-            .collect::<Vec<String>>();
-
-        let cloned_msg = if need_to_history {
-            Some(message.clone())
-        } else {
-            None
-        };
-
-        let db_task = tokio::spawn(async move {
-            if !need_update.is_empty() {
-                db.seq.save_max_seq_batch(&need_update).await?;
-            }
-            if let Some(cloned_msg) = cloned_msg {
-                db.msg.save_message(cloned_msg).await?;
-            }
-            Ok::<(), Error>(())
-        });
-
-        // 群解散消息不进入成员的消息盒子
-        let should_save_to_mongodb = message.msg_type != MsgType::GroupDismiss as i32;
-        let msg_rec_box_task = tokio::spawn(async move {
-            if should_save_to_mongodb {
-                msg_box.save_group_msg(message, members).await?;
-            } else {
-                info!("群解散消息不保存到MongoDB: server_id={}", message.server_id);
-            }
-            Ok::<(), Error>(())
-        });
-
-        let (db_result, msg_rec_box_result) = tokio::try_join!(db_task, msg_rec_box_task)
-            .map_err(|e| Error::Internal(e.to_string()))?;
-
-        db_result?;
-        msg_rec_box_result?;
-
-        Ok(())
-    }
 }
 
 /// 幂等闸门：判断一条消息是否已经落过库
 ///
 /// 以 `server_id` 为准 —— 它在生产端由 `nanoid` 生成，是全局唯一且稳定的。
 pub(crate) async fn already_processed(
-    repo: &dyn MsgRecBoxRepo,
-    server_id: &str,
+    repo: &dyn MsgMetaRepo,
+    msg: &Msg,
 ) -> Result<bool, Error> {
-    if server_id.is_empty() {
+    if msg.server_id.is_empty() {
         // 历史数据可能存在空 ID，无法据此判定重复，放行交给后续流程
         return Ok(false);
     }
-    Ok(repo.get_message(server_id).await?.is_some())
+    // 幂等键是 (conversation_id, server_id)，与读扩散的唯一约束一致
+    let conversation_id = conversation_id_of(msg);
+    Ok(repo.get(&conversation_id, &msg.server_id).await?.is_some())
 }
 
 /// 带退避的有限重试
@@ -616,157 +638,134 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use contract::proto::message::Msg;
+    use msg_storage::read_spread::MsgEntry;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use tokio::sync::mpsc;
 
-    /// 只实现幂等闸门用得到的 `get_message`，其余方法不应被调用
+    /// 只实现幂等闸门用得到的 `get`，其余方法不应被调用
     #[derive(Debug)]
-    struct FakeMsgBox {
+    struct FakeMeta {
         existing: Option<Msg>,
         fail: bool,
     }
 
     #[async_trait]
-    impl MsgRecBoxRepo for FakeMsgBox {
-        async fn save_message(&self, _message: &Msg) -> Result<(), Error> {
+    impl MsgMetaRepo for FakeMeta {
+        async fn insert(&self, _entry: &MsgEntry, _inline_max_bytes: usize) -> Result<bool, Error> {
             unimplemented!()
         }
 
-        async fn save_group_msg(
+        async fn insert_batch(
             &self,
-            _message: Msg,
-            _members: Vec<GroupMemSeq>,
-        ) -> Result<(), Error> {
+            _entries: &[MsgEntry],
+            _inline_max_bytes: usize,
+        ) -> Result<u64, Error> {
             unimplemented!()
         }
 
-        async fn delete_message(&self, _message_id: &str) -> Result<(), Error> {
+        async fn fetch_after(
+            &self,
+            _conversation_id: &str,
+            _after_seq: i64,
+            _limit: i64,
+        ) -> Result<Vec<Msg>, Error> {
             unimplemented!()
         }
 
-        async fn delete_messages(&self, _user_id: &str, _msg_seq: Vec<i64>) -> Result<(), Error> {
+        async fn fetch_range(
+            &self,
+            _conversation_id: &str,
+            _start_seq: i64,
+            _end_seq: i64,
+        ) -> Result<Vec<Msg>, Error> {
             unimplemented!()
         }
 
-        async fn delete_group_messages(&self, _group_id: &str) -> Result<i64, Error> {
-            unimplemented!()
-        }
-
-        async fn revoke_message(&self, _message_id: &str, _user_id: &str) -> Result<(), Error> {
-            unimplemented!()
-        }
-
-        async fn get_message(&self, _message_id: &str) -> Result<Option<Msg>, Error> {
+        async fn get(
+            &self,
+            _conversation_id: &str,
+            _server_id: &str,
+        ) -> Result<Option<Msg>, Error> {
             if self.fail {
-                return Err(Error::Internal("mongo 不可用".to_string()));
+                return Err(Error::Internal("数据库不可用".to_string()));
             }
             Ok(self.existing.clone())
         }
 
-        async fn get_messages_stream(
+        async fn revoke(
             &self,
-            _user_id: &str,
-            _start: i64,
-            _end: i64,
-        ) -> Result<mpsc::Receiver<Result<Msg, Error>>, Error> {
-            unimplemented!()
-        }
-
-        async fn get_messages(&self, _message_ids: &Vec<String>) -> Result<Vec<Msg>, Error> {
-            unimplemented!()
-        }
-
-        async fn get_msgs(
-            &self,
-            _user_id: &str,
-            _send_start: i64,
-            _send_end: i64,
-            _rec_start: i64,
-            _rec_end: i64,
-        ) -> Result<Vec<Msg>, Error> {
-            unimplemented!()
-        }
-
-        async fn get_conversation_messages_by_seq_range(
-            &self,
-            _user_id: &str,
             _conversation_id: &str,
-            _send_seq_start: i64,
-            _send_seq_end: i64,
-            _seq_start: i64,
-            _seq_end: i64,
-        ) -> Result<Vec<Msg>, Error> {
+            _seq: i64,
+            _revoked_by: &str,
+            _revoke_time: i64,
+        ) -> Result<(), Error> {
             unimplemented!()
         }
 
-        async fn msg_read(&self, _user_id: &str, _msg_seq: &[i64]) -> Result<(), Error> {
-            unimplemented!()
-        }
-
-        async fn mark_conversation_read(
+        async fn delete_by_server_id(
             &self,
-            _user_id: &str,
             _conversation_id: &str,
-            _up_to_time: Option<i64>,
-        ) -> Result<i32, Error> {
+            _server_ids: &[String],
+        ) -> Result<u64, Error> {
             unimplemented!()
         }
 
-        async fn delete_messages_by_ids(
-            &self,
-            _user_id: &str,
-            _message_ids: &[String],
-        ) -> Result<i32, Error> {
+        async fn delete_conversation(&self, _conversation_id: &str) -> Result<u64, Error> {
             unimplemented!()
+        }
+    }
+
+    fn test_msg(server_id: &str) -> Msg {
+        Msg {
+            server_id: server_id.into(),
+            send_id: "u1".into(),
+            receiver_id: "u2".into(),
+            ..Default::default()
         }
     }
 
     #[tokio::test]
     async fn duplicate_message_is_rejected_by_gate() {
-        let repo = FakeMsgBox {
-            existing: Some(Msg {
-                server_id: "s1".into(),
-                ..Default::default()
-            }),
+        let repo = FakeMeta {
+            existing: Some(test_msg("s1")),
             fail: false,
         };
 
         assert!(
-            already_processed(&repo, "s1").await.unwrap(),
+            already_processed(&repo, &test_msg("s1")).await.unwrap(),
             "已落库的消息必须被判定为重复，避免位点回退后重复计数"
         );
     }
 
     #[tokio::test]
     async fn fresh_message_passes_gate() {
-        let repo = FakeMsgBox {
+        let repo = FakeMeta {
             existing: None,
             fail: false,
         };
 
-        assert!(!already_processed(&repo, "s1").await.unwrap());
+        assert!(!already_processed(&repo, &test_msg("s1")).await.unwrap());
     }
 
     #[tokio::test]
     async fn empty_server_id_is_never_treated_as_duplicate() {
-        let repo = FakeMsgBox {
+        let repo = FakeMeta {
             existing: Some(Msg::default()),
             fail: false,
         };
 
         // 空 ID 无法判定，放行，否则历史脏数据会被永久卡住
-        assert!(!already_processed(&repo, "").await.unwrap());
+        assert!(!already_processed(&repo, &test_msg("")).await.unwrap());
     }
 
     #[tokio::test]
     async fn gate_propagates_storage_error() {
-        let repo = FakeMsgBox {
+        let repo = FakeMeta {
             existing: None,
             fail: true,
         };
 
         // 判定不出来就不能当作「没处理过」，否则等于放弃了幂等保护
-        assert!(already_processed(&repo, "s1").await.is_err());
+        assert!(already_processed(&repo, &test_msg("s1")).await.is_err());
     }
 
     #[tokio::test]
@@ -809,5 +808,42 @@ mod tests {
         assert_eq!(retry_backoff(2, 3, base), Some(Duration::from_millis(200)));
         assert_eq!(retry_backoff(3, 3, base), None, "最后一次尝试后不应再等待");
         assert_eq!(retry_backoff(4, 3, base), None);
+    }
+
+    #[test]
+    fn group_of_single_chat_payload_is_json_parsed() {
+        // 生产端用 serde_json 写 Kafka，分组键也必须按 JSON 解析，
+        // 否则所有消息都会落到 __invalid__，退化成全串行
+        let msg = Msg {
+            send_id: "u2".into(),
+            receiver_id: "u1".into(),
+            msg_type: MsgType::SingleMsg as i32,
+            ..Default::default()
+        };
+        let payload = serde_json::to_string(&msg).unwrap();
+
+        assert_eq!(ConsumerService::group_of_payload(&payload), "d:u1:u2");
+    }
+
+    #[test]
+    fn group_of_group_msg_prefers_group_id() {
+        let msg = Msg {
+            send_id: "u1".into(),
+            receiver_id: "g1".into(),
+            group_id: "g1".into(),
+            msg_type: MsgType::GroupMsg as i32,
+            ..Default::default()
+        };
+        let payload = serde_json::to_string(&msg).unwrap();
+
+        assert_eq!(ConsumerService::group_of_payload(&payload), "g:g1");
+    }
+
+    #[test]
+    fn group_of_broken_payload_falls_back_to_invalid() {
+        assert_eq!(
+            ConsumerService::group_of_payload("not-a-json-envelope"),
+            INVALID_GROUP
+        );
     }
 }

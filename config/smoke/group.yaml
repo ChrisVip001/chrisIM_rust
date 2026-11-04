@@ -194,26 +194,6 @@ database:
     user: kelisi
     password: 123456
     database: rustim
-  mongodb:
-    host: 127.0.0.1
-    port: 27017
-    user:
-    password:
-    database: im
-    clean:
-      period: 3600 # days
-      except_types:
-        - "MsgTypeGroupInvitation"
-        - "MsgTypeGroupInviteNew"
-        - "MsgTypeGroupMemberExit"
-        - "MsgTypeGroupRemoveMember"
-        - "MsgTypeGroupDismiss"
-        - "MsgTypeGroupUpdate"
-        - "MsgTypeFriendApplyReq"
-        - "MsgTypeFriendApplyResp"
-        - "MsgTypeFriendBlack"
-        - "MsgTypeFriendDelete"
-
   xdb: ./ip2region.xdb
 
 

@@ -18,18 +18,8 @@ services:
       timeout: 5s
       retries: 3
 
-  redis:
-    image: redis:7-alpine
-    container_name: rustim_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+  # redis 服务已于 2026-11-04 移除：
+  # 6379 端口由盒子IM的 boxim-redis 提供，ChrisIM 配置(config.yaml)直连 127.0.0.1:6379 复用
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
@@ -37,18 +27,32 @@ services:
     depends_on:
       - zookeeper
     ports:
-      - "29092:29092"
+      - "9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
       interval: 30s
       timeout: 10s
+      retries: 3
+
+  mongodb:
+    image: mongo:5
+    container_name: rustim_mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
       retries: 3
 
   zookeeper:
@@ -88,4 +92,4 @@ services:
 
 volumes:
   postgres_data:
-  redis_data: 
+  mongodb_data:

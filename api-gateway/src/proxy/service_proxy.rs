@@ -11,6 +11,7 @@ use runtime::config::AppConfig;
 use contract::Error;
 use crate::proxy::grpc_clients::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
 use runtime::grpc_client::base::get_rpc_client;
+use runtime::grpc_client::base::service_names as sn;
 use contract::proto::friend::friend_service_client::FriendServiceClient;
 use contract::proto::group::group_service_client::GroupServiceClient;
 use contract::proto::user::user_service_client::UserServiceClient;
@@ -84,25 +85,25 @@ impl ServiceProxy {
         
         // 并行创建所有客户端连接
         let user_task = async {
-            get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&self.config, "relation".to_string())
+            get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&self.config, sn::RELATION.to_string())
                 .await
                 .map(|client| UserServiceGrpcClient::new(client))
         };
-        
+
         let friend_task = async {
-            get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&self.config, "relation".to_string())
+            get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&self.config, sn::RELATION.to_string())
                 .await
                 .map(|client| FriendServiceGrpcClient::new(client))
         };
-        
+
         let group_task = async {
-            get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&self.config, "relation".to_string())
+            get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&self.config, sn::RELATION.to_string())
                 .await
                 .map(|client| GroupServiceGrpcClient::new(client))
         };
-        
+
         let chat_task = async {
-            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&self.config, "chat".to_string())
+            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&self.config, sn::CHAT.to_string())
                 .await
         };
 

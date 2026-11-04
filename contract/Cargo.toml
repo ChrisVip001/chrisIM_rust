@@ -23,7 +23,6 @@ sqlx = { workspace = true }
 bincode = { workspace = true }
 uuid = { workspace = true }
 # TODO(1.6): 统一到 PostgreSQL 后删除 MongoDB 错误变体与本依赖
-mongodb = { workspace = true }
 # 错误枚举里的 From<redis::RedisError> 同理受 orphan rule 约束，
 # 只能与 Error 同 crate 实现
 redis = { workspace = true }

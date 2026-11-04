@@ -47,16 +47,22 @@
 //! 
 //! ## 使用示例
 //! 
-//! ```rust
-//! use msg_server::productor::ChatRpcService;
+//! ```no_run
+//! use std::sync::Arc;
+//!
 //! use msg_server::consumer::ConsumerService;
-//! 
+//! use msg_server::productor::ChatRpcService;
+//! use runtime::config::AppConfig;
+//!
+//! # async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 //! // 启动生产者服务
-//! ChatRpcService::start(&config).await;
-//! 
-//! // 启动消费者服务
-//! let mut consumer = ConsumerService::new(&config).await?;
+//! ChatRpcService::start(&config).await?;
+//!
+//! // 启动消费者服务：consume 需要 Arc<Self>，因为内部要按批并发处理
+//! let consumer = Arc::new(ConsumerService::new(&config).await?);
 //! consumer.consume().await?;
+//! # Ok(())
+//! # }
 //! ```
 
 // 错误类型定义在 common crate，其中 tonic::Status 体积较大。
@@ -66,7 +72,6 @@
 
 pub mod productor;
 pub mod consumer;
-pub mod conversation;
 mod kafka;
 mod pusher;
 

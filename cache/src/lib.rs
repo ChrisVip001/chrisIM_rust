@@ -50,6 +50,29 @@ pub trait Cache: Sync + Send + Debug {
     /// 增加用户的发送序列号
     async fn incr_send_seq(&self, user_id: &str) -> Result<(i64, i64, bool), Error>;
 
+    /// 会话号段是否已在 Redis 中初始化
+    async fn conversation_seq_exists(&self, conversation_id: &str) -> Result<bool, Error>;
+
+    /// 用持久化水位初始化会话号段（仅当键不存在时生效）
+    ///
+    /// 返回本次预留的号段上界。调用方必须把它持久化，
+    /// 否则 Redis 丢失后从旧水位重建会重复分配已用过的序号。
+    async fn init_conversation_seq(
+        &self,
+        conversation_id: &str,
+        base_seq: i64,
+    ) -> Result<i64, Error>;
+
+    /// 领取会话下一个序号
+    ///
+    /// 返回 `(当前序号, 号段上界, 是否需要回写水位)`。
+    /// `是否需要回写` 为真时表示已进入新号段，调用方应把上界持久化，
+    /// 这样 Redis 丢失后可据此重建，不会重复分配。
+    async fn incr_conversation_seq(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(i64, i64, bool), Error>;
+
     /// 增加群组成员序列号
     async fn incr_group_seq(&self, members: Vec<String>) -> Result<Vec<GroupMemSeq>, Error>;
 

@@ -185,10 +185,18 @@ impl ChatServiceHandler {
             ));
         }
 
+        // 读扩散下必须带会话ID，游标按会话推进
+        let conversation_id = body
+            .get("conversationId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         // 调用msg-server的gRPC接口标记消息已读
         let request = MarkMessagesAsReadRequest {
             user_id: user_id.to_string(),
             msg_seqs,
+            conversation_id,
         };
 
         match self.client.mark_messages_as_read(request).await {
@@ -321,12 +329,34 @@ impl ChatServiceHandler {
         debug!("同步参数: sync_mode={}, since_seq={:?}, since_send_seq={:?}", 
                sync_mode, since_seq, since_send_seq);
 
+        // 方案 A：按会话上报水位
+        let cursors: Vec<contract::proto::message::ConversationCursor> = body
+            .get("cursors")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        let conversation_id = item.get("conversationId")?.as_str()?.to_string();
+                        let since_seq = item
+                            .get("sinceSeq")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        Some(contract::proto::message::ConversationCursor {
+                            conversation_id,
+                            since_seq,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // 构建gRPC请求
         let request = GetConversationsRequest {
             user_id: user_id.to_string(),
             since_seq,
             since_send_seq,
             sync_mode: Some(sync_mode),
+            cursors,
         };
 
         match self.client.get_conversations(request).await {
@@ -352,10 +382,17 @@ impl ChatServiceHandler {
         // 提取消息ID
         let message_id = extract_string_param(&body, "messageId", Some("message_id"))?;
 
+        let conversation_id = body
+            .get("conversationId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         // 调用msg-server的gRPC接口撤回消息
         let request = RevokeMessageRequest {
             user_id: user_id.to_string(),
             message_id,
+            conversation_id,
         };
 
         match self.client.revoke_message(request).await {
@@ -395,11 +432,18 @@ impl ChatServiceHandler {
             ));
         }
 
+        let conversation_id = body
+            .get("conversationId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         // 调用msg-server的gRPC接口删除消息
         let request = DeleteMessagesRequest {
             user_id: user_id.to_string(),
             message_ids,
             message_seqs,
+            conversation_id,
         };
 
         match self.client.delete_messages(request).await {
@@ -439,6 +483,12 @@ impl ChatServiceHandler {
         let target_user_ids= target_user_ids.unwrap_or_default();
         let target_group_ids= target_group_ids.unwrap_or_default();
 
+        let source_conversation_id = body
+            .get("sourceConversationId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         // 构建gRPC请求
         let request = ForwardMessageRequest {
             user_id: user_id.to_string(),
@@ -446,6 +496,7 @@ impl ChatServiceHandler {
             target_user_ids,
             target_group_ids,
             forward_comment,
+            source_conversation_id,
         };
 
         // 调用msg-server
