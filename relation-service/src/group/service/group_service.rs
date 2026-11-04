@@ -1,17 +1,17 @@
 use std::sync::Arc;
 use chrono::Utc;
-use crate::repository::group_announcements_repository::GroupAnnouncementRepository;
-use crate::repository::group_blacklist_repository::GroupBlacklistRepository;
-use crate::repository::group_mutes_repository::GroupMutesRepository;
-use crate::repository::group_repository::GroupRepository;
-use crate::repository::group_settings_repository::GroupSettingsRepository;
-use crate::repository::member_repository::MemberRepository;
-use crate::repository::member_settings_repository::MemberSettingsRepository;
+use crate::group::repository::group_announcements_repository::GroupAnnouncementRepository;
+use crate::group::repository::group_blacklist_repository::GroupBlacklistRepository;
+use crate::group::repository::group_mutes_repository::GroupMutesRepository;
+use crate::group::repository::group_repository::GroupRepository;
+use crate::group::repository::group_settings_repository::GroupSettingsRepository;
+use crate::group::repository::member_repository::MemberRepository;
+use crate::group::repository::member_settings_repository::MemberSettingsRepository;
 use common::config::ConfigLoader;
 use common::grpc_client::base::get_rpc_client;
 use common::proto::group::group_service_server::GroupService;
 use common::proto::group::{AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse, CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest, CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse, GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest, GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest, GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse, GroupResponse, GroupSettingsResponse, LeaveGroupRequest, LeaveGroupResponse, MemberResponse, MemberRole, MemberSettingsResponse, MuteMemberRequest, MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest, RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse, UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest, UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest};
-use common::proto::user::user_service_client::UserServiceClient;
+use common::proto::user::user_service_server::UserService;
 use common::service_discovery::LbWithServiceDiscovery;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
@@ -21,9 +21,10 @@ use common::proto::message::chat_service_client::ChatServiceClient;
 use common::proto::message::{ContentType, Msg, MsgType, PlatformType, SendMsgRequest};
 use common::proto::message::msg_service_client::MsgServiceClient;
 use msg_storage::{MsgStoreRepo, MsgRecBoxRepo};
-use crate::model::group::Group;
+use crate::group::model::group::Group;
 use serde_json;
 
+#[derive(Clone)]
 pub struct GroupServiceImpl {
     group_repository: GroupRepository,
     member_repository: MemberRepository,
@@ -32,21 +33,21 @@ pub struct GroupServiceImpl {
     blacklist_repository: GroupBlacklistRepository,
     // mutes_repository: GroupMutesRepository,
     member_settings_repository: MemberSettingsRepository,
-    user_service_client: UserServiceClient<LbWithServiceDiscovery>,
+    /// 用户服务：进程内直调（合并后与 user 同进程，省去 gRPC 回环）
+    user_service: Arc<crate::user::service::user_service::UserServiceImpl>,
     chat_service_client: ChatServiceClient<LbWithServiceDiscovery>,
     msg_rec_box: Arc<dyn MsgRecBoxRepo>,
     cache: Arc<dyn Cache>,
 }
 
 impl GroupServiceImpl {
-    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
+    pub async fn new(pool: PgPool, user_service: Arc<crate::user::service::user_service::UserServiceImpl>) -> anyhow::Result<Self> {
         let config = ConfigLoader::get_global().expect("Failed to get global config");
-        let user_service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&config, "user".to_string()).await?;
         let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&config, "chat".to_string()).await?;
-        
+
         // 初始化消息存储
         let msg_rec_box = msg_storage::msg_rec_box_repo(&config).await?;
-        
+
         // 初始化Redis缓存连接
         // 用于缓存用户状态和序列号信息
         let cache = cache::cache(&config).await;
@@ -58,7 +59,7 @@ impl GroupServiceImpl {
             blacklist_repository: GroupBlacklistRepository::new(pool.clone()),
             // mutes_repository: GroupMutesRepository::new(pool.clone()),
             member_settings_repository: MemberSettingsRepository::new(pool.clone()),
-            user_service_client,
+            user_service,
             chat_service_client,
             msg_rec_box,
             cache: cache
@@ -76,7 +77,7 @@ impl GroupServiceImpl {
             user_ids: user_ids.clone(),
         });
 
-        match self.user_service_client.clone().get_users_by_ids(request).await {
+        match UserService::get_users_by_ids(&*self.user_service, request).await {
             Ok(response) => {
                 let users = response.into_inner().users;
                 // 构建用户ID到用户信息的映射
@@ -229,7 +230,7 @@ impl GroupServiceImpl {
         user_id: &str,
         role: MemberRole,
         user_info_map: &std::collections::HashMap<String, common::proto::user::User>,
-    ) -> Result<crate::model::member::Member, Status> {
+    ) -> Result<crate::group::model::member::Member, Status> {
         // 添加成员到群组
         let member = self
             .member_repository

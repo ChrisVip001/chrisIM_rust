@@ -1,15 +1,15 @@
 use std::io::Read;
 use chrono::{FixedOffset, Utc};
-use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
-use crate::repository::user_repository::UserRepository;
+use crate::user::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
+use crate::user::repository::user_repository::UserRepository;
 use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest, GetUsersByIdsRequest, GetUsersByIdsResponse, UpdateLastLoginTimeRequest, UpdateLastLoginTimeResponse};
 use common::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
 use common::utils::{generate_captcha_image, generate_captcha_text, save_image_code, validate_phone, verify_image_code};
-use crate::model::user_config::UserConfigData;
-use crate::repository::user_config_repository::UserConfigRepository;
+use crate::user::model::user_config::UserConfigData;
+use crate::user::repository::user_config_repository::UserConfigRepository;
 use std::sync::Arc;
 use redis::{Client as RedisClient, Commands};
 use common::sms::SmsService;
@@ -17,11 +17,9 @@ use common::sms::tencent::TencentSmsService;
 use common::config::ConfigLoader;
 use common::sms::VerificationAction;
 use std::str::FromStr;
-use common::grpc_client::base::get_rpc_client;
 use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest};
-use common::proto::friend::friend_service_client::FriendServiceClient;
-use common::proto::user::user_service_client::UserServiceClient;
-use common::service_discovery::LbWithServiceDiscovery;
+use common::proto::friend::friend_service_server::FriendService as _;
+use std::sync::OnceLock;
 use base64::Engine;
 use base64::engine::general_purpose;
 use uuid::Uuid;
@@ -29,15 +27,31 @@ use uuid::Uuid;
 /// 图片验证码前缀
 const IMAGE_CODE_PREFIX: &str = "image:verification:code";
 /// 用户服务实现
+#[derive(Clone)]
 pub struct UserServiceImpl {
     repository: UserRepository,
     user_config_repository: UserConfigRepository,
     sms_service: Arc<dyn SmsService>,
     redis_client: RedisClient,
-    friend_service_client: FriendServiceClient<LbWithServiceDiscovery>
+    /// 进程内直调好友服务（与 FriendServiceImpl 相互依赖，构造后由 main 绑定）
+    friend_service: Arc<OnceLock<Arc<crate::friend::service::friend_service::FriendServiceImpl>>>,
 }
 
 impl UserServiceImpl {
+    /// 绑定好友服务实例（解决 user↔friend 的构造循环依赖，由 main 在构造完成后调用）
+    pub fn bind_friend_service(
+        &self,
+        friend: Arc<crate::friend::service::friend_service::FriendServiceImpl>,
+    ) -> Result<(), Arc<crate::friend::service::friend_service::FriendServiceImpl>> {
+        self.friend_service.set(friend)
+    }
+
+    /// 获取好友服务实例（进程内直调）
+    fn friend(&self) -> &crate::friend::service::friend_service::FriendServiceImpl {
+        self.friend_service
+            .get()
+            .expect("FriendServiceImpl 尚未绑定（启动顺序错误）")
+    }
     pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         // 获取配置
         let config = ConfigLoader::get_global().expect("获取全局配置失败");
@@ -54,19 +68,18 @@ impl UserServiceImpl {
         ));
 
         let config = ConfigLoader::get_global().expect("获取全局配置失败");
-        let friend_service_client = get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&*config, "friend".to_string()).await?;
 
         Ok(Self {
             repository: UserRepository::new(pool.clone()),
             user_config_repository: UserConfigRepository::new(pool.clone()),
             sms_service,
             redis_client,
-            friend_service_client,
+            friend_service: Arc::new(OnceLock::new()),
         })
     }
     
     /// 处理用户信息时根据用户配置决定是否显示手机号
-    async fn process_user_phone_display(&self, mut user: crate::model::user::User) -> Result<crate::model::user::User, Status> {
+    async fn process_user_phone_display(&self, mut user: crate::user::model::user::User) -> Result<crate::user::model::user::User, Status> {
         // 获取用户配置
         let user_config = match self.user_config_repository.get_user_config(&user.id).await {
             Ok(config) => config,
@@ -270,13 +283,13 @@ impl UserServiceImpl {
             user_id: current_user_id.to_string(),
             friend_id: target_user_id.to_string(),
         };
-        let friend_status = self.friend_service_client.clone().check_friendship(check_friendship_request).await?.into_inner();
+        let friend_status = self.friend().check_friendship(Request::new(check_friendship_request)).await?.into_inner();
 
         let check_block_request = IsBlockedRequest {
             user_id: current_user_id.to_string(),
             blocked_user_id: target_user_id.to_string(),
         };
-        let is_blocked = self.friend_service_client.clone().is_blocked(check_block_request).await?.into_inner().is_blocked;
+        let is_blocked = self.friend().is_blocked(Request::new(check_block_request)).await?.into_inner().is_blocked;
         Ok((friend_status.status, is_blocked,friend_status.request_id))
     }
 }
@@ -523,7 +536,7 @@ impl UserService for UserServiceImpl {
                 friend_id: req.user_id.clone(),
             });
             
-            let friend_relation_resp = self.friend_service_client.clone().get_friend_relation(friend_relation_request).await?.into_inner();
+            let friend_relation_resp = self.friend().get_friend_relation(friend_relation_request).await?.into_inner();
             
             // 获取好友所在分组列表
             let friend_groups_request = Request::new(common::proto::friend::GetFriendInGroupsRequest {
@@ -531,7 +544,7 @@ impl UserService for UserServiceImpl {
                 friend_id: req.user_id.clone(),
             });
             
-            let friend_groups_resp = match self.friend_service_client.clone().get_friend_in_groups(friend_groups_request).await {
+            let friend_groups_resp = match self.friend().get_friend_in_groups(friend_groups_request).await {
                 Ok(resp) => resp.into_inner(),
                 Err(e) => {
                     // 日志记录错误，但不影响整体返回

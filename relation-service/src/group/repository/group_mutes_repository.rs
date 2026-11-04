@@ -2,8 +2,9 @@ use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 
-use crate::model::group_mute::GroupMuteEntry;
+use crate::group::model::group_mute::GroupMuteEntry;
 
+#[derive(Clone)]
 pub struct GroupMutesRepository {
     pool: PgPool,
 }

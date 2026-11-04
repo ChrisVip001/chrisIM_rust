@@ -2,8 +2,9 @@ use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 
-use crate::model::group_announcement::GroupAnnouncement;
+use crate::group::model::group_announcement::GroupAnnouncement;
 
+#[derive(Clone)]
 pub struct GroupAnnouncementRepository {
     pool: PgPool,
 }

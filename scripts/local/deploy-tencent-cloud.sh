@@ -38,12 +38,11 @@ SSH_KEY_PATH="$HOME/.ssh/id_rsa"  # SSH密钥路径
 declare -A SERVICES=(
     ["api-gateway"]="8080"
    ["msg-gateway"]="8085"
-    ["user-service"]="50001"
-    ["friend-service"]="50002"
-    ["group-service"]="50003"
+    ["relation-service"]="50004"
    ["msg-server"]="50004"
 #   ["msg-storage"]="50005"
 )
+# 注: relation-service 同时监听 config.yaml 中 user/friend/group 三个端口(50004/50005/50006)
 
 # 构建配置
 RUST_VERSION="1.85"
@@ -72,9 +71,7 @@ show_help() {
     echo "服务名称:"
     echo "  api-gateway     API网关服务"
     echo "  msg-gateway     消息网关服务"
-    echo "  user-service    用户服务"
-    echo "  friend-service  好友服务"
-    echo "  group-service   群组服务"
+    echo "  relation-service 关系服务(用户/好友/群组)"
     echo "  msg-server      消息服务器"
     echo ""
     echo "选项:"
@@ -102,7 +99,7 @@ show_help() {
     echo "  $0 restart                       # 重启所有服务"
     echo "  $0 restart msg-gateway           # 重启消息网关服务"
     echo "  $0 start api-gateway             # 启动API网关服务"
-    echo "  $0 stop user-service             # 停止用户服务"
+    echo "  $0 stop relation-service        # 停止关系服务"
     echo "  $0 status msg-gateway            # 查看消息网关服务状态"
     echo "  $0 logs api-gateway              # 查看API网关日志"
 }

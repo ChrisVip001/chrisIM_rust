@@ -4,9 +4,7 @@ set -e
 # 定义支持的服务列表
 SUPPORTED_SERVICES=(
     "auth-service"
-    "user-service"
-    "group-service"
-    "friend-service"
+    "relation-service"
     "oss"
     "msg-server"
     "msg-gateway"

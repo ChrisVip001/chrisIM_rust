@@ -3,8 +3,9 @@ use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::model::group_settings::GroupSettings;
+use crate::group::model::group_settings::GroupSettings;
 
+#[derive(Clone)]
 pub struct GroupSettingsRepository {
     pool: PgPool,
 }

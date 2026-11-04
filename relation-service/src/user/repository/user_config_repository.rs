@@ -1,9 +1,10 @@
 use chrono::{Utc};
 use sqlx::{PgPool, QueryBuilder};
 use common::{Result};
-use crate::model::user_config::{UserConfig, UserConfigData};
+use crate::user::model::user_config::{UserConfig, UserConfigData};
 
 /// 用户设置仓库实现
+#[derive(Clone)]
 pub struct UserConfigRepository {
     pool: PgPool,
 }

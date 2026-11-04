@@ -8,9 +8,7 @@ mkdir -p logs
 
 # 定义要启动的服务列表
 SERVICES=(
-  "user-service"
-  "group-service"
-  "friend-service"
+  "relation-service"
   "msg-server"
   "msg-gateway"
   "api-gateway"

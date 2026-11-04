@@ -2,8 +2,9 @@ use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 
-use crate::model::group_blacklist::GroupBlacklistEntry;
+use crate::group::model::group_blacklist::GroupBlacklistEntry;
 
+#[derive(Clone)]
 pub struct GroupBlacklistRepository {
     pool: PgPool,
 }

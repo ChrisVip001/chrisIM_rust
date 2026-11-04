@@ -3,9 +3,10 @@ use chrono::{DateTime, TimeZone, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 use std::collections::HashMap;
-use crate::model::group_mute::GroupMuteEntry;
-use crate::model::member_settings::MemberSettings;
+use crate::group::model::group_mute::GroupMuteEntry;
+use crate::group::model::member_settings::MemberSettings;
 
+#[derive(Clone)]
 pub struct MemberSettingsRepository {
     pool: PgPool,
 }

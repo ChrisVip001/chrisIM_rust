@@ -2,8 +2,9 @@ use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 
-use crate::model::group::{Group, UserGroup};
+use crate::group::model::group::{Group, UserGroup};
 
+#[derive(Clone)]
 pub struct GroupRepository {
     pool: PgPool,
 }

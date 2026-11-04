@@ -1,4 +1,4 @@
-use crate::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData, User};
+use crate::user::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData, User};
 use chrono::{TimeZone, Utc};
 use common::utils::{generate_user_id, hash_password, verify_password};
 use common::{Error, Result};
@@ -9,6 +9,7 @@ use tracing::log::info;
 use uuid::Uuid;
 
 /// 用户仓库实现
+#[derive(Clone)]
 pub struct UserRepository {
     pool: PgPool,
 }

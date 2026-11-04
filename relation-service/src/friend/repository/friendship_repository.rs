@@ -4,9 +4,10 @@ use common::proto::friend::FriendshipStatus;
 use sqlx::{PgPool, Row, FromRow, types::chrono::NaiveDateTime};
 use uuid::Uuid;
 
-use crate::model::friendship::{Friend, Friendship, FriendGroup, PotentialFriend, DetailedFriend};
-use crate::model::user_blacklist::UserBlacklist;
+use crate::friend::model::friendship::{Friend, Friendship, FriendGroup, PotentialFriend, DetailedFriend};
+use crate::friend::model::user_blacklist::UserBlacklist;
 
+#[derive(Clone)]
 pub struct FriendshipRepository {
     pool: PgPool,
 }

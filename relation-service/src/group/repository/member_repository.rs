@@ -4,8 +4,9 @@ use common::proto::group::MemberRole;
 use sqlx::PgPool;
 use sqlx::Row;
 
-use crate::model::member::Member;
+use crate::group::model::member::Member;
 
+#[derive(Clone)]
 pub struct MemberRepository {
     pool: PgPool,
 }
