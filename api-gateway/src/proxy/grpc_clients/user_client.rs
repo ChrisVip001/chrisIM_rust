@@ -3,7 +3,7 @@ use tonic::Request;
 
 use contract::proto::user::user_service_client::UserServiceClient;
 use contract::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, GetEnhancedUserByIdRequest};
-use crate::service_discovery::LbWithServiceDiscovery;
+use runtime::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务gRPC客户端
 #[derive(Clone)]

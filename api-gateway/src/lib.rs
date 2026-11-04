@@ -11,6 +11,6 @@ pub mod circuit_breaker;
 pub mod rate_limit;
 
 // 重新导出一些常用的类型
-pub use runtime::grpc_client::friend_client::FriendServiceGrpcClient;
-pub use runtime::grpc_client::group_client::GroupServiceGrpcClient;
-pub use runtime::grpc_client::user_client::UserServiceGrpcClient; 
+pub use proxy::grpc_clients::{
+    FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient,
+}; 

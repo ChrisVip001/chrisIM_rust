@@ -7,9 +7,9 @@ use runtime::configs::routes_config::ServiceType;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use crate::proxy::services::common::error_response;
-use runtime::config::{AppConfig, ConfigLoader};
+use runtime::config::AppConfig;
 use contract::Error;
-use runtime::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
+use crate::proxy::grpc_clients::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
 use runtime::grpc_client::base::get_rpc_client;
 use contract::proto::friend::friend_service_client::FriendServiceClient;
 use contract::proto::group::group_service_client::GroupServiceClient;
@@ -52,10 +52,10 @@ pub struct ServiceProxy {
 
 impl ServiceProxy {
     /// 创建新的服务代理
-    pub async fn new() -> Self {
-        // 加载配置
-        let config = ConfigLoader::get_global().expect("全局配置单例未初始化");
-        
+    ///
+    /// 配置由调用方注入，不再回读全局单例，
+    /// 这样本结构可以在测试里用一份临时配置构造。
+    pub async fn new(config: Arc<AppConfig>) -> Self {
         let proxy = Self {
             config,
             clients: Arc::new(RwLock::new(ServiceClients::new())),

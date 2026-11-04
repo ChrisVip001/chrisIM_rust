@@ -34,8 +34,9 @@ async fn main() -> anyhow::Result<()> {
 
     
     let app_config = AppConfig::from_file(Some(&config_path))?;
+    // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
+    let config = std::sync::Arc::new(app_config.clone());
     ConfigLoader::set_global(app_config);
-    let config = ConfigLoader::get_global().expect("未找到配置文件");
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
@@ -61,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
     metrics::init_metrics();
 
     // 构建应用
-    let app = build_app(&config, cache_instance).await?;
+    let app = build_app(config.clone(), cache_instance).await?;
 
     // 启动服务器
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
@@ -120,12 +121,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// 构建应用
-async fn build_app(config: &AppConfig, cache_instance: std::sync::Arc<dyn cache::Cache>) -> anyhow::Result<Router> {
+async fn build_app(config: std::sync::Arc<AppConfig>, cache_instance: std::sync::Arc<dyn cache::Cache>) -> anyhow::Result<Router> {
     // 创建服务代理
-    let service_proxy = proxy::ServiceProxy::new().await;
+    let service_proxy = proxy::ServiceProxy::new(config.clone()).await;
     
     // 构建路由
-    let router = router::build_routes(service_proxy, &config.gateway, cache_instance).await?;
+    let router = router::build_routes(service_proxy, config.clone(), cache_instance).await?;
     
     // 配置中间件栈
     // 限流/熔断从 gateway 配置读取并挂载到全局中间件栈
@@ -134,7 +135,7 @@ async fn build_app(config: &AppConfig, cache_instance: std::sync::Arc<dyn cache:
         .layer(TraceLayer::new_for_http())
         .layer(middleware::RequestLoggerLayer)
         .layer(metrics::MetricsLayer)
-        .layer(circuit_breaker::CircuitBreakerLayer)
+        .layer(circuit_breaker::CircuitBreakerLayer::new(config.clone()))
         .layer(rate_limit_layer)
         .layer(build_cors_layer())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))

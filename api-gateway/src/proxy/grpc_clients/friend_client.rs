@@ -15,7 +15,7 @@ use contract::proto::friend::{
     GetPendingFriendRequestCountRequest, GetPendingFriendRequestCountResponse,
 };
 
-use crate::service_discovery::LbWithServiceDiscovery;
+use runtime::service_discovery::LbWithServiceDiscovery;
 
 /// 好友服务gRPC客户端
 #[derive(Clone)]

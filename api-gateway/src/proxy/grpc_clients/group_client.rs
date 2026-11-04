@@ -21,7 +21,7 @@ use contract::proto::group::{
     AddMemberResponse,
 };
 
-use crate::service_discovery::LbWithServiceDiscovery;
+use runtime::service_discovery::LbWithServiceDiscovery;
 
 /// 群组服务gRPC客户端
 #[derive(Clone)]

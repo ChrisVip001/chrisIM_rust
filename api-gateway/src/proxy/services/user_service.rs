@@ -2,7 +2,7 @@ use axum::{
     body::Body,
     http::{Method, Response, StatusCode},
 };
-use runtime::grpc_client::UserServiceGrpcClient;
+use crate::proxy::grpc_clients::UserServiceGrpcClient;
 use contract::{proto, Error};
 use serde_json::{json, Value};
 use tracing::{error, debug, info};

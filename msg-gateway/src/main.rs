@@ -31,10 +31,9 @@ async fn main() -> anyhow::Result<()> {
     // 配置包含WebSocket服务器、gRPC服务器、JWT密钥等所有必要信息
     let app_config = runtime::config::AppConfig::from_file(Some(&config_path))
         .unwrap_or_else(|_| panic!("无法从路径加载配置: {}", config_path));
+    // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
+    let config = std::sync::Arc::new(app_config.clone());
     ConfigLoader::set_global(app_config);
-
-    // 确保全局配置可以正常访问
-    let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
     // 初始化日志和链路追踪系统
     // 根据配置判断是否启用分布式链路追踪

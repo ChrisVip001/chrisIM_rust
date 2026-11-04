@@ -33,10 +33,9 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| panic!("无法从路径加载配置: {}", config_path));
     
     // 设置全局配置，使得整个应用可以访问配置信息
+    // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
+    let config = std::sync::Arc::new(app_config.clone());
     ConfigLoader::set_global(app_config);
-    
-    // 获取全局配置实例，后续所有服务都会使用这个配置
-    let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
     // 初始化日志和分布式链路追踪系统
     // 根据配置判断是否启用分布式链路追踪功能

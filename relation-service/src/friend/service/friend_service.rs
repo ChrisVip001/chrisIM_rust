@@ -7,7 +7,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
-use runtime::config::ConfigLoader;
+use runtime::config::AppConfig;
 use runtime::grpc_client::base::get_rpc_client;
 use contract::proto::message::chat_service_client::ChatServiceClient;
 use contract::proto::message::SendMsgRequest;
@@ -31,10 +31,14 @@ pub struct FriendServiceImpl {
 }
 
 impl FriendServiceImpl {
-    pub async fn new(pool: PgPool, user_service: Arc<crate::user::service::user_service::UserServiceImpl>) -> anyhow::Result<Self> {
-        let config = ConfigLoader::get_global().expect("Failed to get global config");
-
-        let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&*config, "chat".to_string()).await?;
+    pub async fn new(
+        pool: PgPool,
+        user_service: Arc<crate::user::service::user_service::UserServiceImpl>,
+        config: &AppConfig,
+    ) -> anyhow::Result<Self> {
+        let chat_service_client =
+            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(config, "chat".to_string())
+                .await?;
 
         // 初始化Redis缓存连接
         // 用于缓存用户状态和序列号信息

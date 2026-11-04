@@ -21,10 +21,9 @@ async fn main() -> Result<()> {
     // 使用指定的配置文件路径初始化全局配置
     let app_config = AppConfig::from_file(Some(&config_path))
         .expect(&format!("无法从路径加载配置: {}", config_path));
+    // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
+    let config = std::sync::Arc::new(app_config.clone());
     ConfigLoader::set_global(app_config);
-
-    // 确保全局配置可以正常访问
-    let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
     // start cleaner
     msg_storage::clean_receive_box(&config).await;

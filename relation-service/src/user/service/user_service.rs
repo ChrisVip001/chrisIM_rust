@@ -14,7 +14,7 @@ use std::sync::Arc;
 use redis::{Client as RedisClient, Commands};
 use runtime::sms::SmsService;
 use runtime::sms::tencent::TencentSmsService;
-use runtime::config::ConfigLoader;
+use runtime::config::AppConfig;
 use runtime::sms::VerificationAction;
 use std::str::FromStr;
 use contract::proto::friend::{CheckFriendshipRequest, IsBlockedRequest};
@@ -52,10 +52,7 @@ impl UserServiceImpl {
             .get()
             .expect("FriendServiceImpl 尚未绑定（启动顺序错误）")
     }
-    pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
-        // 获取配置
-        let config = ConfigLoader::get_global().expect("获取全局配置失败");
-        
+    pub async fn new(pool: PgPool, config: &AppConfig) -> anyhow::Result<Self> {
         // 创建Redis客户端
         let redis_url = config.redis.url();
         let redis_client = RedisClient::open(redis_url)
@@ -66,8 +63,6 @@ impl UserServiceImpl {
             redis_client.clone(), 
             Arc::new(config.sms.clone())
         ));
-
-        let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
         Ok(Self {
             repository: UserRepository::new(pool.clone()),

@@ -40,8 +40,9 @@ async fn main() -> Result<()> {
     // 初始化全局配置
     let app_config = AppConfig::from_file(Some(&config_path))
         .expect(&format!("无法从路径加载配置: {}", config_path));
+    // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
+    let config = std::sync::Arc::new(app_config.clone());
     ConfigLoader::set_global(app_config);
-    let config = ConfigLoader::get_global().expect("获取全局配置失败");
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
@@ -80,10 +81,10 @@ async fn main() -> Result<()> {
 
     // 初始化三个业务服务实例（可 Clone，供多个监听端口复用）
     // 依赖顺序：friend/group 直调 user；user 直调 friend（构造后绑定，解决循环依赖）
-    let user_service = UserServiceImpl::new(db_pool.clone()).await?;
+    let user_service = UserServiceImpl::new(db_pool.clone(), &config).await?;
     let user_arc = Arc::new(user_service);
-    let friend_service = FriendServiceImpl::new(db_pool.clone(), user_arc.clone()).await?;
-    let group_service = GroupServiceImpl::new(db_pool.clone(), user_arc.clone()).await?;
+    let friend_service = FriendServiceImpl::new(db_pool.clone(), user_arc.clone(), &config).await?;
+    let group_service = GroupServiceImpl::new(db_pool.clone(), user_arc.clone(), &config).await?;
     let friend_arc = Arc::new(friend_service);
     user_arc
         .bind_friend_service(friend_arc.clone())

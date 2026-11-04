@@ -12,8 +12,8 @@ use axum::{
 };
 use contract::{proto::user::user_service_client::UserServiceClient, Error};
 use runtime::{
-    config::ConfigLoader,
-    configs::{routes_config::RouteRule, GatewayConfig},
+    config::{AppConfig, ConfigLoader},
+    configs::routes_config::RouteRule,
     grpc_client::base::get_rpc_client,
     service_discovery::LbWithServiceDiscovery,
 };
@@ -73,11 +73,11 @@ pub struct ValidateRegisterAvatarRequest {
 /// * `Result<Router, anyhow::Error>` - 成功时返回构建好的路由器，失败时返回错误
 pub async fn build_routes(
     service_proxy: ServiceProxy,
-    gateway_config: &GatewayConfig,
+    config: Arc<AppConfig>,
     cache_instance: Arc<dyn cache::Cache>,
 ) -> anyhow::Result<Router> {
+    let gateway_config = &config.gateway;
     // 创建用户服务客户端
-    let config = ConfigLoader::get_global().expect("获取配置失败");
     let service_client = get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
         &config,
         "user".to_string(),

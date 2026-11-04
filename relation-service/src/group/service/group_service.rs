@@ -7,7 +7,7 @@ use crate::group::repository::group_repository::GroupRepository;
 use crate::group::repository::group_settings_repository::GroupSettingsRepository;
 use crate::group::repository::member_repository::MemberRepository;
 use crate::group::repository::member_settings_repository::MemberSettingsRepository;
-use runtime::config::ConfigLoader;
+use runtime::config::AppConfig;
 use runtime::grpc_client::base::get_rpc_client;
 use contract::proto::group::group_service_server::GroupService;
 use contract::proto::group::{AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse, CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest, CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse, GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest, GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest, GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse, GroupResponse, GroupSettingsResponse, LeaveGroupRequest, LeaveGroupResponse, MemberResponse, MemberRole, MemberSettingsResponse, MuteMemberRequest, MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest, RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse, UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest, UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest};
@@ -41,9 +41,14 @@ pub struct GroupServiceImpl {
 }
 
 impl GroupServiceImpl {
-    pub async fn new(pool: PgPool, user_service: Arc<crate::user::service::user_service::UserServiceImpl>) -> anyhow::Result<Self> {
-        let config = ConfigLoader::get_global().expect("Failed to get global config");
-        let chat_service_client = get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&config, "chat".to_string()).await?;
+    pub async fn new(
+        pool: PgPool,
+        user_service: Arc<crate::user::service::user_service::UserServiceImpl>,
+        config: &AppConfig,
+    ) -> anyhow::Result<Self> {
+        let chat_service_client =
+            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(config, "chat".to_string())
+                .await?;
 
         // 初始化消息存储
         let msg_rec_box = msg_storage::msg_rec_box_repo(&config).await?;

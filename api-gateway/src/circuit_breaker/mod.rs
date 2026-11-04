@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use runtime::config::ConfigLoader;
+use runtime::config::AppConfig;
 use futures::future::BoxFuture;
 use parking_lot::RwLock;
 use serde_json::json;
@@ -152,13 +152,15 @@ impl CircuitBreaker {
 pub struct CircuitBreakerMiddleware<S> {
     inner: S,
     breakers: Arc<RwLock<HashMap<String, Arc<CircuitBreaker>>>>,
+    config: Arc<AppConfig>,
 }
 
 impl<S> CircuitBreakerMiddleware<S> {
     /// 创建新的熔断中间件
-    pub fn new(inner: S) -> Self {
+    pub fn new(inner: S, config: Arc<AppConfig>) -> Self {
         Self {
             inner,
+            config,
             breakers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -180,10 +182,8 @@ impl<S> CircuitBreakerMiddleware<S> {
             return breaker.clone();
         }
 
-        // 从配置中读取熔断参数
-        // 读取全局配置
-        let config = ConfigLoader::get_global().expect("Failed to get global config");
-        let gateway_config = &config.gateway;
+        // 从注入的配置中读取熔断参数
+        let gateway_config = &self.config.gateway;
 
         // 创建新的熔断器
         let breaker = Arc::new(CircuitBreaker::new(
@@ -268,6 +268,7 @@ where
         Self {
             inner: self.inner.clone(),
             breakers: self.breakers.clone(),
+            config: self.config.clone(),
         }
     }
 }
@@ -302,15 +303,24 @@ fn extract_service_id(req: &Request<Body>) -> String {
 }
 
 /// 熔断中间件层
+///
+/// 携带配置快照：熔断阈值来自配置，随 Layer 一起注入，
+/// 避免中间件在执行期回读全局单例。
 #[derive(Clone)]
-pub struct CircuitBreakerLayer;
+pub struct CircuitBreakerLayer {
+    config: Arc<AppConfig>,
+}
 
-impl CircuitBreakerLayer {}
+impl CircuitBreakerLayer {
+    pub fn new(config: Arc<AppConfig>) -> Self {
+        Self { config }
+    }
+}
 
 impl<S> Layer<S> for CircuitBreakerLayer {
     type Service = CircuitBreakerMiddleware<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        CircuitBreakerMiddleware::new(inner)
+        CircuitBreakerMiddleware::new(inner, self.config.clone())
     }
 }
