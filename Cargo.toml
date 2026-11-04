@@ -59,5 +59,14 @@ reqwest = { version = "0.12.15", features = ["json"] }
 tower = "0.5.2"
 tower-http = { version = "0.6.2", features = ["trace", "cors", "auth"] }
 rand = "0.9.0"
-aws-sdk-s3 = { version = "1.8.3", features = ["rt-tokio"] }
+# 默认的 `rustls` feature 映射到 legacy TLS 栈（rustls 0.21，已有多条 RUSTSEC 告警），
+# 关闭默认特性并改用 rustls-aws-lc（rustls 0.23）：
+# default-https-client → aws-smithy-http-client/rustls-aws-lc
+aws-sdk-s3 = { version = "1.157.0", default-features = false, features = [
+    "rt-tokio",
+    "http-1x",
+    "sigv4a",
+    "default-https-client",
+    "behavior-version-latest",
+] }
 base64 = "0.22.1"

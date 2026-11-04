@@ -9,3 +9,5 @@ Cargo.lock
 .codebuddy/
 # 运行时产物
 logs/
+.sqlx
+.cargo
