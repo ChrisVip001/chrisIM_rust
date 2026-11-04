@@ -7,19 +7,19 @@ use crate::group::repository::group_repository::GroupRepository;
 use crate::group::repository::group_settings_repository::GroupSettingsRepository;
 use crate::group::repository::member_repository::MemberRepository;
 use crate::group::repository::member_settings_repository::MemberSettingsRepository;
-use common::config::ConfigLoader;
-use common::grpc_client::base::get_rpc_client;
-use common::proto::group::group_service_server::GroupService;
-use common::proto::group::{AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse, CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest, CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse, GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest, GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest, GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse, GroupResponse, GroupSettingsResponse, LeaveGroupRequest, LeaveGroupResponse, MemberResponse, MemberRole, MemberSettingsResponse, MuteMemberRequest, MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest, RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse, UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest, UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest};
-use common::proto::user::user_service_server::UserService;
-use common::service_discovery::LbWithServiceDiscovery;
+use runtime::config::ConfigLoader;
+use runtime::grpc_client::base::get_rpc_client;
+use contract::proto::group::group_service_server::GroupService;
+use contract::proto::group::{AddMemberRequest, AddMemberResponse, AddToBlacklistRequest, AnnouncementResponse, BlacklistResponse, CheckMembershipRequest, CheckMembershipResponse, CheckUserMuteStatusRequest, CheckUserMuteStatusResponse, CreateAnnouncementRequest, CreateGroupQrcodeRequest, CreateGroupRequest, DeleteAnnouncementRequest, DeleteAnnouncementResponse, DeleteGroupRequest, DeleteGroupResponse, GetAnnouncementRequest, GetBlacklistRequest, GetBlacklistResponse, GetGroupAnnouncementsRequest, GetGroupAnnouncementsResponse, GetGroupQrcodeRequest, GetGroupRequest, GetGroupSettingsRequest, GetMemberSettingsRequest, GetMembersRequest, GetMembersResponse, GetMutedMembersRequest, GetMutedMembersResponse, GetUserGroupsRequest, GetUserGroupsResponse, GroupQrcodeResponse, GroupResponse, GroupSettingsResponse, LeaveGroupRequest, LeaveGroupResponse, MemberResponse, MemberRole, MemberSettingsResponse, MuteMemberRequest, MuteResponse, RemoveFromBlacklistRequest, RemoveFromBlacklistResponse, RemoveMemberRequest, RemoveMemberResponse, SearchUserGroupsRequest, SearchUserGroupsResponse, UnmuteMemberRequest, UnmuteResponse, UpdateGroupRequest, UpdateGroupSettingsRequest, UpdateMemberRoleRequest, UpdateMemberSettingsRequest};
+use contract::proto::user::user_service_server::UserService;
+use runtime::service_discovery::LbWithServiceDiscovery;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, debug};
 use cache::Cache;
-use common::proto::message::chat_service_client::ChatServiceClient;
-use common::proto::message::{ContentType, Msg, MsgType, PlatformType, SendMsgRequest};
-use common::proto::message::msg_service_client::MsgServiceClient;
+use contract::proto::message::chat_service_client::ChatServiceClient;
+use contract::proto::message::{ContentType, Msg, MsgType, PlatformType, SendMsgRequest};
+use contract::proto::message::msg_service_client::MsgServiceClient;
 use msg_storage::{MsgStoreRepo, MsgRecBoxRepo};
 use crate::group::model::group::Group;
 use serde_json;
@@ -67,13 +67,13 @@ impl GroupServiceImpl {
     }
 
     // 批量获取用户信息的辅助方法
-    async fn fetch_users_info(&self, user_ids: Vec<String>) -> Result<std::collections::HashMap<String, common::proto::user::User>, Status> {
+    async fn fetch_users_info(&self, user_ids: Vec<String>) -> Result<std::collections::HashMap<String, contract::proto::user::User>, Status> {
         if user_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
 
         // 使用GetUsersByIds批量获取用户信息
-        let request = tonic::Request::new(common::proto::user::GetUsersByIdsRequest {
+        let request = tonic::Request::new(contract::proto::user::GetUsersByIdsRequest {
             user_ids: user_ids.clone(),
         });
 
@@ -96,7 +96,7 @@ impl GroupServiceImpl {
     }
     
     // 创建默认的成员设置
-    async fn create_default_member_settings(&self, group_id: &str, user_id: &str, user_info: Option<&common::proto::user::User>) -> Result<(), Status> {
+    async fn create_default_member_settings(&self, group_id: &str, user_id: &str, user_info: Option<&contract::proto::user::User>) -> Result<(), Status> {
         // 获取用户昵称，如果没有则使用空字符串
         let nickname_in_group = match user_info {
             Some(user) => user.nickname.clone().unwrap_or_default(),
@@ -229,7 +229,7 @@ impl GroupServiceImpl {
         group_id: &str,
         user_id: &str,
         role: MemberRole,
-        user_info_map: &std::collections::HashMap<String, common::proto::user::User>,
+        user_info_map: &std::collections::HashMap<String, contract::proto::user::User>,
     ) -> Result<crate::group::model::member::Member, Status> {
         // 添加成员到群组
         let member = self

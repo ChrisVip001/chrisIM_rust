@@ -1,7 +1,8 @@
 use seq::SeqRepo;
 use tracing::info;
 
-use common::{config::AppConfig, proto::message::MsgType, error::Error};
+use contract::{error::Error, proto::message::MsgType};
+use runtime::config::AppConfig;
 
 mod mongodb;
 mod postgres;

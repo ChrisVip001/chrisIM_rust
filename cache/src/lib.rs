@@ -8,11 +8,11 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::proto::message::{GroupMemSeq, PlatformType};
+use contract::proto::message::{GroupMemSeq, PlatformType};
 use serde::{Deserialize, Serialize};
 
-use common::config::AppConfig;
-use common::error::Error;
+use runtime::config::AppConfig;
+use contract::error::Error;
 
 mod redis;
 

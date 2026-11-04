@@ -31,10 +31,10 @@ impl GroupBlacklistEntry {
         }
     }
 
-    pub fn to_proto(&self) -> common::proto::group::BlacklistEntry {
+    pub fn to_proto(&self) -> contract::proto::group::BlacklistEntry {
         let created_system_time = SystemTime::from(self.created_at);
 
-        common::proto::group::BlacklistEntry {
+        contract::proto::group::BlacklistEntry {
             id: self.id.clone(),
             group_id: self.group_id.clone(),
             user_id: self.user_id.clone(),

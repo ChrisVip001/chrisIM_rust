@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use common::proto::friend::{DetailedFriend as ProtoDetailedFriend, FriendType,
+use contract::proto::friend::{DetailedFriend as ProtoDetailedFriend, FriendType,
                             Friendship as ProtoFriendship, PotentialFriend as ProtoPotentialFriend};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
@@ -69,10 +69,10 @@ pub struct Friend {
 }
 
 impl Friend {
-    pub fn to_proto(&self) -> common::proto::friend::Friend {
+    pub fn to_proto(&self) -> contract::proto::friend::Friend {
         let created_system_time = SystemTime::from(self.friendship_created_at);
 
-        common::proto::friend::Friend {
+        contract::proto::friend::Friend {
             id: self.id.clone(),
             username: self.username.clone(),
             nickname: self.nickname.clone(),
@@ -108,8 +108,8 @@ impl FriendGroup {
         }
     }
 
-    pub fn to_proto(&self) -> common::proto::friend::FriendGroup {
-        common::proto::friend::FriendGroup {
+    pub fn to_proto(&self) -> contract::proto::friend::FriendGroup {
+        contract::proto::friend::FriendGroup {
             id: self.id.clone(),
             user_id: self.user_id.clone(),
             group_name: self.group_name.clone(),
@@ -229,7 +229,7 @@ impl DetailedFriend {
     }
 
     // 辅助方法 - 将详细好友对象转换为proto对象
-    pub fn detailed_friend_to_proto(&self) -> common::proto::friend::DetailedFriend {
+    pub fn detailed_friend_to_proto(&self) -> contract::proto::friend::DetailedFriend {
         let created_system_time = SystemTime::from(self.friendship_created_at);
 
         let friend_type = match self.friend_type {
@@ -239,7 +239,7 @@ impl DetailedFriend {
             _ => FriendType::Friend,
         };
 
-        common::proto::friend::DetailedFriend {
+        contract::proto::friend::DetailedFriend {
             id: self.id.clone(),
             username: self.username.clone(),
             nickname: self.nickname.clone(),

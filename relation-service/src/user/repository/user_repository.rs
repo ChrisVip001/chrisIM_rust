@@ -1,7 +1,7 @@
 use crate::user::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData, User};
 use chrono::{TimeZone, Utc};
-use common::utils::{generate_user_id, hash_password, verify_password};
-use common::{Error, Result};
+use runtime::utils::{generate_user_id, hash_password, verify_password};
+use contract::{Error, Result};
 use sqlx::{PgPool, QueryBuilder, Row};
 use tonic::Status;
 use tracing::{debug, error};

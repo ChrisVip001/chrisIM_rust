@@ -11,9 +11,7 @@ use tower_http::{
 };
 use tracing::{error, info};
 
-use common::{
-    config::{AppConfig, ConfigLoader},
-};
+use runtime::config::{AppConfig, ConfigLoader};
 use crate::api_utils::ip_region::ip_location::init_ip_location;
 
 mod api_utils;
@@ -28,7 +26,7 @@ mod router;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 初始化加密提供程序
-    common::service::init_rustls();
+    runtime::service::init_rustls();
 
     // 加载配置
     let config_path = std::env::var("CONFIG_PATH")
@@ -41,10 +39,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
-        common::logging::init_telemetry(&config, "api-gateway")?;
+        runtime::logging::init_telemetry(&config, "api-gateway")?;
         info!("链路追踪已启用: {}", config.telemetry.endpoint);
     } else {
-        common::logging::init_from_config(&config, "api-gateway")?;
+        runtime::logging::init_from_config(&config, "api-gateway")?;
         info!("仅启用日志系统");
     }
 
@@ -115,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     shutdown_task.await??;
-    common::logging::shutdown_telemetry();
+    runtime::logging::shutdown_telemetry();
     info!("API网关服务已关闭");
 
     Ok(())

@@ -1,5 +1,5 @@
 use axum::http::Request;
-use common::error::Error;
+use contract::error::Error;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};

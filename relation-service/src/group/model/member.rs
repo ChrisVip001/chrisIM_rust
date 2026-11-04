@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use common::proto::group::MemberRole;
+use contract::proto::group::MemberRole;
 use prost_types;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -40,10 +40,10 @@ impl Member {
         }
     }
 
-    pub fn to_proto(&self) -> common::proto::group::Member {
+    pub fn to_proto(&self) -> contract::proto::group::Member {
         let joined_system_time = SystemTime::from(self.joined_at);
 
-        common::proto::group::Member {
+        contract::proto::group::Member {
             id: self.id.clone(),
             group_id: self.group_id.clone(),
             user_id: self.user_id.clone(),

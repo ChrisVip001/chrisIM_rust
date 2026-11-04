@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use common::error::Error;
-use common::proto::message::{GroupMemSeq, Msg};
+use contract::error::Error;
+use contract::proto::message::{GroupMemSeq, Msg};
 
 /// 消息存储仓库trait
 /// 面向PostgreSQL数据库，用于持久化存储消息

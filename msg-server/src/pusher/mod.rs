@@ -1,10 +1,10 @@
 use std::{fmt::Debug, sync::Arc};
 
-use common::{
-    config::AppConfig,
+use contract::{
     error::Error,
     proto::message::{GroupMemSeq, Msg},
 };
+use runtime::config::AppConfig;
 use tonic::async_trait;
 
 mod service;

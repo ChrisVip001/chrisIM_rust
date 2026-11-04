@@ -1,39 +1,34 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::future;
 use nanoid::nanoid;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-use rdkafka::client::DefaultClientContext;
-use rdkafka::error::KafkaError;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::ClientConfig;
-use tonic::{Response, Status};
 use tonic::transport::Server;
 use tracing::{debug, error, info};
 
 use cache::Cache;
-use common::config::{AppConfig, Component};
-use common::grpc::LoggingInterceptor;
-use common::proto::message::chat_service_server::{ChatService, ChatServiceServer};
-use common::proto::message::{
-    Conversation, DeleteMessagesRequest, DeleteMessagesResponse, ForwardMessageRequest,
-    ForwardMessageResponse, GetConversationsRequest, GetConversationsResponse,
-    GetDbMessagesRequest, GetMessageHistoryResponse, MarkConversationAsReadRequest,
-    MarkMessagesAsReadRequest, MarkMessagesAsReadResponse, Msg, MsgType, RevokeMessageRequest,
-    RevokeMessageResponse, SendMsgRequest, ContentType,
+use runtime::grpc_client::base::get_rpc_client;
+use contract::proto::friend::friend_service_client::FriendServiceClient;
+use contract::proto::friend::{CheckFriendshipRequest, FriendRelationType, IsBlockedRequest};
+use contract::proto::group::group_service_client::GroupServiceClient;
+use contract::proto::group::{CheckMembershipRequest, GetGroupRequest};
+use contract::proto::message::chat_service_server::{ChatService, ChatServiceServer};
+use contract::proto::message::{
+    DeleteMessagesRequest, DeleteMessagesResponse, ForwardMessageRequest, ForwardMessageResponse,
+    GetConversationsRequest, GetConversationsResponse, GetDbMessagesRequest,
+    GetMessageHistoryResponse, MarkConversationAsReadRequest, MarkMessagesAsReadRequest,
+    MarkMessagesAsReadResponse, Msg, MsgType, RevokeMessageRequest, RevokeMessageResponse,
+    SendMsgRequest,
 };
-use common::types::msg::MsgType2;
-use common::Error;
-use common::proto::friend::friend_service_client::FriendServiceClient;
-use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest, FriendRelationType, IsBlockedResponse};
-use common::proto::group::group_service_client::GroupServiceClient;
-use common::proto::group::{CheckMembershipRequest, GetGroupRequest};
-use common::service_discovery::LbWithServiceDiscovery;
-use common::grpc_client::base::get_rpc_client;
+use runtime::service_discovery::LbWithServiceDiscovery;
+use runtime::config::{AppConfig, Component};
+use runtime::grpc::LoggingInterceptor;
+use contract::Error;
 use msg_storage::{message::MsgRecBoxRepo, msg_rec_box_repo};
+
+use crate::conversation::{self, QueryMode};
+use crate::kafka;
 
 /// 聊天消息RPC服务实现
 ///
@@ -111,26 +106,11 @@ impl ChatRpcService {
     /// # 参数
     /// * `config` - 应用程序配置，包含Kafka、gRPC等所有配置信息
     pub async fn start(config: &AppConfig) -> Result<(), Error> {
-        // 配置Kafka生产者
-        let mut kafka_config = ClientConfig::new();
-        kafka_config
-            .set("bootstrap.servers", &config.kafka.hosts.join(","))
-            .set("message.timeout.ms", "30000")
-            .set("queue.buffering.max.messages", "100000")
-            .set("queue.buffering.max.kbytes", "1048576")
-            .set("batch.num.messages", "1000")
-            .set("enable.idempotence", "true")
-            .set("retries", "2147483647")
-            .set("max.in.flight.requests.per.connection", "5")
-            .set("acks", "all")
-            .set("compression.type", "snappy");
-
-        // 创建Kafka生产者
-        let producer: FutureProducer = kafka_config.create()
-            .map_err(|e| Error::Internal(format!("创建Kafka生产者失败: {}", e)))?;
+        // 创建Kafka生产者（参数见 kafka 模块，与消费者侧共用同一套可靠投递配置）
+        let producer = kafka::build_producer(config)?;
 
         // 确保Kafka主题存在
-        Self::ensure_topic_exists(
+        kafka::ensure_topic(
             &config.kafka.topic,
             &config.kafka.hosts.join(","),
             config.kafka.connect_timeout as u16,
@@ -141,7 +121,7 @@ impl ChatRpcService {
         info!("Kafka主题 '{}' 已确保存在", config.kafka.topic);
 
         // 向服务注册中心注册当前服务
-        common::grpc_client::base::register_service(config, Component::MessageServer)
+        runtime::grpc_client::base::register_service(config, Component::MessageServer)
             .await?;
 
         info!("聊天RPC服务已注册到服务注册中心");
@@ -195,59 +175,6 @@ impl ChatRpcService {
         Ok(())
     }
 
-    /// 确保Kafka主题存在
-    ///
-    /// 检查指定的Kafka主题是否存在，如果不存在则创建该主题。
-    /// 这是一个重要的初始化步骤，确保消息有地方可以发送。
-    ///
-    /// # 参数
-    /// * `topic_name` - 要检查/创建的主题名称
-    /// * `brokers` - Kafka代理服务器地址
-    /// * `timeout` - 连接超时时间（毫秒）
-    ///
-    /// # 返回值
-    /// * `Ok(())` - 主题存在或创建成功
-    /// * `Err(KafkaError)` - 创建主题失败
-    async fn ensure_topic_exists(
-        topic_name: &str,
-        brokers: &str,
-        timeout: u16,
-    ) -> Result<(), KafkaError> {
-        // 创建Kafka管理客户端用于管理主题
-        let admin_client: AdminClient<DefaultClientContext> = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("socket.timeout.ms", timeout.to_string())
-            .create()?;
-
-        // 定义新主题的配置
-        // 设置1个分区和1个副本（适合开发环境，生产环境建议更多）
-        let new_topics = [NewTopic {
-            name: topic_name,                        // 主题名称
-            num_partitions: 1,                       // 分区数量
-            replication: TopicReplication::Fixed(1), // 副本数量
-            config: vec![],                          // 额外配置（使用默认）
-        }];
-
-        // 尝试创建主题
-        // 注意：这里采用"先创建后判断"的策略，因为检查主题存在性的API较复杂
-        let options = AdminOptions::new();
-        match admin_client.create_topics(&new_topics, &options).await {
-            Ok(_) => {
-                info!("Kafka主题 '{}' 不存在，已成功创建", topic_name);
-                Ok(())
-            }
-            Err(KafkaError::AdminOpCreation(_)) => {
-                // 这种错误通常表示主题已存在
-                info!("Kafka主题 '{}' 已存在，无需创建", topic_name);
-                Ok(())
-            }
-            Err(err) => {
-                error!("创建Kafka主题失败: {:?}", err);
-                Err(err)
-            }
-        }
-    }
-
     /// 检查好友关系和拉黑状态
     ///
     /// # 参数
@@ -287,7 +214,9 @@ impl ChatRpcService {
                     return Ok(false);
                 }
             }
-            Err(e) => {}
+            Err(_) => {
+                // 对方是否把我拉黑不阻断发送，仅作参考
+            }
         }
 
         // 使用RPC调用检查好友关系
@@ -400,7 +329,7 @@ impl ChatRpcService {
                 }
 
                 // 对于群聊消息，receiver_id 应该是群组ID
-                let group_id = if !msg.group_id.is_empty() && msg.group_id != "" {
+                let group_id = if !msg.group_id.is_empty() {
                     &msg.group_id
                 } else {
                     &msg.receiver_id
@@ -804,7 +733,7 @@ impl ChatService for ChatRpcService {
         let (rec_seq, send_seq) = self.cache.get_cur_seq(&req.user_id).await?;
 
         // 确定查询模式和范围
-        let query_range = self.determine_query_range(&req, rec_seq, send_seq);
+        let query_range = conversation::determine_query_range(&req, rec_seq, send_seq);
         debug!("查询模式: {:?}, 范围: {:?}", query_range.mode, query_range);
 
         // 如果是增量同步且无新消息，直接返回
@@ -819,10 +748,11 @@ impl ChatService for ChatRpcService {
         }
 
         // 查询消息
-        match self.fetch_messages(&req.user_id, &query_range).await {
+        match conversation::fetch_messages(&*self.msg_storage, &req.user_id, &query_range).await {
             Ok(messages) => {
                 debug!("获取到 {} 条消息", messages.len());
-                let conversations = self.build_conversations(&req, messages).await;
+                let conversations =
+                    conversation::build_conversations(&*self.cache, &req.user_id, messages).await;
                 debug!("构建了 {} 个会话", conversations.len());
                 let total = conversations.len() as i32;
 
@@ -1048,7 +978,11 @@ impl ChatService for ChatRpcService {
             // 转发给单聊用户
             for target_user_id in &req.target_user_ids {
                 // 检查转发到单聊的权限
-                if let Err(_) = self.check_forward_to_user_permission(&req.user_id, target_user_id).await {
+                if self
+                    .check_forward_to_user_permission(&req.user_id, target_user_id)
+                    .await
+                    .is_err()
+                {
                     error_messages.push(format!("无法转发给用户 {}", target_user_id));
                     continue;
                 }
@@ -1180,214 +1114,3 @@ impl ChatService for ChatRpcService {
         }))
     }
 }
-
-/// 查询模式枚举
-#[derive(Debug, PartialEq)]
-enum QueryMode {
-    /// 增量同步：获取指定序列号之后的新消息
-    IncrementalSync,
-    /// 全量离线：获取所有离线消息
-    FullOffline,
-    /// 正常模式：获取最近N条消息
-    Normal,
-}
-
-/// 查询范围
-#[derive(Debug)]
-struct QueryRange {
-    mode: QueryMode,
-    rec_start: i64,
-    rec_end: i64,
-    send_start: i64,
-    send_end: i64,
-}
-
-impl QueryRange {
-    fn is_empty(&self) -> bool {
-        self.rec_start > self.rec_end && self.send_start > self.send_end
-    }
-}
-
-impl ChatRpcService {
-    /// 确定查询模式和范围
-    fn determine_query_range(
-        &self,
-        req: &GetConversationsRequest,
-        rec_seq: i64,
-        send_seq: i64,
-    ) -> QueryRange {
-        let sync_mode = req.sync_mode.unwrap_or(false);
-        let since_seq = req.since_seq.unwrap_or(0);
-        let since_send_seq = req.since_send_seq.unwrap_or(0);
-
-        // 判断模式
-        let mode = if sync_mode && (since_seq > 0 || since_send_seq > 0) {
-            QueryMode::IncrementalSync
-        } else if sync_mode || (since_seq == 0 && since_send_seq == 0) {
-            QueryMode::FullOffline
-        } else {
-            QueryMode::Normal
-        };
-
-        // 根据模式计算查询范围
-        match mode {
-            QueryMode::IncrementalSync => {
-                // 增量同步：从客户端最后序列号+1开始到当前序列号
-                QueryRange {
-                    mode,
-                    rec_start: since_seq + 1,
-                    rec_end: rec_seq,
-                    send_start: since_send_seq + 1,
-                    send_end: send_seq,
-                }
-            }
-            QueryMode::FullOffline => {
-                // 全量离线：获取最近的消息，限制数量防止内存溢出
-                const OFFLINE_RECENT_COUNT: i64 = 5000; // 离线模式最多获取5000条消息
-                QueryRange {
-                    mode,
-                    rec_start: std::cmp::max(1, rec_seq - OFFLINE_RECENT_COUNT),
-                    rec_end: rec_seq,
-                    send_start: std::cmp::max(1, send_seq - OFFLINE_RECENT_COUNT),
-                    send_end: send_seq,
-                }
-            }
-            QueryMode::Normal => {
-                // 正常模式：获取最近2000条消息
-                const RECENT_COUNT: i64 = 2000;
-                QueryRange {
-                    mode,
-                    rec_start: std::cmp::max(1, rec_seq - RECENT_COUNT),
-                    rec_end: rec_seq,
-                    send_start: std::cmp::max(1, send_seq - RECENT_COUNT),
-                    send_end: send_seq,
-                }
-            }
-        }
-    }
-
-    /// 查询消息
-    async fn fetch_messages(&self, user_id: &str, range: &QueryRange) -> Result<Vec<Msg>, Error> {
-        self.msg_storage
-            .get_msgs(
-                user_id,
-                range.send_start,
-                range.send_end,
-                range.rec_start,
-                range.rec_end,
-            )
-            .await
-            .map_err(|e| e.into())
-    }
-
-    /// 构建会话列表
-    async fn build_conversations(
-        &self,
-        req: &GetConversationsRequest,
-        messages: Vec<Msg>,
-    ) -> Vec<Conversation> {
-        if messages.is_empty() {
-            return Vec::new();
-        }
-
-        // 按会话ID分组消息
-        let conversations_map = self.group_messages_by_conversation(&req.user_id, messages);
-
-        // 构建会话对象
-        let conversation_futures: Vec<_> = conversations_map
-            .into_iter()
-            .filter_map(|(conversation_id, mut msgs)| {
-                if msgs.is_empty() {
-                    return None;
-                }
-
-                // 按发送时间排序（最新的在后）
-                msgs.sort_by(|a, b| a.send_time.cmp(&b.send_time));
-
-                Some(self.create_conversation(conversation_id, msgs, req.user_id.clone()))
-            })
-            .collect();
-
-        let mut conversations = future::join_all(conversation_futures).await;
-
-        // 按最后活跃时间排序（最新的在后）
-        conversations.sort_by(|a, b| a.last_active_time.cmp(&b.last_active_time));
-        conversations
-    }
-
-    /// 按会话ID分组消息
-    fn group_messages_by_conversation(
-        &self,
-        user_id: &str,
-        messages: Vec<Msg>,
-    ) -> std::collections::HashMap<String, Vec<Msg>> {
-        let mut conversations = std::collections::HashMap::new();
-
-        for msg in messages {
-            let conversation_id = self.extract_conversation_id(&msg, user_id);
-            if !conversation_id.is_empty() {
-                conversations
-                    .entry(conversation_id)
-                    .or_insert_with(Vec::new)
-                    .push(msg);
-            }
-        }
-
-        conversations
-    }
-
-    /// 提取会话ID
-    fn extract_conversation_id(&self, msg: &Msg, user_id: &str) -> String {
-        let msg_type = MsgType::try_from(msg.msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
-        match msg_type {
-            MsgType::GroupMsg |
-            MsgType::GroupInvitation |
-            MsgType::GroupInviteNew |
-            MsgType::GroupMemberExit |
-            MsgType::GroupRemoveMember |
-            MsgType::GroupDismiss |
-            MsgType::GroupDismissOrExitReceived |
-            MsgType::GroupInvitationReceived |
-            MsgType::GroupUpdate
-            => {
-                // 群聊：会话ID是群组ID
-                msg.group_id.clone()
-            }
-            _ => {
-                // 单聊：会话ID是对方的用户ID
-                if msg.send_id == user_id {
-                    msg.receiver_id.clone()
-                } else {
-                    msg.send_id.clone()
-                }
-            }
-        }
-    }
-
-    /// 创建会话对象
-    async fn create_conversation(&self, conversation_id: String, msgs: Vec<Msg>, user_id: String) -> Conversation {
-        let mt = MsgType::try_from(msgs[0].msg_type).map_or_else(|_| MsgType::SingleMsg, |mt| mt);
-        let mt2 = MsgType2::from(mt);
-
-        // 计算未读消息数（只计算接收到的未读消息）
-        // 消息未读&&收消息的人是当前查询人&&撤回的消息不算在内&&接收到的消息是单聊消息或群聊消息
-        let unread_count = msgs
-            .iter()
-            .filter(|msg|
-                !msg.is_read && msg.receiver_id == user_id && !msg.is_revoked
-                && ( msg.msg_type == MsgType::SingleMsg as i32 || msg.msg_type == MsgType::GroupMsg as i32)
-            )
-            .count() as i32;
-        let _ = self.cache.unread_count_set(&user_id, &conversation_id, &unread_count).await;
-        let last_active_time = msgs[msgs.len()-1].send_time;
-
-        Conversation {
-            conversation_id,
-            conversation_type: MsgType2::mt2_str(mt2),
-            recent_messages: msgs,
-            unread_count,
-            last_active_time,
-        }
-    }
-}
-

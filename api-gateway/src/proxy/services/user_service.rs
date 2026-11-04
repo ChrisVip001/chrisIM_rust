@@ -2,13 +2,13 @@ use axum::{
     body::Body,
     http::{Method, Response, StatusCode},
 };
-use common::grpc_client::UserServiceGrpcClient;
-use common::{proto, Error};
+use runtime::grpc_client::UserServiceGrpcClient;
+use contract::{proto, Error};
 use serde_json::{json, Value};
 use tracing::{error, debug, info};
-use common::auth::Claims;
-use common::proto::user::{CaptchaImageRequest, VerifyPasswordRequest};
-use common::utils::verify_image_code;
+use runtime::auth::Claims;
+use contract::proto::user::{CaptchaImageRequest, VerifyPasswordRequest};
+use runtime::utils::verify_image_code;
 use crate::proxy::services::common::get_user_id_from_jwt;
 use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
 

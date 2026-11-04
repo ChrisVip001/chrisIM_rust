@@ -3,14 +3,13 @@ use std::result::Result;
 use tonic::transport::Server;
 use tonic::{async_trait, Request, Response, Status};
 use tracing::{debug, info};
-use tonic_health::server::HealthReporter;
 
 use crate::manager::Manager;
-use common::config::{AppConfig, Component};
-use common::error::Error;
-use common::grpc::LoggingInterceptor;
-use common::proto::message::msg_service_server::MsgServiceServer;
-use common::proto::message::{
+use runtime::config::{AppConfig, Component};
+use contract::error::Error;
+use runtime::grpc::LoggingInterceptor;
+use contract::proto::message::msg_service_server::MsgServiceServer;
+use contract::proto::message::{
     msg_service_server::MsgService, SendGroupMsgRequest, SendMsgRequest, SendMsgResponse,
 };
 
@@ -67,7 +66,7 @@ impl MsgRpcService {
     pub async fn start(manager: Manager, config: &AppConfig) -> Result<(), Error> {
         // 向服务注册中心（Consul）注册当前服务
         // 这样msg-server就能通过服务发现找到这个WebSocket网关
-        common::grpc_client::base::register_service(config, Component::MessageGateway)
+        runtime::grpc_client::base::register_service(config, Component::MessageGateway)
             .await
             .expect("服务注册失败");
 

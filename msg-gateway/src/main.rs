@@ -1,6 +1,6 @@
 use tracing::info;
 
-use common::config::ConfigLoader;
+use runtime::config::ConfigLoader;
 use msg_gateway::ws_server::WsServer;
 
 /// msg-gateway 主程序入口
@@ -21,7 +21,7 @@ use msg_gateway::ws_server::WsServer;
 async fn main() -> anyhow::Result<()> {
     // 初始化rustls加密提供程序
     // 这是为了确保TLS连接的安全性，用于gRPC和其他加密通信
-    common::service::init_rustls();
+    runtime::service::init_rustls();
 
     // 从环境变量获取配置文件路径，如果没有设置则使用默认路径
     let config_path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
@@ -29,8 +29,8 @@ async fn main() -> anyhow::Result<()> {
     
     // 使用指定的配置文件路径初始化全局配置
     // 配置包含WebSocket服务器、gRPC服务器、JWT密钥等所有必要信息
-    let app_config = common::config::AppConfig::from_file(Some(&config_path))
-        .expect(&format!("无法从路径加载配置: {}", config_path));
+    let app_config = runtime::config::AppConfig::from_file(Some(&config_path))
+        .unwrap_or_else(|_| panic!("无法从路径加载配置: {}", config_path));
     ConfigLoader::set_global(app_config);
 
     // 确保全局配置可以正常访问
@@ -41,11 +41,11 @@ async fn main() -> anyhow::Result<()> {
     if config.telemetry.enabled {
         // 启动带有分布式链路追踪的日志系统
         // 这将启用OpenTelemetry，用于跨服务的链路追踪
-        common::logging::init_telemetry(&config, "msg-gateway")?;
+        runtime::logging::init_telemetry(&config, "msg-gateway")?;
         info!("链路追踪功能已启用，追踪数据将发送到: {}", config.telemetry.endpoint);
     } else {
         // 只初始化基本日志系统，不包含链路追踪功能
-        common::logging::init_from_config(&config, "msg-gateway")?;
+        runtime::logging::init_from_config(&config, "msg-gateway")?;
         info!("链路追踪功能未启用，仅初始化日志系统");
     }
     
@@ -57,15 +57,15 @@ async fn main() -> anyhow::Result<()> {
     
     // 在程序结束前关闭链路追踪，确保所有数据都被发送
     info!("正在关闭链路追踪...");
-    common::logging::shutdown_telemetry();
+    runtime::logging::shutdown_telemetry();
     
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use common::proto::message::msg_service_server::MsgServiceServer;
-    use common::proto::message::Msg;
+    use contract::proto::message::msg_service_server::MsgServiceServer;
+    use contract::proto::message::Msg;
     use msg_gateway::rpc;
     use tonic::server::NamedService;
 

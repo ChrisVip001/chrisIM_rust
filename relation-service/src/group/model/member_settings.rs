@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use common::proto::group::MemberSettings as ProtoMemberSettings;
+use contract::proto::group::MemberSettings as ProtoMemberSettings;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberSettings {
@@ -36,8 +36,8 @@ impl MemberSettings {
         }
     }
 
-    pub fn to_proto(&self) -> common::proto::group::MemberSettings {
-        common::proto::group::MemberSettings {
+    pub fn to_proto(&self) -> contract::proto::group::MemberSettings {
+        contract::proto::group::MemberSettings {
             id: self.id.clone(),
             group_id: self.group_id.clone(),
             user_id: self.user_id.clone(),

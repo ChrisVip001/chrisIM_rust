@@ -28,11 +28,11 @@ impl Group {
         }
     }
 
-    pub fn to_proto(&self, member_count: i32) -> common::proto::group::Group {
+    pub fn to_proto(&self, member_count: i32) -> contract::proto::group::Group {
         let created_system_time = SystemTime::from(self.created_at);
         let updated_system_time = SystemTime::from(self.updated_at);
 
-        common::proto::group::Group {
+        contract::proto::group::Group {
             id: self.id.clone(),
             name: self.name.clone(),
             description: self.description.clone(),
@@ -62,10 +62,10 @@ pub struct UserGroup {
 }
 
 impl UserGroup {
-    pub fn to_proto(&self) -> common::proto::group::UserGroup {
+    pub fn to_proto(&self) -> contract::proto::group::UserGroup {
         let joined_system_time = SystemTime::from(self.joined_at);
 
-        common::proto::group::UserGroup {
+        contract::proto::group::UserGroup {
             id: self.id.clone(),
             name: self.name.clone(),
             avatar_url: self.avatar_url.clone(),

@@ -2,12 +2,12 @@ use anyhow::Result;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use common::config::{AppConfig, Component, ConfigLoader};
-use common::grpc::LoggingInterceptor;
-use common::grpc_client::base::{register_service, service_register_center};
-use common::proto::friend::friend_service_server::FriendServiceServer;
-use common::proto::group::group_service_server::GroupServiceServer;
-use common::proto::user::user_service_server::UserServiceServer;
+use runtime::config::{AppConfig, Component, ConfigLoader};
+use runtime::grpc::LoggingInterceptor;
+use runtime::grpc_client::base::{register_service, service_register_center};
+use contract::proto::friend::friend_service_server::FriendServiceServer;
+use contract::proto::group::group_service_server::GroupServiceServer;
+use contract::proto::user::user_service_server::UserServiceServer;
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::watch;
 use tonic::transport::Server;
@@ -24,14 +24,14 @@ use group::service::group_service::GroupServiceImpl;
 use user::service::user_service::UserServiceImpl;
 
 // 三个服务的 proto 文件描述符，用于 gRPC 反射
-const USER_FD_SET: &[u8] = common::proto::user::FILE_DESCRIPTOR_SET;
-const FRIEND_FD_SET: &[u8] = common::proto::friend::FILE_DESCRIPTOR_SET;
-const GROUP_FD_SET: &[u8] = common::proto::group::FILE_DESCRIPTOR_SET;
+const USER_FD_SET: &[u8] = contract::proto::user::FILE_DESCRIPTOR_SET;
+const FRIEND_FD_SET: &[u8] = contract::proto::friend::FILE_DESCRIPTOR_SET;
+const GROUP_FD_SET: &[u8] = contract::proto::group::FILE_DESCRIPTOR_SET;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // 初始化 rustls 加密提供程序
-    common::service::init_rustls();
+    runtime::service::init_rustls();
 
     // 从环境变量获取配置文件路径
     let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
@@ -45,10 +45,10 @@ async fn main() -> Result<()> {
 
     // 初始化日志和链路追踪
     if config.telemetry.enabled {
-        common::logging::init_telemetry(&config, "relation-service")?;
+        runtime::logging::init_telemetry(&config, "relation-service")?;
         info!("链路追踪功能已启用: {}", config.telemetry.endpoint);
     } else {
-        common::logging::init_from_config(&config, "relation-service")?;
+        runtime::logging::init_from_config(&config, "relation-service")?;
         info!("链路追踪功能未启用，仅初始化日志系统");
     }
 
@@ -196,7 +196,7 @@ async fn main() -> Result<()> {
     // 关闭链路追踪，确保数据都被发送
     if config.telemetry.enabled {
         info!("正在关闭链路追踪...");
-        common::logging::shutdown_telemetry();
+        runtime::logging::shutdown_telemetry();
     }
 
     info!("关系服务已完全关闭");

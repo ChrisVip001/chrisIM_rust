@@ -36,11 +36,11 @@ impl GroupAnnouncement {
         }
     }
 
-    pub fn to_proto(&self) -> common::proto::group::Announcement {
+    pub fn to_proto(&self) -> contract::proto::group::Announcement {
         let created_system_time = SystemTime::from(self.created_at);
         let updated_system_time = SystemTime::from(self.updated_at);
 
-        common::proto::group::Announcement {
+        contract::proto::group::Announcement {
             id: self.id.clone(),
             group_id: self.group_id.clone(),
             creator_id: self.creator_id.clone(),

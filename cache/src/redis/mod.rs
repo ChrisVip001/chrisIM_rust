@@ -12,9 +12,9 @@
  */
 use crate::Cache;
 use async_trait::async_trait;
-use common::config::AppConfig;
-use common::error::Error;
-use common::proto::message::{GroupMemSeq, PlatformType};
+use runtime::config::AppConfig;
+use contract::error::Error;
+use contract::proto::message::{GroupMemSeq, PlatformType};
 use redis::aio::MultiplexedConnection;
 use redis::{AsyncCommands, Client, RedisError};
 use std::fmt::{self, Debug, Formatter};
@@ -1075,133 +1075,140 @@ impl Cache for RedisCache {
     }
 }
 
-/// 测试模块
+/// 序列号号段的边界行为
+///
+/// 号段分配由 Redis 侧的 Lua 脚本完成，无法用内存实现替代，
+/// 因此这组用例需要一个真实的 Redis 实例，通过 `IM_TEST_REDIS_URL` 指定：
+///
+/// ```text
+/// docker run --rm -p 6379:6379 redis:7
+/// IM_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test -p cache
+/// ```
+///
+/// 未设置该变量时用例主动跳过，保证本地 `cargo test` 不依赖外部服务。
 #[cfg(test)]
-mod tests {
-    // use super::*;
-    // use common::config::AppConfig;
-    // use std::ops::Deref;
-    // use std::thread;
-    // use tokio::runtime::Runtime;
-    // 
-    // /// 测试辅助结构，管理Redis测试实例和自动清理
-    // struct TestRedis {
-    //     client: redis::Client,
-    //     cache: RedisCache,
-    // }
-    // 
-    // impl Deref for TestRedis {
-    //     type Target = RedisCache;
-    //     fn deref(&self) -> &Self::Target {
-    //         &self.cache
-    //     }
-    // }
-    // 
-    // /// 实现Drop特征，确保测试结束后清理Redis数据库
-    // impl Drop for TestRedis {
-    //     fn drop(&mut self) {
-    //         let client = self.client.clone();
-    //         thread::spawn(move || {
-    //             Runtime::new().unwrap().block_on(async {
-    //                 let mut conn = client.get_multiplexed_async_connection().await.unwrap();
-    //                 // 使用let _: ()告诉编译器query_async方法的返回类型是()
-    //                 let _: () = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap();
-    //             })
-    //         })
-    //         .join()
-    //         .unwrap();
-    //     }
-    // }
-    // 
-    // impl TestRedis {
-    //     /// 创建一个新的测试Redis实例
-    //     ///
-    //     /// 默认使用数据库9进行测试
-    //     async fn new() -> Self {
-    //         // 使用数据库9进行测试
-    //         let database = 9;
-    //         Self::from_db(database).await
-    //     }
-    // 
-    //     /// 从指定数据库创建测试Redis实例
-    //     ///
-    //     /// # 参数
-    //     /// * `db` - 数据库编号
-    //     async fn from_db(db: u8) -> Self {
-    //         let config = AppConfig::from_file(Some("./config/config.yaml")).unwrap();
-    //         let url = format!("{}/{}", config.redis.url(), db);
-    //         let client = redis::Client::open(url).unwrap();
-    //         let cache = RedisCache::new(client.clone()).await;
-    //         TestRedis { client, cache }
-    //     }
-    // }
-    // 
-    // /// 测试增加序列号功能
-    // #[tokio::test]
-    // async fn test_increase_seq() {
-    //     let user_id = "test";
-    //     let cache = TestRedis::new();
-    //     let seq = cache.increase_seq(user_id).await.unwrap();
-    //     assert_eq!(seq, (1, DEFAULT_SEQ_STEP as i64, false));
-    // }
-    // 
-    // /// 测试保存群组成员ID功能
-    // #[tokio::test]
-    // async fn test_save_group_members_id() {
-    //     let group_id = "test";
-    //     let members_id = vec!["1".to_string(), "2".to_string()];
-    //     let cache = TestRedis::new();
-    //     let result = cache.save_group_members_id(group_id, members_id).await;
-    //     assert!(result.is_ok());
-    // }
-    // 
-    // /// 测试查询群组成员ID功能
-    // #[tokio::test]
-    // async fn test_query_group_members_id() {
-    //     let group_id = "test";
-    //     let members_id = vec!["1".to_string(), "2".to_string()];
-    //     let db = 8;
-    //     let cache = TestRedis::from_db(db);
-    //     let result = cache.save_group_members_id(group_id, members_id).await;
-    //     assert!(result.is_ok());
-    //     let result = cache.query_group_members_id(group_id).await.unwrap();
-    //     assert_eq!(result.len(), 2);
-    //     assert!(result.contains(&"1".to_string()));
-    //     assert!(result.contains(&"2".to_string()));
-    // }
-    // 
-    // /// 测试添加群组成员功能
-    // #[tokio::test]
-    // async fn test_add_group_member_id() {
-    //     let group_id = "test";
-    //     let member_id = "1";
-    //     let cache = TestRedis::new();
-    //     let result = cache.add_group_member_id(member_id, group_id).await;
-    //     assert!(result.is_ok());
-    // }
-    // 
-    // /// 测试移除群组成员功能
-    // #[tokio::test]
-    // async fn test_remove_group_member_id() {
-    //     let group_id = "test";
-    //     let member_id = "1";
-    //     let cache = TestRedis::new();
-    //     let result = cache.add_group_member_id(member_id, group_id).await;
-    //     assert!(result.is_ok());
-    //     let result = cache.remove_group_member_id(group_id, member_id).await;
-    //     assert!(result.is_ok());
-    // }
-    // 
-    // /// 测试删除群组成员功能
-    // #[tokio::test]
-    // async fn test_del_group_members() {
-    //     let group_id = "test";
-    //     let members_id = vec!["1".to_string(), "2".to_string()];
-    //     let cache = TestRedis::new();
-    //     // 需要先添加成员
-    //     let result = cache.save_group_members_id(group_id, members_id).await;
-    //     assert!(result.is_ok());
-    //     let result = cache.del_group_members(group_id).await;
-    //     assert!(result.is_ok());
-    // }
+mod seq_tests {
+    use super::*;
+
+    fn redis_url() -> Option<String> {
+        std::env::var("IM_TEST_REDIS_URL")
+            .ok()
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty())
+    }
+
+    /// 用指定步长构造 RedisCache，便于在小步长下快速验证号段翻滚
+    async fn cache_with_step(url: &str, step: i32) -> RedisCache {
+        let client = redis::Client::open(url).expect("IM_TEST_REDIS_URL 不是合法的 Redis URL");
+
+        let mut script_conn = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("连接测试 Redis 失败");
+        let single_seq_exe_sha = RedisCache::single_script_load(&mut script_conn)
+            .await
+            .expect("加载单序列号脚本失败");
+        let group_seq_exe_sha = RedisCache::group_script_load(&mut script_conn)
+            .await
+            .expect("加载群组序列号脚本失败");
+
+        let connection_manager = client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("连接测试 Redis 失败");
+
+        RedisCache {
+            client,
+            connection_manager: Mutex::new(connection_manager),
+            connection_semaphore: Arc::new(Semaphore::new(4)),
+            seq_step: step,
+            single_seq_exe_sha,
+            group_seq_exe_sha,
+            max_connections: 4,
+        }
+    }
+
+    async fn reset_key(cache: &RedisCache, key: &str) {
+        let mut conn = cache
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .unwrap();
+        let _: () = redis::cmd("DEL")
+            .arg(key)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn segment_rolls_over_exactly_at_step_boundary() {
+        let Some(url) = redis_url() else {
+            eprintln!("跳过 segment_rolls_over_exactly_at_step_boundary：未设置 IM_TEST_REDIS_URL");
+            return;
+        };
+
+        let step = 3;
+        let cache = cache_with_step(&url, step).await;
+        let user_id = "seq-boundary-test";
+        reset_key(&cache, &format!("seq:{}", user_id)).await;
+
+        let mut observed = Vec::new();
+        for _ in 0..10 {
+            observed.push(cache.increase_seq(user_id).await.unwrap());
+        }
+
+        // 序列号从 1 开始严格连续递增
+        for (index, (cur, _, _)) in observed.iter().enumerate() {
+            assert_eq!(
+                *cur,
+                index as i64 + 1,
+                "序列号必须连续，不能重号或跳号"
+            );
+        }
+
+        // 预留上界每次翻滚前进一个步长
+        assert_eq!(observed[0].1, 3, "首次分配即预留 1 到 step");
+        assert_eq!(observed[3].1, 6);
+        assert_eq!(observed[6].1, 9);
+        assert_eq!(observed[9].1, 12);
+
+        // updated 只在跨入新号段的那一条上为 true，这正是回写数据库水位的时机
+        let rollovers: Vec<i64> = observed
+            .iter()
+            .filter(|(_, _, updated)| *updated)
+            .map(|(cur, _, _)| *cur)
+            .collect();
+        assert_eq!(rollovers, vec![4, 7, 10], "步长为 3 时第 4/7/10 条触发翻滚");
+    }
+
+    #[tokio::test]
+    async fn concurrent_allocation_never_duplicates() {
+        let Some(url) = redis_url() else {
+            eprintln!("跳过 concurrent_allocation_never_duplicates：未设置 IM_TEST_REDIS_URL");
+            return;
+        };
+
+        let cache = Arc::new(cache_with_step(&url, 100).await);
+        let user_id = "seq-concurrent-test";
+        reset_key(&cache, &format!("seq:{}", user_id)).await;
+
+        let mut handles = Vec::new();
+        for _ in 0..50 {
+            let cache = cache.clone();
+            handles.push(tokio::spawn(async move {
+                cache.increase_seq(user_id).await.unwrap().0
+            }));
+        }
+
+        let mut seqs = Vec::with_capacity(handles.len());
+        for handle in handles {
+            seqs.push(handle.await.unwrap());
+        }
+
+        let total = seqs.len();
+        seqs.sort_unstable();
+        seqs.dedup();
+        assert_eq!(seqs.len(), total, "并发分配不允许出现重复序列号");
+    }
 }

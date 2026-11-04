@@ -1,4 +1,4 @@
-use common::error::Error;
+use contract::error::Error;
 use futures::TryStreamExt;
 use sqlx::{PgPool, Row};
 use tokio::sync::mpsc::{self, Receiver};

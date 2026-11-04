@@ -1,0 +1,38 @@
+[package]
+name = "contract"
+version = "0.1.0"
+edition = "2021"
+
+# 契约层：只放"如果每个服务各存一份就会漂移"的东西
+# —— proto 生成的类型、领域协议类型、跨边界的错误码。
+# 约束：不得依赖 tonic 之外的 IO 库（数据库驱动、消息队列、HTTP 客户端都不该出现）。
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+tonic = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+jsonwebtoken = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+# 错误枚举里的 Database(#[from] sqlx::Error) 依赖 Rust 的 orphan rule，
+# 转换实现只能和 Error 同 crate，因此契约层被动依赖 sqlx。
+sqlx = { workspace = true }
+bincode = { workspace = true }
+uuid = { workspace = true }
+# TODO(1.6): 统一到 PostgreSQL 后删除 MongoDB 错误变体与本依赖
+mongodb = { workspace = true }
+# 错误枚举里的 From<redis::RedisError> 同理受 orphan rule 约束，
+# 只能与 Error 同 crate 实现
+redis = { workspace = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+
+[features]
+default = []
+# 对象存储相关错误变体（默认关闭，见 runtime 的 s3 说明）
+s3 = ["dep:aws-sdk-s3"]
+
+[build-dependencies]
+tonic-build = { workspace = true }

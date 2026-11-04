@@ -5,11 +5,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use common::config::ConfigLoader;
+use runtime::config::ConfigLoader;
 use serde_json::json;
 use std::sync::Arc;
 use tracing::{debug, warn, error};
-use common::auth::jwt;
+use runtime::auth::jwt;
 use crate::middleware::get_client_ip;
 use crate::proxy::services::common::{
     error_response,success_response

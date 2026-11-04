@@ -1,7 +1,8 @@
 [workspace]
 resolver = "2" # 使用 Cargo v2 依赖解析
 members = [
-    "common",
+    "contract",
+    "runtime",
     "cache",
     "relation-service",
     "oss",
@@ -10,6 +11,14 @@ members = [
     "api-gateway",
     "msg-storage",
 ]
+
+# 发布构建配置统一在此定义。
+# 不要在 .cargo/config.toml 或 Dockerfile 里写 [profile.*] —— Cargo 不认可 config 中的 profile，
+# 会造成"本地构建与镜像构建产物不一致"而没有任何提示。
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
 
 [workspace.dependencies]
 tokio = { version = "1.36", features = ["full"] }

@@ -10,14 +10,20 @@ use axum::{
     routing::{any, get, post},
     Router,
 };
-use common::{config::ConfigLoader, configs::{GatewayConfig, routes_config::RouteRule}, grpc_client::{base::get_rpc_client}, proto::user::user_service_client::UserServiceClient, service_discovery::LbWithServiceDiscovery, Error};
+use contract::{proto::user::user_service_client::UserServiceClient, Error};
+use runtime::{
+    config::ConfigLoader,
+    configs::{routes_config::RouteRule, GatewayConfig},
+    grpc_client::base::get_rpc_client,
+    service_discovery::LbWithServiceDiscovery,
+};
 use oss::{oss, BucketType};
 use serde::{Deserialize};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use tracing::{error, info};
 use uuid::Uuid;
-use common::auth::Claims;
+use runtime::auth::Claims;
 use crate::proxy::services::common::{error_response, success_response};
 
 // 获取上传签名请求参数

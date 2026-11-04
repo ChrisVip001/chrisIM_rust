@@ -1,5 +1,5 @@
-use common::error::Error;
-use common::proto::message::Msg;
+use contract::error::Error;
+use contract::proto::message::Msg;
 use bson::{doc, Document};
 
 /// 将消息结构体转换为MongoDB文档

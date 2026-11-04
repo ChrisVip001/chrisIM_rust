@@ -2,13 +2,14 @@
 set -e
 
 # 定义支持的服务列表
+# 必须与 Dockerfile 实际打包进 /app/bin 的二进制保持一致，
+# 否则容器会以 "服务不存在" 直接退出。
+# 注意：oss 是库 crate（被 api-gateway 依赖），没有独立进程。
 SUPPORTED_SERVICES=(
-    "auth-service"
+    "api-gateway"
     "relation-service"
-    "oss"
     "msg-server"
     "msg-gateway"
-    "gateway-service"
     "all"
 )
 
@@ -23,7 +24,7 @@ show_help() {
     done
     echo ""
     echo "示例:"
-    echo "  $0 gateway-service  # 启动API网关服务"
+    echo "  $0 api-gateway      # 启动API网关服务"
     echo "  $0 all              # 启动所有服务"
 }
 
@@ -64,7 +65,7 @@ main() {
     fi
     
     # 检查提供的服务是否受支持
-    local service=${1:-"gateway-service"}  # 默认启动网关服务
+    local service=${1:-"api-gateway"}  # 默认启动网关服务
     local is_supported=false
     
     for supported_service in "${SUPPORTED_SERVICES[@]}"; do

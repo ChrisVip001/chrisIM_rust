@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use common::config::ConfigLoader;
+use runtime::config::ConfigLoader;
 use futures::future::BoxFuture;
 use parking_lot::RwLock;
 use serde_json::json;

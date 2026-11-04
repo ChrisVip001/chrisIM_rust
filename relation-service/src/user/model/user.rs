@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use common::proto::user;
+use contract::proto::user;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;

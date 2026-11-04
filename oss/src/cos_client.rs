@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::Bytes;
-use common::config::AppConfig;
-use common::error::Error;
+use runtime::config::AppConfig;
+use contract::error::Error;
 use hmac::{Hmac, Mac};
 use md5::{Digest, Md5};
 use reqwest::{

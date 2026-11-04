@@ -1,6 +1,6 @@
 use chrono::{Utc};
 use sqlx::{PgPool, QueryBuilder};
-use common::{Result};
+use contract::Result;
 use crate::user::model::user_config::{UserConfig, UserConfigData};
 
 /// 用户设置仓库实现

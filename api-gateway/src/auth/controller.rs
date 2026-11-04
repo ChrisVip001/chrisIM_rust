@@ -4,14 +4,14 @@ use axum::extract::Extension;
 use axum::http::{HeaderMap, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
-use common::auth::{jwt, Claims};
-use common::config::ConfigLoader;
-use common::error::Error;
-use common::proto::message::PlatformType;
-use common::proto::user::user_service_client::UserServiceClient;
-use common::proto::user::VerifyPasswordRequest;
-use common::service_discovery::LbWithServiceDiscovery;
-use common::utils::verify_image_code;
+use runtime::auth::{jwt, Claims};
+use runtime::config::ConfigLoader;
+use contract::error::Error;
+use contract::proto::message::PlatformType;
+use contract::proto::user::user_service_client::UserServiceClient;
+use contract::proto::user::VerifyPasswordRequest;
+use runtime::service_discovery::LbWithServiceDiscovery;
+use runtime::utils::verify_image_code;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -148,7 +148,7 @@ impl SharedUserService {
     pub async fn verify_password(
         &self,
         request: VerifyPasswordRequest,
-    ) -> Result<common::proto::user::VerifyPasswordResponse, anyhow::Error> {
+    ) -> Result<contract::proto::user::VerifyPasswordResponse, anyhow::Error> {
         // 克隆基础客户端
         let mut client = self.0.clone();
         client
@@ -161,8 +161,8 @@ impl SharedUserService {
     /// 验证手机验证码登录
     pub async fn verify_phone_code_login(
         &self,
-        request: common::proto::user::VerifyPhoneCodeRequest,
-    ) -> Result<common::proto::user::VerifyPasswordResponse, anyhow::Error> {
+        request: contract::proto::user::VerifyPhoneCodeRequest,
+    ) -> Result<contract::proto::user::VerifyPasswordResponse, anyhow::Error> {
         // 克隆基础客户端
         let mut client = self.0.clone();
         client
@@ -174,8 +174,8 @@ impl SharedUserService {
 
     pub async fn update_last_login_time(
         &self,
-        request: common::proto::user::UpdateLastLoginTimeRequest,
-    ) -> Result<common::proto::user::UpdateLastLoginTimeResponse, anyhow::Error> {
+        request: contract::proto::user::UpdateLastLoginTimeRequest,
+    ) -> Result<contract::proto::user::UpdateLastLoginTimeResponse, anyhow::Error> {
         // 克隆基础客户端
         let mut client = self.0.clone();
         client
@@ -200,7 +200,7 @@ pub async fn login_by_phone(
     let platform = extract_platform_info(&headers);
 
     // 创建验证请求
-    let verify_request = common::proto::user::VerifyPhoneCodeRequest {
+    let verify_request = contract::proto::user::VerifyPhoneCodeRequest {
         phone: login_req.phone.clone(),
         code: login_req.verify_code,
         action: "login".to_string(),
@@ -246,7 +246,7 @@ pub async fn login_by_phone(
     )
     .await?;
 
-    let login_time_req=common::proto::user::UpdateLastLoginTimeRequest {
+    let login_time_req=contract::proto::user::UpdateLastLoginTimeRequest {
         user_id: user.id,
     };
     user_service.update_last_login_time(login_time_req).await?;
@@ -323,7 +323,7 @@ pub async fn login(
     )
     .await?;
 
-    let login_time_req=common::proto::user::UpdateLastLoginTimeRequest {
+    let login_time_req=contract::proto::user::UpdateLastLoginTimeRequest {
         user_id: user.id,
     };
     user_service.update_last_login_time(login_time_req).await?;
@@ -404,7 +404,7 @@ pub async fn refresh_token(
 }
 
 /// 从用户信息中提取额外数据
-fn extract_user_extra(user: &common::proto::user::User) -> HashMap<String, String> {
+fn extract_user_extra(user: &contract::proto::user::User) -> HashMap<String, String> {
     let mut extra = HashMap::new();
 
     // email在proto中是String类型，但我们需要考虑其可能为空的情况

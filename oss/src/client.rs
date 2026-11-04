@@ -3,8 +3,8 @@ use aws_sdk_s3::config::{Builder, Credentials, Region};
 use aws_sdk_s3::Client;
 use aws_smithy_runtime_api::client::result::SdkError;
 use bytes::Bytes;
-use common::config::AppConfig;
-use common::error::Error;
+use runtime::config::AppConfig;
+use contract::error::Error;
 use tokio::fs;
 use tracing::error;
 

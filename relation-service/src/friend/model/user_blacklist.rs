@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use common::proto::friend::UserBlacklist as ProtoUserBlacklist;
+use contract::proto::friend::UserBlacklist as ProtoUserBlacklist;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 

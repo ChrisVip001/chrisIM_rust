@@ -9,7 +9,7 @@ use prost_types::Timestamp;
 use serde_json::{json, Value};
 use regex::Regex;
 use once_cell::sync::Lazy;
-use common::auth::Claims;
+use runtime::auth::Claims;
 
 // 预编译正则表达式，匹配gRPC错误消息格式
 static GRPC_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| {

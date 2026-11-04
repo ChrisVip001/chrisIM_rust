@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-common = { path = "../common", features = ["dynamic-config"] }
+contract = { path = "../contract" }
+runtime = { path = "../runtime", features = ["dynamic-config"] }
 cache = { path = "../cache" }
 msg-storage = { path = "../msg-storage" }
 tokio = { workspace = true }

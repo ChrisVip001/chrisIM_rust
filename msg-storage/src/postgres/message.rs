@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 
-use common::error::Error;
-use common::proto::message::Msg;
+use contract::error::Error;
+use contract::proto::message::Msg;
 
 use crate::message::MsgStoreRepo;
 

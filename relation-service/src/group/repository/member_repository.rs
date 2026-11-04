@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
-use common::proto::group::MemberRole;
+use contract::proto::group::MemberRole;
 use sqlx::PgPool;
 use sqlx::Row;
 

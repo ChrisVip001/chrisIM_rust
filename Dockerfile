@@ -1,6 +1,6 @@
 # 多阶段构建 Dockerfile for RustIM - 优化版本
 # 阶段1: 构建环境
-FROM rust:1.85-slim-bullseye as builder
+FROM rust:1.85-slim-bullseye AS builder
 
 # 设置环境变量优化编译速度
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
@@ -27,6 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 配置 Cargo 使用国内镜像源
+# 注意：不在 config.toml 里写 [profile.release] —— Cargo 不认可 config 中的 profile，
+# 发布配置统一由根 Cargo.toml 管理，避免本地构建与镜像构建产物不一致。
 RUN mkdir -p /usr/local/cargo && \
     echo '[source.crates-io]' > /usr/local/cargo/config.toml && \
     echo 'replace-with = "rsproxy-sparse"' >> /usr/local/cargo/config.toml && \
@@ -38,22 +40,16 @@ RUN mkdir -p /usr/local/cargo && \
     echo 'index = "sparse+https://rsproxy.cn/index/"' >> /usr/local/cargo/config.toml && \
     echo '' >> /usr/local/cargo/config.toml && \
     echo '[build]' >> /usr/local/cargo/config.toml && \
-    echo 'jobs = 8' >> /usr/local/cargo/config.toml && \
-    echo '' >> /usr/local/cargo/config.toml && \
-    echo '[profile.release]' >> /usr/local/cargo/config.toml && \
-    echo 'opt-level = 2' >> /usr/local/cargo/config.toml && \
-    echo 'lto = "thin"' >> /usr/local/cargo/config.toml && \
-    echo 'codegen-units = 1' >> /usr/local/cargo/config.toml
+    echo 'jobs = 8' >> /usr/local/cargo/config.toml
 
 WORKDIR /app
 
 # 复制 Cargo 配置文件 - 优化缓存层
 COPY Cargo.toml Cargo.lock ./
-COPY common/Cargo.toml common/
+COPY contract/Cargo.toml contract/
+COPY runtime/Cargo.toml runtime/
 COPY cache/Cargo.toml cache/
-COPY user-service/Cargo.toml user-service/
-COPY group-service/Cargo.toml group-service/
-COPY friend-service/Cargo.toml friend-service/
+COPY relation-service/Cargo.toml relation-service/
 COPY oss/Cargo.toml oss/
 COPY msg-server/Cargo.toml msg-server/
 COPY msg-gateway/Cargo.toml msg-gateway/
@@ -61,22 +57,24 @@ COPY api-gateway/Cargo.toml api-gateway/
 COPY msg-storage/Cargo.toml msg-storage/
 
 # 复制 proto 文件（protobuf 编译需要）
-COPY common/proto/ common/proto/
-COPY common/build.rs common/
+COPY contract/proto/ contract/proto/
+COPY contract/build.rs contract/
 
 # 创建虚拟源文件进行依赖预构建
-RUN mkdir -p common/src cache/src user-service/src group-service/src friend-service/src \
+RUN mkdir -p contract/src runtime/src cache/src relation-service/src \
     oss/src msg-server/src msg-gateway/src api-gateway/src msg-storage/src && \
-    echo "fn main() {}" > user-service/src/main.rs && \
-    echo "fn main() {}" > group-service/src/main.rs && \
-    echo "fn main() {}" > friend-service/src/main.rs && \
-    echo "fn main() {}" > oss/src/main.rs && \
+    echo "fn main() {}" > relation-service/src/main.rs && \
     echo "fn main() {}" > msg-server/src/main.rs && \
     echo "fn main() {}" > msg-gateway/src/main.rs && \
     echo "fn main() {}" > api-gateway/src/main.rs && \
-    echo "fn main() {}" > msg-storage/src/main.rs && \
-    echo "// lib" > common/src/lib.rs && \
-    echo "// lib" > cache/src/lib.rs
+    echo "// lib" > contract/src/lib.rs && \
+    echo "// lib" > runtime/src/lib.rs && \
+    echo "// lib" > oss/src/lib.rs && \
+    echo "// lib" > cache/src/lib.rs && \
+    echo "// lib" > msg-storage/src/lib.rs && \
+    echo "// lib" > msg-gateway/src/lib.rs && \
+    echo "// lib" > msg-server/src/lib.rs && \
+    echo "// lib" > api-gateway/src/lib.rs
 
 # 预构建依赖 - 使用缓存挂载
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -88,11 +86,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 RUN rm -rf */src
 
 # 复制实际源代码
-COPY common/src/ common/src/
+COPY contract/src/ contract/src/
+COPY runtime/src/ runtime/src/
 COPY cache/src/ cache/src/
-COPY user-service/src/ user-service/src/
-COPY group-service/src/ group-service/src/
-COPY friend-service/src/ friend-service/src/
+COPY relation-service/src/ relation-service/src/
 COPY oss/src/ oss/src/
 COPY msg-server/src/ msg-server/src/
 COPY msg-gateway/src/ msg-gateway/src/
@@ -105,17 +102,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release --jobs 8 && \
     mkdir -p /app/bin && \
-    cp target/release/user-service /app/bin/ && \
-    cp target/release/group-service /app/bin/ && \
-    cp target/release/friend-service /app/bin/ && \
-    cp target/release/oss /app/bin/ && \
+    cp target/release/relation-service /app/bin/ && \
     cp target/release/msg-server /app/bin/ && \
     cp target/release/msg-gateway /app/bin/ && \
     cp target/release/api-gateway /app/bin/ && \
     strip /app/bin/*
 
 # 阶段2: 运行时环境
-FROM debian:bullseye-slim as runtime
+FROM debian:bullseye-slim AS runtime
 
 # 使用国内镜像源
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list && \
@@ -169,7 +163,7 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["api-gateway"]
 
 # 阶段3: 开发环境 (可选)
-FROM builder as development
+FROM builder AS development
 
 # 安装开发工具
 RUN cargo install cargo-watch cargo-audit
@@ -184,7 +178,7 @@ EXPOSE 8080 8085 50001 50002 50003 50004 50005
 CMD ["cargo", "run", "--bin", "api-gateway"]
 
 # 阶段4: 生产环境 (最小化镜像)
-FROM gcr.io/distroless/cc-debian11 as production
+FROM gcr.io/distroless/cc-debian11 AS production
 
 # 复制二进制文件
 COPY --from=builder /app/bin /app/bin

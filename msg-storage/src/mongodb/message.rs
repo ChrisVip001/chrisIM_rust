@@ -11,9 +11,9 @@ use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::StreamExt;
 use tracing::log::{error};
 
-use common::config::AppConfig;
-use common::error::Error;
-use common::proto::message::{GroupMemSeq, Msg, MsgType};
+use runtime::config::AppConfig;
+use contract::error::Error;
+use contract::proto::message::{GroupMemSeq, Msg, MsgType};
 
 use crate::message::{MsgRecBoxCleaner, MsgRecBoxRepo};
 use crate::mongodb::utils::to_doc;
@@ -177,7 +177,7 @@ impl MsgRecBoxRepo for MsgBox {
             .await?;
 
         match result {
-            Some(doc) => Ok(Some(Msg::try_from(doc)?)),
+            Some(doc) => Ok(Some(msg_from_document(doc)?)),
             None => Ok(None),
         }
     }
@@ -244,7 +244,7 @@ impl MsgRecBoxRepo for MsgBox {
         let mut cursor = self.mb.aggregate(pipeline).await?;
         let mut messages = Vec::new();
         while let Some(result) = cursor.next().await {
-            messages.push(Msg::try_from(result?)?);
+            messages.push(msg_from_document(result?)?);
         }
         Ok(messages)
     }
@@ -277,7 +277,7 @@ impl MsgRecBoxRepo for MsgBox {
             while let Some(result) = cursor.next().await {
                 match result {
                     Ok(doc) => {
-                        match Msg::try_from(doc) {
+                        match msg_from_document(doc) {
                             Ok(msg) => {
                                 if tx.send(Ok(msg)).await.is_err() {
                                     break;
@@ -363,7 +363,7 @@ impl MsgRecBoxRepo for MsgBox {
 
         let mut messages = Vec::with_capacity(safe_capacity as usize);
         while let Some(result) = cursor.next().await {
-            let mut msg = Msg::try_from(result?)?;
+            let mut msg = msg_from_document(result?)?;
             // 如果消息是用户发送的，将seq设置为0
             if user_id == msg.send_id {
                 msg.seq = 0;
@@ -544,7 +544,7 @@ impl MsgRecBoxRepo for MsgBox {
         let mut messages = Vec::new();
         
         while let Some(result) = cursor.next().await {
-            let mut msg = Msg::try_from(result?)?;
+            let mut msg = msg_from_document(result?)?;
             
             // 如果消息是用户发送的，将接收序列号设置为0
             if user_id == msg.send_id {
@@ -599,7 +599,7 @@ impl MsgRecBoxCleaner for MsgBox {
 mod tests {
     use std::ops::Deref;
 
-    use common::proto::message::{MsgType, PlatformType};
+    use contract::proto::message::{MsgType, PlatformType};
     use super::super::test::MongoDbTester;
 
     use super::*;
@@ -717,4 +717,41 @@ mod tests {
         let msg = msg_box.get_message(&msg_id[2]).await.unwrap();
         assert!(msg.is_none());
     }
+}
+
+/// 把 Mongo 文档还原成 `Msg`
+///
+/// 该转换原先作为 `TryFrom<Document> for Msg` 挂在契约层，
+/// 但 BSON 是存储实现细节，契约层不应认识它。
+/// 由于 orphan rule 不允许在这里给外部类型实现 `TryFrom`，
+/// 改成自由函数，调用点写 `msg_from_document(doc)?`。
+fn msg_from_document(value: Document) -> Result<Msg, Error> {
+    Ok(Msg {
+        local_id: value.get_str("local_id").unwrap_or_default().to_string(),
+        server_id: value.get_str("server_id").unwrap_or_default().to_string(),
+        create_time: value.get_i64("create_time").unwrap_or_default(),
+        send_time: value.get_i64("send_time").unwrap_or_default(),
+        content_type: value.get_i32("content_type").unwrap_or_default(),
+        content: value
+            .get_binary_generic("content")
+            .map_or(vec![], |v| v.to_vec()),
+        send_id: value.get_str("send_id").unwrap_or_default().to_string(),
+        receiver_id: value.get_str("receiver_id").unwrap_or_default().to_string(),
+        seq: value.get_i64("seq").unwrap_or_default(),
+        send_seq: value.get_i64("send_seq").unwrap_or_default(),
+        msg_type: value.get_i32("msg_type").unwrap_or_default(),
+        is_read: value.get_bool("is_read").unwrap_or_default(),
+        group_id: value.get_str("group_id").unwrap_or_default().to_string(),
+        platform: value.get_i32("platform").unwrap_or_default(),
+        avatar: value.get_str("avatar").unwrap_or_default().to_string(),
+        nickname: value.get_str("nickname").unwrap_or_default().to_string(),
+        related_msg_id: value
+            .get_str("related_msg_id")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        is_revoked: value.get_bool("is_revoked").unwrap_or_default(),
+        revoke_time: value.get_i64("revoke_time").unwrap_or_default(),
+        revoked_by: value.get_str("revoked_by").unwrap_or_default().to_string(),
+    })
 }

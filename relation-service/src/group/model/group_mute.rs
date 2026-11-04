@@ -40,12 +40,12 @@ impl GroupMuteEntry {
         }
     }
 
-    pub fn to_proto(&self) -> common::proto::group::MuteEntry {
+    pub fn to_proto(&self) -> contract::proto::group::MuteEntry {
         let created_system_time = SystemTime::from(self.created_at);
         let updated_system_time = SystemTime::from(self.updated_at);
         let mute_until_system_time = self.mute_until.map(SystemTime::from);
 
-        common::proto::group::MuteEntry {
+        contract::proto::group::MuteEntry {
             id: self.id.clone(),
             group_id: self.group_id.clone(),
             user_id: self.user_id.clone(),

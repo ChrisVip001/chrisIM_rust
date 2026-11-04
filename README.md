@@ -364,20 +364,24 @@ curl -X POST http://localhost:8080/api/users/register \
 
 ```
 rust-im/
-├── api-gateway/          # API网关服务
-├── msg-gateway/          # 消息网关服务
-├── user-service/         # 用户服务
-├── friend-service/       # 好友服务
-├── group-service/        # 群组服务
-├── msg-server/           # 消息服务
-├── oss/                  # 对象存储服务
-├── common/               # 共享代码库
-├── cache/                # 缓存模块
+├── api-gateway/          # HTTP 入口：路由、鉴权、限流
+├── relation-service/     # 用户/好友/群组（模块化单体）
+├── msg-gateway/          # WebSocket 长连接网关
+├── msg-server/           # 消息服务：生产、消费、推送
+├── msg-storage/          # 消息存储抽象
+├── cache/                # Redis 缓存封装
+├── oss/                  # 对象存储能力（库，被 api-gateway 依赖，无独立进程）
+├── contract/             # 契约层：proto、领域类型、错误类型
+├── runtime/              # 运行时基建：配置、日志、服务发现、gRPC 连接
 ├── config/               # 配置文件
-├── scripts/              # 部署脚本
-├── docs/                 # 文档
+├── scripts/              # 构建与启动脚本
+├── docs/                 # 运维与配置文档
 └── k8s/                  # Kubernetes 配置
 ```
+
+> `contract` 与 `runtime` 由原 `common` 拆分而来：
+> 前者只放「各服务各存一份就会漂移」的契约（proto / 类型 / 错误），
+> 后者放与业务无关的基础设施适配。两者都不含任何业务逻辑。
 
 ### 添加新服务
 

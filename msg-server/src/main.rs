@@ -1,6 +1,6 @@
 use tracing::info;
 use std::env;
-use common::config::{ConfigLoader, AppConfig};
+use runtime::config::{ConfigLoader, AppConfig};
 
 use msg_server::productor::ChatRpcService;
 use msg_server::consumer::ConsumerService;
@@ -22,7 +22,7 @@ use msg_server::consumer::ConsumerService;
 async fn main() -> anyhow::Result<()> {
     // 初始化rustls加密提供程序
     // 这是为了确保TLS连接的安全性，用于gRPC和其他加密通信
-    common::service::init_rustls();
+    runtime::service::init_rustls();
     
     // 从环境变量获取配置文件路径，如果没有设置则使用默认路径
     let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
     
     // 加载应用配置文件，该配置包含数据库、消息队列、服务注册等所有配置
     let app_config = AppConfig::from_file(Some(&config_path))
-        .expect(&format!("无法从路径加载配置: {}", config_path));
+        .unwrap_or_else(|_| panic!("无法从路径加载配置: {}", config_path));
     
     // 设置全局配置，使得整个应用可以访问配置信息
     ConfigLoader::set_global(app_config);
@@ -43,11 +43,11 @@ async fn main() -> anyhow::Result<()> {
     if config.telemetry.enabled {
         // 启动带有分布式链路追踪的日志系统
         // 这将启用OpenTelemetry，用于跨服务的链路追踪
-        common::logging::init_telemetry(&config, "msg-server")?;
+        runtime::logging::init_telemetry(&config, "msg-server")?;
         info!("链路追踪功能已启用，追踪数据将发送到: {}", config.telemetry.endpoint);
     } else {
         // 只初始化基本日志系统，不包含链路追踪功能
-        common::logging::init_from_config(&config, "msg-server")?;
+        runtime::logging::init_from_config(&config, "msg-server")?;
         info!("链路追踪功能未启用，仅初始化日志系统");
     }
     
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     // 在程序结束前优雅关闭链路追踪，确保所有追踪数据都被发送
     if config.telemetry.enabled {
         info!("正在关闭链路追踪系统...");
-        common::logging::shutdown_telemetry();
+        runtime::logging::shutdown_telemetry();
     }
     
     info!("消息服务器已停止");

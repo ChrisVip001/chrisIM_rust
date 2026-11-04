@@ -1,22 +1,22 @@
 use std::sync::Arc;
 use cache::Cache;
-use common::proto::friend::friend_service_server::FriendService;
-use common::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse, GetFriendInGroupsRequest, GetFriendInGroupsResponse, GetPendingFriendRequestCountRequest, GetPendingFriendRequestCountResponse};
+use contract::proto::friend::friend_service_server::FriendService;
+use contract::proto::friend::{AcceptFriendRequestRequest, CheckFriendshipRequest, CheckFriendshipResponse, DeleteFriendRequest, DeleteFriendResponse, FriendshipResponse, GetFriendListRequest, GetFriendListResponse, GetFriendRequestsRequest, GetFriendRequestsResponse, RejectFriendRequestRequest, SendFriendRequestRequest, FriendshipStatus, UnblockUserRequest, BlockUserRequest, UnblockUserResponse, BlockUserResponse, CreateOrUpdateFriendGroupRequest, FriendGroupResponse, DeleteFriendGroupRequest, DeleteFriendGroupResponse, GetFriendGroupsRequest, GetFriendGroupsResponse, GetGroupFriendsRequest, GetGroupFriendsResponse, SearchPotentialFriendsRequest, SearchPotentialFriendsResponse, GetAllFriendDetailListRequest, GetAllFriendDetailListResponse, ToggleFriendStarRequest, ToggleFriendStarResponse, ToggleFriendTopRequest, ToggleFriendTopResponse, UpdateFriendRemarkRequest, UpdateFriendRemarkResponse, GetUserBlacklistRequest, GetUserBlacklistResponse, UserBlacklistWithInfo, IsBlockedRequest, IsBlockedResponse, FriendRelationType, GetFriendRelationRequest, GetFriendRelationResponse, AddFriendToGroupRequest, AddFriendToGroupResponse, RemoveFriendFromGroupRequest, RemoveFriendFromGroupResponse, GetFriendInGroupsRequest, GetFriendInGroupsResponse, GetPendingFriendRequestCountRequest, GetPendingFriendRequestCountResponse};
 use anyhow;
 use chrono::Utc;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
-use common::config::ConfigLoader;
-use common::grpc_client::base::get_rpc_client;
-use common::proto::message::chat_service_client::ChatServiceClient;
-use common::proto::message::SendMsgRequest;
-use common::proto::user::user_service_server::UserService;
-use common::proto::user::{UserConfigResponse, UserConfig};
-use common::service_discovery::LbWithServiceDiscovery;
+use runtime::config::ConfigLoader;
+use runtime::grpc_client::base::get_rpc_client;
+use contract::proto::message::chat_service_client::ChatServiceClient;
+use contract::proto::message::SendMsgRequest;
+use contract::proto::user::user_service_server::UserService;
+use contract::proto::user::{UserConfigResponse, UserConfig};
+use runtime::service_discovery::LbWithServiceDiscovery;
 use crate::friend::repository::friendship_repository::FriendshipRepository;
 use crate::friend::model::friendship::PotentialFriend;
-use common::proto::message::{Msg, MsgType, ContentType, PlatformType};
+use contract::proto::message::{Msg, MsgType, ContentType, PlatformType};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -842,7 +842,7 @@ impl FriendService for FriendServiceImpl {
         
         for (id, username, nickname, avatar_url, phone, friendship_status, sign, custom_id) in users {
             // 获取用户配置（进程内直调用户服务）
-            let user_config_req = tonic::Request::new(common::proto::user::UserConfigRequest {
+            let user_config_req = tonic::Request::new(contract::proto::user::UserConfigRequest {
                     user_id: id.clone(),
                     allow_phone_search: None,
                     allow_id_search: None,

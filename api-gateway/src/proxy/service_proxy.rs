@@ -3,22 +3,22 @@ use axum::{
     http::{Request, Response, StatusCode},
     response::IntoResponse,
 };
-use common::configs::routes_config::ServiceType;
+use runtime::configs::routes_config::ServiceType;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use crate::proxy::services::common::error_response;
-use common::config::{AppConfig, ConfigLoader};
-use common::Error;
-use common::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
-use common::grpc_client::base::get_rpc_client;
-use common::proto::friend::friend_service_client::FriendServiceClient;
-use common::proto::group::group_service_client::GroupServiceClient;
-use common::proto::user::user_service_client::UserServiceClient;
-use common::service_discovery::LbWithServiceDiscovery;
+use runtime::config::{AppConfig, ConfigLoader};
+use contract::Error;
+use runtime::grpc_client::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
+use runtime::grpc_client::base::get_rpc_client;
+use contract::proto::friend::friend_service_client::FriendServiceClient;
+use contract::proto::group::group_service_client::GroupServiceClient;
+use contract::proto::user::user_service_client::UserServiceClient;
+use runtime::service_discovery::LbWithServiceDiscovery;
 use crate::proxy::extract_request_body;
 use crate::proxy::services::{ChatServiceHandler, CommonServiceHandler, FriendServiceHandler, GroupServiceHandler, UserServiceHandler};
 use tokio::sync::{OnceCell, RwLock};
-use common::proto::message::chat_service_client::ChatServiceClient;
+use contract::proto::message::chat_service_client::ChatServiceClient;
 
 /// 服务客户端连接池
 struct ServiceClients {

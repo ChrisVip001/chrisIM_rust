@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
-use common::proto::friend::FriendshipStatus;
+use contract::proto::friend::FriendshipStatus;
 use sqlx::{PgPool, Row, FromRow, types::chrono::NaiveDateTime};
 use uuid::Uuid;
 

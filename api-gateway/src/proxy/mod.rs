@@ -5,7 +5,7 @@ pub mod services;
 use axum::body::Body;
 use axum::http::{Method, Request};
 use serde_json::Value;
-use common::auth::Claims;
+use runtime::auth::Claims;
 // 导出公共接口
 pub use service_proxy::ServiceProxy;
 

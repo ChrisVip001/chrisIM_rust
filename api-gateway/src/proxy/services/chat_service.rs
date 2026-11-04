@@ -1,12 +1,12 @@
 use super::common::{error_response, extract_i64_param, extract_string_array_param, get_optional_string_array,extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
 use axum::{body::Body, http::{Method, Response, StatusCode}};
 use chrono::Utc;
-use common::proto::message::chat_service_client::ChatServiceClient;
-use common::proto::message::{ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest, GetDbMessagesRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, RevokeMessageRequest, SendMsgRequest, GetConversationsResponse};
-use common::service_discovery::LbWithServiceDiscovery;
+use contract::proto::message::chat_service_client::ChatServiceClient;
+use contract::proto::message::{ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest, GetDbMessagesRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, RevokeMessageRequest, SendMsgRequest, GetConversationsResponse};
+use runtime::service_discovery::LbWithServiceDiscovery;
 use serde_json::Value;
 use tracing::{debug, error};
-use common::auth::Claims;
+use runtime::auth::Claims;
 
 /// 聊天服务处理器
 #[derive(Clone)]

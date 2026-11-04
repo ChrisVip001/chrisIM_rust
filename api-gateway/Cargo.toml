@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 # 工作空间依赖
-common = { path = "../common" }
+contract = { path = "../contract" }
+runtime = { path = "../runtime" }
 oss = { path = "../oss" }
 cache = { path = "../cache" }
 

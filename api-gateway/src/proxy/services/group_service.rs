@@ -2,14 +2,14 @@ use axum::{
     body::Body,
     http::{Method, Response, StatusCode},
 };
-use common::grpc_client::GroupServiceGrpcClient;
-use common::proto;
+use runtime::grpc_client::GroupServiceGrpcClient;
+use contract::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
 use chrono::{DateTime, TimeZone, Utc};
 use std::time::{Duration as StdDuration, SystemTime};
-use common::proto::group::MemberSettings;
-use common::auth::Claims;
+use contract::proto::group::MemberSettings;
+use runtime::auth::Claims;
 use super::common::{
     success_response, extract_string_param, get_optional_string, 
     get_i64_param, timestamp_to_datetime_string, get_user_id_from_jwt,

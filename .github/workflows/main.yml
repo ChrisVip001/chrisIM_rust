@@ -16,6 +16,39 @@ jobs:
   # 代码质量检查和测试
   test:
     runs-on: ubuntu-latest
+    # 集成测试需要真实 Redis/Kafka：号段边界用例跑在 Redis 上
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      kafka:
+        # 官方镜像，单节点 KRaft 模式，无需 ZooKeeper
+        image: apache/kafka:3.8.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 10
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -45,11 +78,18 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
       
-    # 代码质量检查 - 仅在 release 分支运行
+    # 代码质量检查 - 消息链路的两个服务已达到零告警，作为门禁执行。
+    # --no-deps 只对本仓这两个服务生效，避免被其他 crate 的历史告警拖红。
     - name: Run clippy
-      if: github.ref == 'refs/heads/release'
-      continue-on-error: true
-      run: cargo clippy -- -D warnings
+      run: cargo clippy -p msg-server -p msg-gateway --all-targets --no-deps -- -D warnings
+
+    # 单元测试与集成测试
+    # 依赖外部服务的用例通过环境变量显式开启，未设置时自动跳过
+    - name: Run tests
+      env:
+        IM_TEST_REDIS_URL: redis://127.0.0.1:6379
+        IM_TEST_KAFKA_BROKERS: 127.0.0.1:9092
+      run: cargo test -p msg-server -p msg-gateway -p cache --lib --tests
       
     # 安全漏洞审计 - 仅在 release 分支运行
     - name: Run security audit
@@ -104,95 +144,8 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
-
-  # 部署到测试环境
-  deploy-staging:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup SSH
-      uses: webfactory/ssh-agent@v0.8.0
-      with:
-        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY_STAGING }}
-        
-    - name: Add server to known hosts
-      run: |
-        ssh-keyscan -H ${{ secrets.SERVER_HOST_STAGING }} >> ~/.ssh/known_hosts
-        
-    - name: Deploy to staging server
-      run: |
-        ssh ${{ secrets.SERVER_USER_STAGING }}@${{ secrets.SERVER_HOST_STAGING }} << 'EOF'
-          cd /home/${{ secrets.SERVER_USER_STAGING }}/rust-im
-          
-          # 拉取最新代码
-          git pull origin develop
-          
-          # 设置环境变量
-          export DOCKER_IMAGE="${{ needs.build.outputs.image-tag }}"
-          export DEPLOY_ENV="staging"
-          
-          # 运行部署脚本
-          ./scripts/deploy-remote.sh -e staging
-        EOF
-        
-    - name: Health check staging
-      run: |
-        sleep 30
-        curl -f http://${{ secrets.SERVER_HOST_STAGING }}:8080/health || exit 1
-
-  # 部署到生产环境
-  deploy-production:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/release'
-    environment: production
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup SSH
-      uses: webfactory/ssh-agent@v0.8.0
-      with:
-        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-        
-    - name: Add server to known hosts
-      run: |
-        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
-        
-    - name: Deploy to production server
-      run: |
-        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-          cd /home/${{ secrets.SERVER_USER }}/rust-im
-          
-          # 拉取最新代码
-          git pull origin release
-          
-          # 设置环境变量
-          export DOCKER_IMAGE="${{ needs.build.outputs.image-tag }}"
-          export DEPLOY_ENV="production"
-          
-          # 运行部署脚本
-          ./scripts/deploy-remote.sh -e production
-        EOF
-        
-    - name: Health check production
-      run: |
-        sleep 30
-        curl -f http://${{ secrets.SERVER_HOST }}:8080/health || exit 1
-        
-    - name: Notify deployment
-      if: always()
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        channel: '#deployments'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        # 只构建 amd64：交叉编译 arm64 需要先启用 QEMU，否则这一步必然失败
+        platforms: linux/amd64
 
   # 安全扫描
   security:

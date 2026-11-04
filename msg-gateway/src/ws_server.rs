@@ -3,13 +3,12 @@ use axum::extract::{Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use common::auth::jwt;
-use common::config::AppConfig;
-use common::error::Error;
-use common::proto::message::PlatformType;
-use common::service_register_center::{service_register_center, Registration};
+use runtime::auth::jwt;
+use runtime::config::AppConfig;
+use contract::error::Error;
+use contract::proto::message::PlatformType;
+use runtime::service_register_center::{service_register_center, Registration};
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
@@ -48,7 +47,7 @@ pub struct AppState {
 
     /// JWT配置
     /// 用于验证客户端连接时提供的JWT令牌
-    jwt_config: common::configs::auth_config::JwtConfig,
+    jwt_config: runtime::configs::auth_config::JwtConfig,
     
     /// 缓存实例
     /// 用于验证redis中的token
@@ -79,7 +78,7 @@ impl WsServer {
         let websocket_registration = Registration {
             id: format!(
                 "{}-{}-{}",
-                &config.websocket.name, &config.websocket.host, &config.websocket.port
+                config.websocket.name, config.websocket.host, config.websocket.port
             ),
             name: config.websocket.name.clone(),
             host: config.websocket.host.clone(),
@@ -95,7 +94,7 @@ impl WsServer {
         let grpc_registration = Registration {
             id: format!(
                 "{}-{}-{}",
-                &config.rpc.ws.name, &config.rpc.ws.host, &config.rpc.ws.port
+                config.rpc.ws.name, config.rpc.ws.host, config.rpc.ws.port
             ),
             name: config.rpc.ws.name.clone(),
             host: config.rpc.ws.host.clone(),
@@ -116,22 +115,13 @@ impl WsServer {
     async fn test(State(state): State<AppState>) -> Result<String, Error> {
         let mut description = String::new();
 
-        // 遍历所有连接，生成描述信息
-        state.manager.hub.iter().for_each(|entry| {
-            let user_id = entry.key();
-            let platforms = entry.value();
+        // 连接中心只暴露快照，不把内部的连接对象泄露给运维接口
+        for (user_id, platforms) in state.manager.online_users() {
             description.push_str(&format!("用户ID: {}\n", user_id));
-
-            // 遍历该用户的所有平台连接
-            platforms.iter().for_each(|platform_entry| {
-                let platform_type = platform_entry.key();
-                let client = platform_entry.value();
-                description.push_str(&format!(
-                    "  平台: {:?}, 用户ID: {}\n",
-                    platform_type, client.user_id
-                ));
-            });
-        });
+            for platform in platforms {
+                description.push_str(&format!("  平台: {:?}\n", platform));
+            }
+        }
         Ok(description)
     }
 
@@ -231,7 +221,7 @@ impl WsServer {
     /// * `Err(Error)` - 令牌验证失败
     async fn verify_and_parse_token(
         token: &str,
-        jwt_config: &common::configs::auth_config::JwtConfig,
+        jwt_config: &runtime::configs::auth_config::JwtConfig,
         cache_instance: &Arc<dyn cache::Cache>,
     ) -> Result<jwt::Claims, Error> {
         // 验证JWT令牌并获取用户信息
@@ -350,8 +340,9 @@ impl WsServer {
             notify_sender,
         };
 
-        // 向连接管理器注册客户端
-        hub.register(user_id.clone(), client).await;
+        // 向连接管理器注册客户端，拿到本次连接的唯一标识
+        // 注销时必须带上它，否则被顶下线的旧连接会误删新连接的登记项
+        let conn_id = hub.register(user_id.clone(), client).await;
 
         // 启动心跳检测任务
         // 定期向客户端发送ping消息，检查连接是否活跃
@@ -467,7 +458,7 @@ impl WsServer {
         }
 
         // 从连接管理器中注销客户端
-        hub.unregister(user_id.clone(), platform).await;
+        hub.unregister(user_id.clone(), platform, conn_id).await;
 
         info!(
             "客户端连接已断开: 用户ID={}, 平台类型={:?}",

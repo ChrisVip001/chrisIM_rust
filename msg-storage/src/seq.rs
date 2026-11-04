@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use tokio::sync::mpsc::Receiver;
 
-use common::error::Error;
+use contract::error::Error;
 use tonic::async_trait;
 
 /// 序列号仓库trait

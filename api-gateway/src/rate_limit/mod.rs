@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
 };
-use common::configs::rate_limit_config::RateLimitConfig;
+use runtime::configs::rate_limit_config::RateLimitConfig;
 use governor::clock::Clock;
 use governor::{
     clock::DefaultClock,
@@ -41,7 +41,7 @@ pub struct RateLimitLayer {
 }
 
 /// 根据限流规则构建配额
-fn build_quota(rule: &common::configs::rate_limit_config::RateLimitRule) -> Quota {
+fn build_quota(rule: &runtime::configs::rate_limit_config::RateLimitRule) -> Quota {
     let per_second =
         NonZeroU32::new(rule.requests_per_second.max(1)).expect("requests_per_second >= 1");
     let burst = NonZeroU32::new(rule.burst_size.max(1)).expect("burst_size >= 1");

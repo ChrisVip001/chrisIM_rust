@@ -2,23 +2,23 @@ use std::io::Read;
 use chrono::{FixedOffset, Utc};
 use crate::user::model::user::{CreateUserData, ForgetPasswordData, RegisterUserData, UpdateUserData};
 use crate::user::repository::user_repository::UserRepository;
-use common::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest, GetUsersByIdsRequest, GetUsersByIdsResponse, UpdateLastLoginTimeRequest, UpdateLastLoginTimeResponse};
-use common::Error;
+use contract::proto::user::{user_service_server::UserService, CreateUserRequest, ForgetPasswordRequest, GetUserByIdRequest, GetUserByUsernameRequest, RegisterRequest, SearchUsersRequest, SearchUsersResponse, UpdateUserRequest, User as ProtoUser, UserConfig, UserConfigRequest, UserConfigResponse, UserResponse, VerifyPasswordRequest, VerifyPasswordResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, FriendshipStatus, GetEnhancedUserByIdRequest, GetUsersByIdsRequest, GetUsersByIdsResponse, UpdateLastLoginTimeRequest, UpdateLastLoginTimeResponse};
+use contract::Error;
 use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
-use common::utils::{generate_captcha_image, generate_captcha_text, save_image_code, validate_phone, verify_image_code};
+use runtime::utils::{generate_captcha_image, generate_captcha_text, save_image_code, validate_phone, verify_image_code};
 use crate::user::model::user_config::UserConfigData;
 use crate::user::repository::user_config_repository::UserConfigRepository;
 use std::sync::Arc;
 use redis::{Client as RedisClient, Commands};
-use common::sms::SmsService;
-use common::sms::tencent::TencentSmsService;
-use common::config::ConfigLoader;
-use common::sms::VerificationAction;
+use runtime::sms::SmsService;
+use runtime::sms::tencent::TencentSmsService;
+use runtime::config::ConfigLoader;
+use runtime::sms::VerificationAction;
 use std::str::FromStr;
-use common::proto::friend::{CheckFriendshipRequest, IsBlockedRequest};
-use common::proto::friend::friend_service_server::FriendService as _;
+use contract::proto::friend::{CheckFriendshipRequest, IsBlockedRequest};
+use contract::proto::friend::friend_service_server::FriendService as _;
 use std::sync::OnceLock;
 use base64::Engine;
 use base64::engine::general_purpose;
@@ -229,7 +229,7 @@ impl UserServiceImpl {
 
         loop {
             // 使用工具函数生成ID
-            let custom_id = common::utils::generate_user_custom_id();
+            let custom_id = runtime::utils::generate_user_custom_id();
 
             // 检查ID是否已存在
             match self.repository.is_custom_id_exists(&custom_id).await {
@@ -531,7 +531,7 @@ impl UserService for UserServiceImpl {
 
         // 如果是好友关系，查找对应的好友关系列表
         if friend_status == 1 {
-            let friend_relation_request = Request::new(common::proto::friend::GetFriendRelationRequest {
+            let friend_relation_request = Request::new(contract::proto::friend::GetFriendRelationRequest {
                 user_id: req.current_user_id.clone(),
                 friend_id: req.user_id.clone(),
             });
@@ -539,7 +539,7 @@ impl UserService for UserServiceImpl {
             let friend_relation_resp = self.friend().get_friend_relation(friend_relation_request).await?.into_inner();
             
             // 获取好友所在分组列表
-            let friend_groups_request = Request::new(common::proto::friend::GetFriendInGroupsRequest {
+            let friend_groups_request = Request::new(contract::proto::friend::GetFriendInGroupsRequest {
                 user_id: req.current_user_id.clone(),
                 friend_id: req.user_id.clone(),
             });
@@ -549,13 +549,13 @@ impl UserService for UserServiceImpl {
                 Err(e) => {
                     // 日志记录错误，但不影响整体返回
                     tracing::error!("获取好友分组列表失败: {}", e);
-                    common::proto::friend::GetFriendInGroupsResponse { groups: vec![] }
+                    contract::proto::friend::GetFriendInGroupsResponse { groups: vec![] }
                 }
             };
             
             // 转换分组信息
             let group_infos = friend_groups_resp.groups.into_iter()
-                .map(|g| common::proto::user::FriendGroupInfo {
+                .map(|g| contract::proto::user::FriendGroupInfo {
                     id: g.id,
                     group_name: g.group_name,
                 })
@@ -568,7 +568,7 @@ impl UserService for UserServiceImpl {
                 friend_status: friend_status as i32,
                 request_id,
                 is_online,
-                friend_relation: friend_relation_resp.friend.map(|f| common::proto::user::FriendRelation {
+                friend_relation: friend_relation_resp.friend.map(|f| contract::proto::user::FriendRelation {
                     remark: f.remark,
                     is_starred: f.is_starred,
                     is_top: f.is_top,

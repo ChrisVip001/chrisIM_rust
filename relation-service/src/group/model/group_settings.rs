@@ -29,8 +29,8 @@ impl GroupSettings {
     }
 
     // 转换为Proto对象
-    pub fn to_proto(&self) -> common::proto::group::GroupSettings {
-        common::proto::group::GroupSettings {
+    pub fn to_proto(&self) -> contract::proto::group::GroupSettings {
+        contract::proto::group::GroupSettings {
             group_id: self.group_id.clone(),
             allow_member_friendship: self.allow_member_friendship,
             join_approval_required: self.join_approval_required,

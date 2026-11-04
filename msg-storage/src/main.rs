@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::env;
-use common::config::{AppConfig, Component, ConfigLoader};
-use common::grpc::LoggingInterceptor;
+use runtime::config::{AppConfig, Component, ConfigLoader};
+use runtime::grpc::LoggingInterceptor;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tonic::transport::Server;
@@ -12,7 +12,7 @@ use tracing::{error, info};
 #[tokio::main]
 async fn main() -> Result<()> {
     // 初始化rustls加密提供程序
-    common::service::init_rustls();
+    runtime::service::init_rustls();
 
     // 从环境变量获取配置文件路径
     let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "./config/config.yaml".to_string());
