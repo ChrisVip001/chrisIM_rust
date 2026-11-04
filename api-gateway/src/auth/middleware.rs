@@ -1,11 +1,11 @@
 use axum::{
-    extract::{Extension, Request},
+    extract::{Extension, Request, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
 };
-use runtime::config::ConfigLoader;
+use runtime::config::AppConfig;
 use serde_json::json;
 use std::sync::Arc;
 use tracing::{debug, warn, error};
@@ -17,15 +17,11 @@ use crate::proxy::services::common::{
 
 /// 认证中间件
 pub async fn auth_middleware(
+    State(config): State<Arc<AppConfig>>,
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
     req: Request,
     next: Next,
 ) -> Response {
-    let config = match ConfigLoader::get_global() {
-        Some(config) => config,
-        None => return error_response("获取配置错误！", StatusCode::INTERNAL_SERVER_ERROR),
-    };
-
     // 检查路径是否在白名单中
     let path = req.uri().path().to_string();
     if config

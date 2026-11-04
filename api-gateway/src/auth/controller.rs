@@ -1,11 +1,11 @@
 use crate::proxy::services::common::{error_response, success_response};
 use axum::body::Body;
-use axum::extract::Extension;
+use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use runtime::auth::{jwt, Claims};
-use runtime::config::ConfigLoader;
+use runtime::config::AppConfig;
 use contract::error::Error;
 use contract::proto::message::PlatformType;
 use contract::proto::user::user_service_client::UserServiceClient;
@@ -189,6 +189,7 @@ impl SharedUserService {
 /// 处理短信验证码登录请求
 #[axum::debug_handler]
 pub async fn login_by_phone(
+    State(config): State<Arc<AppConfig>>,
     Extension(user_service): Extension<SharedUserService>,
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
     headers: HeaderMap,
@@ -236,6 +237,7 @@ pub async fn login_by_phone(
 
     // 构建登录响应
     let login_response = build_login_response(
+        &config,
         &user.id,
         &user.username,
         user.tenant_id.clone(),
@@ -258,6 +260,7 @@ pub async fn login_by_phone(
 /// 处理登录请求
 #[axum::debug_handler]
 pub async fn login(
+    State(config): State<Arc<AppConfig>>,
     Extension(user_service): Extension<SharedUserService>,
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
     headers: HeaderMap,
@@ -313,6 +316,7 @@ pub async fn login(
 
     // 构建登录响应
     let login_response = build_login_response(
+        &config,
         &user.id,
         &user.username,
         user.tenant_id,
@@ -336,6 +340,7 @@ pub async fn login(
 /// 处理令牌刷新请求
 #[axum::debug_handler]
 pub async fn refresh_token(
+    State(config): State<Arc<AppConfig>>,
     Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
     headers: HeaderMap,
     Json(refresh_req): Json<RefreshTokenRequest>,
@@ -344,12 +349,6 @@ pub async fn refresh_token(
 
     // 提取平台信息
     let platform = extract_platform_info(&headers);
-
-    // 读取JWT配置
-    let config = match ConfigLoader::get_global() {
-        Some(config) => config,
-        None => return Ok(error_response("获取配置错误！", StatusCode::INTERNAL_SERVER_ERROR))
-    };
 
     let jwt_config = &config.gateway.auth.jwt;
 
@@ -389,6 +388,7 @@ pub async fn refresh_token(
 
     // 构建登录响应
     let refresh_response = build_login_response(
+        &config,
         &user_info.sub,
         &user_info.username,
         user_info.tenant_id,
@@ -432,6 +432,7 @@ fn extract_user_extra(user: &contract::proto::user::User) -> HashMap<String, Str
 
 /// 构建登录响应
 async fn build_login_response(
+    config: &AppConfig,
     user_id: &str,
     username: &str,
     tenant_id: String,
@@ -440,9 +441,6 @@ async fn build_login_response(
     cache_instance: Arc<dyn cache::Cache>,
     platform: i32,
 ) -> Result<LoginResponse, Error> {
-    // 读取JWT配置
-    let config = ConfigLoader::get_global().expect("Failed to get global config");
-
     let jwt_config = &config.gateway.auth.jwt;
 
     // 生成访问令牌

@@ -3,7 +3,7 @@ use crate::auth::middleware::auth_middleware;
 use crate::proxy::ServiceProxy;
 use axum::{
     body::Body,
-    extract::{Json, Extension},
+    extract::{Extension, Json, State},
     http::{Request, Response, StatusCode},
     middleware,
     response::IntoResponse,
@@ -12,7 +12,7 @@ use axum::{
 };
 use contract::{proto::user::user_service_client::UserServiceClient, Error};
 use runtime::{
-    config::{AppConfig, ConfigLoader},
+    config::AppConfig,
     configs::routes_config::RouteRule,
     grpc_client::base::get_rpc_client,
     service_discovery::LbWithServiceDiscovery,
@@ -87,7 +87,9 @@ pub async fn build_routes(
     let user_service = controller::SharedUserService::new(service_client);
 
     // 构建基础路由
-    let mut router = Router::new()
+    // State 统一为 Arc<AppConfig>，由函数末尾 with_state 注入，
+    // 这样 handler 与中间件都不必回读全局单例。
+    let mut router = Router::<Arc<AppConfig>>::new()
         // 健康检查和指标
         .route("/health", get(health_check))
         .route(&gateway_config.metrics_endpoint, get(crate::metrics::get_metrics_handler))
@@ -97,7 +99,7 @@ pub async fn build_routes(
         .route("/api/user/refresh", post(controller::refresh_token));
 
     // 需要认证的路由
-    let authenticated_routes = Router::new()
+    let authenticated_routes = Router::<Arc<AppConfig>>::new()
         // 用户管理路由
         .route("/api/user/logout", post(controller::logout))
         // 好友在线状态查询路由
@@ -105,7 +107,10 @@ pub async fn build_routes(
         // 文件上传签名路由（需要认证以获取租户ID）
         .route("/api/files/upload-signature", post(get_upload_signature))
         .layer(Extension(cache_instance.clone()))
-        .layer(middleware::from_fn(auth_middleware));
+        .layer(middleware::from_fn_with_state(
+            config.clone(),
+            auth_middleware,
+        ));
 
     // 合并路由
     router = router.merge(authenticated_routes);
@@ -113,22 +118,30 @@ pub async fn build_routes(
     // 添加动态路由
     let service_proxy = Arc::new(service_proxy);
     for route in &gateway_config.routes.routes {
-        router = add_service_route(router, route, service_proxy.clone(), cache_instance.clone());
+        router = add_service_route(
+            router,
+            route,
+            service_proxy.clone(),
+            cache_instance.clone(),
+            config.clone(),
+        );
     }
 
-    // 添加用户服务扩展和缓存扩展
+    // 添加用户服务扩展和缓存扩展，最后注入 State 完成 Router<()> 的收口
     Ok(router
         .layer(Extension(user_service))
-        .layer(Extension(cache_instance)))
+        .layer(Extension(cache_instance))
+        .with_state(config))
 }
 
 /// 添加服务路由
 fn add_service_route(
-    router: Router,
+    router: Router<Arc<AppConfig>>,
     route: &RouteRule,
     service_proxy: Arc<ServiceProxy>,
     cache_instance: Arc<dyn cache::Cache>,
-) -> Router {
+    config: Arc<AppConfig>,
+) -> Router<Arc<AppConfig>> {
     let path = route.path_prefix.clone();
     let service_type = route.service_type.clone();
     let require_auth = route.require_auth;
@@ -154,7 +167,7 @@ fn add_service_route(
     let route_handler = if require_auth {
         any(create_handler())
             .layer(axum::Extension(cache_instance.clone()))
-            .layer(middleware::from_fn(auth_middleware))
+            .layer(middleware::from_fn_with_state(config.clone(), auth_middleware))
     } else {
         any(create_handler())
     };
@@ -164,7 +177,7 @@ fn add_service_route(
     let wildcard_handler = if require_auth {
         any(create_handler())
             .layer(axum::Extension(cache_instance.clone()))
-            .layer(middleware::from_fn(auth_middleware))
+            .layer(middleware::from_fn_with_state(config.clone(), auth_middleware))
     } else {
         any(create_handler())
     };
@@ -193,11 +206,11 @@ async fn health_check() -> impl IntoResponse {
 
 /// 获取上传签名
 async fn get_upload_signature(
+    State(config): State<Arc<AppConfig>>,
     Extension(user_info): Extension<Claims>,
     Json(req): Json<GetUploadSignatureRequest>,
 ) -> Result<impl IntoResponse, Error> {
-    // 获取配置并创建OSS客户端
-    let config = ConfigLoader::get_global().expect("无法加载全局配置");
+    // 使用注入的配置创建OSS客户端
     let oss_client = match oss(&config).await {
         Ok(client) => client,
         Err(e) => {

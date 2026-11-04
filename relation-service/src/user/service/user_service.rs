@@ -33,6 +33,8 @@ pub struct UserServiceImpl {
     user_config_repository: UserConfigRepository,
     sms_service: Arc<dyn SmsService>,
     redis_client: RedisClient,
+    /// 配置快照：验证码等工具函数需要 Redis 地址，不再回读全局单例
+    config: Arc<AppConfig>,
     /// 进程内直调好友服务（与 FriendServiceImpl 相互依赖，构造后由 main 绑定）
     friend_service: Arc<OnceLock<Arc<crate::friend::service::friend_service::FriendServiceImpl>>>,
 }
@@ -69,6 +71,7 @@ impl UserServiceImpl {
             user_config_repository: UserConfigRepository::new(pool.clone()),
             sms_service,
             redis_client,
+            config: Arc::new(config.clone()),
             friend_service: Arc::new(OnceLock::new()),
         })
     }
@@ -306,7 +309,7 @@ impl UserService for UserServiceImpl {
         reg_data.custom_id = self.generate_unique_user_id().await;
 
         // 图片验证码校验
-        if !verify_image_code(&req.image_code_key, &req.image_code) {
+        if !verify_image_code(&self.config, &req.image_code_key, &req.image_code) {
             error!("图片验证码错误: {}", req.image_code);
             return Err(Status::invalid_argument("图片验证码错误"));
         }
@@ -348,7 +351,7 @@ impl UserService for UserServiceImpl {
         }
 
         // 图片验证码校验
-        if !verify_image_code(&req.image_code_key, &req.image_code) {
+        if !verify_image_code(&self.config, &req.image_code_key, &req.image_code) {
             error!("图片验证码错误: {}", req.image_code);
             return Err(Status::invalid_argument("图片验证码错误"));
         }
@@ -1094,7 +1097,7 @@ impl UserService for UserServiceImpl {
         let code_key = format!("{}:{}", IMAGE_CODE_PREFIX, code_str);
         info!("图片验证码redisKey:{}", code_key);
         // 存储验证码到redis,有效时间5分钟
-        save_image_code(&code_key.to_string(), &captcha_text,&300);
+        save_image_code(&self.config, &code_key.to_string(), &captcha_text, &300);
         Ok(Response::new(CaptchaImageResponse {
             success: true,
             image_content: base64_image,

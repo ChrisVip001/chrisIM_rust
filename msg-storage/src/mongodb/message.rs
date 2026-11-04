@@ -635,6 +635,12 @@ mod tests {
     }
     #[tokio::test]
     async fn mongodb_insert_and_get_works() {
+        // 需要真实 MongoDB；Mongo 下线（1.6b）时本组用例一并删除
+        if std::env::var("IM_TEST_MONGO").is_err() {
+            eprintln!("跳过：设置 IM_TEST_MONGO=1 并提供可用 MongoDB 后运行");
+            return;
+        }
+
         let msg_box = TestConfig::new().await;
         let msg_id = "123";
         let msg = get_test_msg(msg_id.to_string());
@@ -647,6 +653,12 @@ mod tests {
 
     #[tokio::test]
     async fn mongodb_insert_and_delete_and_get_works() {
+        // 需要真实 MongoDB；Mongo 下线（1.6b）时本组用例一并删除
+        if std::env::var("IM_TEST_MONGO").is_err() {
+            eprintln!("跳过：设置 IM_TEST_MONGO=1 并提供可用 MongoDB 后运行");
+            return;
+        }
+
         let msg_box = TestConfig::new().await;
         let msg_id = "123";
         let msg = get_test_msg(msg_id.to_string());
@@ -686,6 +698,12 @@ mod tests {
     }
     #[tokio::test]
     async fn mongodb_insert_and_batch_delete_and_get_should_works() {
+        // 需要真实 MongoDB；Mongo 下线（1.6b）时本组用例一并删除
+        if std::env::var("IM_TEST_MONGO").is_err() {
+            eprintln!("跳过：设置 IM_TEST_MONGO=1 并提供可用 MongoDB 后运行");
+            return;
+        }
+
         let msg_box = TestConfig::new().await;
         let msg_id = vec!["123".to_string(), "124".to_string(), "125".to_string()];
         let mut msg = get_test_msg(msg_id[0].clone());

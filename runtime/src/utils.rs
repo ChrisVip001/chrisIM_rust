@@ -11,7 +11,7 @@ use rand::Rng;
 use uuid::Uuid;
 use regex::Regex;
 use ab_glyph::{FontArc, PxScale};
-use crate::config::ConfigLoader;
+use crate::config::AppConfig;
 // 导入雪花ID模块
 use crate::snowflake::SNOWFLAKE;
 
@@ -248,9 +248,14 @@ pub fn generate_captcha_text() -> String {
 }
 
 /// 图片验证码保存
-pub fn save_image_code(code_str: &str, captcha_text: &str, expire_time: &u32) -> () {
-    // 获取配置
-    let config = ConfigLoader::get_global().expect("获取全局配置失败");
+///
+/// 配置由调用方传入，工具函数不再回读全局单例。
+pub fn save_image_code(
+    config: &AppConfig,
+    code_str: &str,
+    captcha_text: &str,
+    expire_time: &u32,
+) -> () {
     // 创建Redis客户端
     let redis_url = config.redis.url();
     let mut redis_client = RedisClient::open(redis_url).expect("创建Redis客户端失败");
@@ -261,9 +266,7 @@ pub fn save_image_code(code_str: &str, captcha_text: &str, expire_time: &u32) ->
 
 /// 图片验证码校验
 const IMAGE_CODE_PREFIX: &str = "image:verification:code";
-pub fn verify_image_code(code_key: &str, input_code: &str) -> bool {
-    // 获取配置
-    let config = ConfigLoader::get_global().expect("获取全局配置失败");
+pub fn verify_image_code(config: &AppConfig, code_key: &str, input_code: &str) -> bool {
     // 创建Redis客户端
     let redis_url = config.redis.url();
     let mut redis_client = RedisClient::open(redis_url).expect("创建Redis客户端失败");

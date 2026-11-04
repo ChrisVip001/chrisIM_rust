@@ -5,7 +5,7 @@ use runtime::grpc::LoggingInterceptor;
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tonic::transport::Server;
-use tracing::{error, info};
+use tracing::info;
 
 
 
@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     ConfigLoader::set_global(app_config);
 
     // start cleaner
-    msg_storage::clean_receive_box(&config).await;
+    let _ = msg_storage::clean_receive_box(&config).await;
 
     // start rpc service
     // DbRpcService::start(&config).await;

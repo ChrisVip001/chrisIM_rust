@@ -496,7 +496,11 @@ impl ConfigLoader {
         Ok(())
     }
 
-    // 获取全局配置单例
+    /// 获取全局配置单例
+    ///
+    /// **业务代码禁止调用**：配置一律由 `main` 构造后通过参数 / `State` 注入。
+    /// 本方法仅为配置热重载保留一个发布点，服务层与仓储层不得回读，
+    /// 否则该层就无法脱离全局状态做单测。
     pub fn get_global() -> Option<Arc<AppConfig>> {
         GLOBAL_CONFIG.read().unwrap().clone()
     }

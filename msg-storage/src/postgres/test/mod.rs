@@ -111,6 +111,14 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
+        // 该用例会真实连接 PostgreSQL 并建库/删库，
+        // 默认跳过，避免 `cargo test` 在无数据库环境下直接 panic。
+        // 需要时：IM_TEST_PG=1 cargo test -p msg-storage
+        if std::env::var("IM_TEST_PG").is_err() {
+            eprintln!("跳过 it_works：设置 IM_TEST_PG=1 并准备可用 PostgreSQL 后运行");
+            return;
+        }
+
         let tdb = TestDb::new("localhost", 5432, "postgres", "postgres", "./migrations");
         sqlx::query("INSERT INTO todos (id, title) VALUES (1, 'test');")
             .execute(&tdb.pool().await)
