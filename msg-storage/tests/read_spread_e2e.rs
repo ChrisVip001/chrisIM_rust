@@ -3,7 +3,7 @@
 //! 默认 `#[ignore]`，因为它依赖本地容器。执行方式：
 //!
 //! ```bash
-//! docker exec -i rustim_postgres psql -U kelisi -d rustim < docs/MESSAGES_STORAGE_DDL.sql
+//! docker exec -i rustim_postgres psql -U kelisi -d rustim < docs/sql/init.sql
 //! cargo test -p msg-storage --test read_spread_e2e -- --ignored --nocapture
 //! ```
 //!
@@ -47,7 +47,7 @@ async fn write_fetch_and_idempotency() {
     let repo = Arc::new(
         ReadSpreadRepo::from_config(&config)
             .await
-            .expect("建表检查失败，请先执行 docs/MESSAGES_STORAGE_DDL.sql"),
+            .expect("建表检查失败，请先执行 docs/sql/init.sql"),
     );
     let writer = MessageWriter::new(
         repo.clone(),
@@ -208,7 +208,7 @@ async fn batch_write_matches_single_write() {
     let repo = Arc::new(
         ReadSpreadRepo::from_config(&config)
             .await
-            .expect("建表检查失败，请先执行 docs/MESSAGES_STORAGE_DDL.sql"),
+            .expect("建表检查失败，请先执行 docs/sql/init.sql"),
     );
     let writer = MessageWriter::new(
         repo.clone(),
@@ -308,7 +308,7 @@ async fn batch_write_spans_conversations() {
     let repo = Arc::new(
         ReadSpreadRepo::from_config(&config)
             .await
-            .expect("建表检查失败，请先执行 docs/MESSAGES_STORAGE_DDL.sql"),
+            .expect("建表检查失败，请先执行 docs/sql/init.sql"),
     );
     let writer = MessageWriter::new(
         repo.clone(),

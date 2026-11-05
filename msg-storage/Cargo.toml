@@ -1,12 +1,12 @@
 [package]
 name = "msg-storage"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 [dependencies]
 contract = { path = "../contract" }
 runtime = { path = "../runtime" }
-cache = { version = "0.1.0", path = "../cache" }
+cache = { path = "../cache" }
 
 async-trait = "0.1.79"
 futures = { workspace = true }

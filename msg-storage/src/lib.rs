@@ -1,7 +1,7 @@
 //! 消息存储层：统一读扩散
 //!
 //! 一条消息只写一次，写入成本与群规模无关 —— 单聊与十万人群同价。
-//! 表结构见 `docs/MESSAGES_STORAGE_DDL.sql`，接口见 [`read_spread`]。
+//! 表结构见 `docs/sql/init.sql`，接口见 [`read_spread`]。
 //!
 //! 与已移除的写扩散方案的区别：不存在 user 维度的消息副本，
 //! 拉取按 `(conversation_id, seq)` 主键扫描，已读是游标而非行级标记。
@@ -86,7 +86,7 @@ impl ReadSpreadRepo {
 
         if !missing.is_empty() {
             return Err(Error::Internal(format!(
-                "消息存储表缺失: {}。请先执行 docs/MESSAGES_STORAGE_DDL.sql",
+                "消息存储表缺失: {}。请先执行 docs/sql/init.sql",
                 missing.join(", ")
             )));
         }

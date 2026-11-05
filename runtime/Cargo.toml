@@ -1,6 +1,6 @@
 [package]
 name = "runtime"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 # 运行时基础设施：配置、日志/链路追踪、服务注册与发现、gRPC 连接工厂。

@@ -1,6 +1,6 @@
 [package]
 name = "contract"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 # 契约层：只放"如果每个服务各存一份就会漂移"的东西

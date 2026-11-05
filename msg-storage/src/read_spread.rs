@@ -1,7 +1,7 @@
 //! 读扩散存储抽象
 //!
 //! 一条消息只写一次，写入成本与群规模无关。对应
-//! `docs/MESSAGES_STORAGE_DDL.sql` 的四张表：
+//! `docs/sql/init.sql` 的四张表：
 //!
 //! | trait | 表 |
 //! |---|---|

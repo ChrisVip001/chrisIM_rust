@@ -12,6 +12,14 @@ members = [
     "msg-storage",
 ]
 
+# 版本号只有这里一处权威来源。
+# 升级版本时改这一行 + 追加 CHANGELOG.md，各 crate 通过 `version.workspace = true` 继承，
+# `/health` 返回的 `version`（api-gateway 的 `env!("CARGO_PKG_VERSION")`）随之变化。
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+
 # 发布构建配置统一在此定义。
 # 不要在 .cargo/config.toml 或 Dockerfile 里写 [profile.*] —— Cargo 不认可 config 中的 profile，
 # 会造成"本地构建与镜像构建产物不一致"而没有任何提示。

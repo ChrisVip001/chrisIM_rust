@@ -1,6 +1,9 @@
 # RustIM 日志聚合与分布式链路追踪
 
-本文档提供了在 RustIM 微服务架构中设置和使用日志聚合与分布式链路追踪的详细指南。
+> 适用版本：**1.0.0** · 文档索引：[docs/README.md](../README.md)
+>
+> 本文档提供了在 RustIM 微服务架构中设置和使用日志聚合与分布式链路追踪的详细指南。
+> 开始前先读第 0 节：链路追踪是**编译期 feature**，只在配置里打开 `telemetry.enabled` 不生效。
 
 ## 目录
 
@@ -79,6 +82,52 @@ RustIM 监控系统由以下组件组成：
 - **Prometheus**: 收集和存储指标数据
 - **Grafana**: 提供指标数据的可视化和仪表板
 
+## 0. 当前实现的开关与指标
+
+### 日志（始终生效）
+
+| 能力 | 现状 |
+|---|---|
+| 级别 | `log.level`，按组件覆盖见 `log.components`；`RUST_LOG` 优先级更高 |
+| 格式 | `plain` / `json`，JSON 带 `span` 与 `span_list`，便于 ELK 按链路聚合 |
+| 切割 | `log.rolling.rotation`（daily/hourly/minutely/never）+ `max_files`（默认 7） |
+| 请求关联 | HTTP 用 axum `TraceLayer`；gRPC 拦截器把 `x-trace-id`、`caller` 写进每条日志 |
+
+### 链路追踪（编译期 feature）
+
+`runtime` 的 `telemetry` feature **默认关闭**：开启会把 `opentelemetry-otlp 0.13` 拉进依赖图，
+连带旧版 tonic/h2（触发 RUSTSEC-2026-0258，已在 `.cargo/audit.toml` 中豁免）。
+所以启用要两步：
+
+```bash
+# 1. 编译期打开 feature
+cargo build --release --features telemetry -p msg-server -p msg-gateway \
+    -p api-gateway -p relation-service
+
+# 2. 配置里打开开关
+#    telemetry.enabled: true
+#    telemetry.endpoint: http://localhost:4317
+```
+
+只做第 2 步不会有任何 trace 导出，也不会有报错。
+
+### Prometheus 指标（仅 api-gateway）
+
+- 监听 `0.0.0.0:9090`，同时网关路由 `/metrics` 也返回同一份数据；
+- 指标：`gateway_requests_total`（method/path/service）、`gateway_responses_total`
+  与 `gateway_errors_total`（method/path/service/status）、
+  `gateway_request_duration_seconds`（无标签）；
+- msg-server / msg-gateway **没有** Prometheus 导出，见 `docs/TECHNICAL.md` 技术债。
+
+### 分段耗时采样（排查性能问题用）
+
+```bash
+IM_STAGE_PROFILE=1 ./target/release/msg-server
+```
+
+每 5s 输出一行七段 p50/p90/p99（等待/幂等/号段/写入/推送/端到端/生产），1/16 采样；
+关闭时零分配零锁，可以长期留在配置里。
+
 ## 配置指南
 
 ### 日志配置
@@ -117,19 +166,17 @@ telemetry:
 
 ### 环境变量覆盖
 
-可以使用环境变量覆盖配置文件中的设置：
+**只有两类覆盖存在**，不要假设每个配置项都有对应的环境变量：
 
-```bash
-# 日志级别设置
-export RUST_LOG=info
-export RUST_LOG_SQLX=debug
-export LOG_FORMAT=json
+| 变量 | 作用 |
+|---|---|
+| `RUST_LOG` | 覆盖日志级别，优先级高于 `log.level` / `log.components` |
+| `JWT_SECRET`、`OSS_ACCESS_KEY`、`OSS_SECRET_KEY`、`SMS_SECRET_ID`、`SMS_SECRET_KEY` | 密钥，启动时注入 |
+| `ADVERTISE_HOST`、`CONSUL_HOST`、`CONSUL_PORT` | 注册与发现地址 |
+| `CONFIG_PATH` | 指定配置文件路径 |
 
-# 链路追踪设置
-export TELEMETRY_ENABLED=true
-export TELEMETRY_ENDPOINT=http://jaeger:4317
-export TELEMETRY_SAMPLING_RATIO=0.1
-```
+没有 `LOG_FORMAT`、`TELEMETRY_ENABLED` 这类变量：日志格式与 telemetry 开关只能通过配置文件改，
+其中 telemetry 还要求编译期 feature（见第 0 节）。`log.sqlx_level` 也没有环境变量对应项。
 
 ## 查看和分析数据
 

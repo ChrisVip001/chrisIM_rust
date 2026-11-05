@@ -1,3 +1,6 @@
+-- [已废弃] 旧版 messages 单表（含分区）结构，已被 sql/init.sql 的读扩散模型取代。
+-- 仅作历史追溯，新环境不要执行：本脚本开头会 DROP 现有 messages_* 分区表。
+--
 -- 完整的messages表DDL语句
 -- 合并自DDL_init.sql、2025_01_05_fix_partitions.sql和2025_01_05_add_message_fields.sql
 -- 执行日期: 2025-01-XX

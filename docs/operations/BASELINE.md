@@ -1,5 +1,6 @@
 # 性能与契约基线（验收网）
 
+> 适用版本：**1.0.0** · 文档索引：[docs/README.md](../README.md)
 > 测量日期：2026-11-05 · 环境：本机（macOS，arm64），中间件 docker（PG/Redis/Kafka/Consul）
 > 本文件数据是后续所有重构"不得回退"的底线。每阶段结束复测并追加记录。
 
@@ -298,7 +299,7 @@ health 200+version / 业务信封 {code,message,success} / 缺字段 422 可定�
 62~158ms，说明是缓存命中率而非算法。
 
 结论：**本机验收必须每轮前确认数据量**，否则会把「索引溢出内存」误判成代码退化。
-`docs/MESSAGES_STORAGE_DDL.sql` 未包含 PG 实例级参数，`shared_buffers` 需按机器调整
+`docs/sql/init.sql` 未包含 PG 实例级参数，`shared_buffers` 需按机器调整
 （生产建议 2~4GB 起步）。
 
 ### 剩余尾部

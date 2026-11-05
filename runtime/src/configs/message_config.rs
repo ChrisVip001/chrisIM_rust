@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 /// 消息存储配置（统一读扩散）
 ///
-/// 对应 `docs/MESSAGES_STORAGE_DDL.sql`。
+/// 对应 `docs/sql/init.sql`。
 ///
 /// 设计前提：一条消息恒定写 1 行元数据，写入成本与群规模无关。
 /// 因此这里不再有「写扩散阈值」之类的分流参数 —— 分流本身是写放大的来源，

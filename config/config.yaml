@@ -262,7 +262,7 @@ websocket:
     - http
   # 上行消息处理worker数：按会话哈希分散到多个worker并行处理，组内保序
   upstream_workers: 8
-  # 心跳死链判定阈值：连续N个心跳周期未收到Pong即断开连接（默认2，约60秒）
+  # 心跳死链判定阈值：未收到 Pong 的累计次数 > 该值才断开（默认2，即第 3 个周期，约90秒）
   heartbeat_max_missed: 2
   # Consul 侧统一 TTL 自报：注册中心在独立网络命名空间，主动探测
   # 127.0.0.1 只会打到注册中心自身；进程假死由 k8s HTTP /health 探针兜底。

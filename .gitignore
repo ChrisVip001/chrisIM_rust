@@ -2,7 +2,8 @@
 .idea
 .tokeignore
 *.log
-/docs/server_config.md
+# 服务器凭据类文件，永不入库
+docs/**/server_config.md
 .ci
 .cursor
 .codebuddy/

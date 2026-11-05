@@ -1,5 +1,7 @@
 # RustIM CI/CD 部署指南
 
+> 适用版本：**1.0.0** · 文档索引：[docs/README.md](../README.md)
+
 ## 📋 概述
 
 本文档详细介绍了如何为 RustIM 项目设置完整的 CI/CD 流水线，支持腾讯云 OpenCloudOS 环境下的多环境部署。

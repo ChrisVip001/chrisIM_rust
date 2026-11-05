@@ -1,452 +1,216 @@
-# RustIM - 云原生即时通讯系统
+# RustIM
 
-[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
-[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com)
+[![version](https://img.shields.io/badge/version-1.0.0-blue.svg)](CHANGELOG.md)
+[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-RustIM 是一个基于 Rust 语言开发的高性能、云原生微服务架构即时通讯系统。采用现代化的技术栈，支持大规模并发用户，具备高可用性、可扩展性和容器化部署能力。
+用 Rust 实现的云原生即时通讯后端。四个可部署服务、五个库 crate，
+以「读扩散存储 + Kafka 异步落库 + WebSocket 长连接网关」为主干，
+所有性能结论都有本机实测数据支撑（见 [docs/operations/BASELINE.md](docs/operations/BASELINE.md)）。
 
-## 🚀 核心特性
+当前版本 **1.0.0**：版本号唯一权威来源是 `Cargo.toml` 的 `[workspace.package] version`，
+`GET /health` 返回的 `version` 即该值；变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-- **微服务架构**: 模块化设计，服务独立部署和扩展
-- **高性能**: 基于 Rust 异步编程，支持百万级并发连接
-- **云原生**: 完整的容器化支持，支持 Kubernetes 部署
-- **实时通信**: WebSocket 长连接，毫秒级消息推送
-- **分布式**: 支持多节点部署，水平扩展
-- **安全可靠**: JWT 认证，数据加密传输
-- **监控完善**: 集成 Prometheus 监控和链路追踪
+**本机实测（10 核 16GB macOS，中间件跑在 Docker）**
 
-## 🏗️ 系统架构
+| 维度 | 结果 |
+|---|---|
+| 单机长连接 | 1 万连接，建连成功率 100%，峰值 RSS **159MB** |
+| 建连延迟 | p50 271µs / p99 2.0ms |
+| 上行吞吐 | **9995 msg/s** 持续 60s（阶段 2 复测：1 万连接异常断开 0） |
+| 端到端推送 P99 | **62~158ms**（3000 msg/s / 64 会话，5 轮中 4 轮达标） |
+| HTTP 写吞吐 | **3002 QPS**，错误率 0，无限流误伤 |
+| 故障恢复 | 优雅停机摘流 **0s**，kill -9 摘流 8s，RTO ≤ 18s |
+
+优化前同口径端到端 P99 是 7.5s 且积压线性增长。怎么做到的见
+[docs/TECHNICAL.md](docs/TECHNICAL.md)。
+
+## 架构
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Web Client    │    │  Mobile Client  │    │  Desktop Client │
-└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
-          │                      │                      │
-          └──────────────────────┼──────────────────────┘
-                                 │
-                    ┌─────────────┴─────────────┐
-                    │      Load Balancer        │
-                    └─────────────┬─────────────┘
-                                  │
-                    ┌─────────────┴─────────────┐
-                    │      API Gateway          │
-                    │   (认证、路由、限流)        │
-                    └─────────────┬─────────────┘
-                                  │
-        ┌─────────────────────────┼─────────────────────────┐
-        │                         │                         │
-┌───────┴────────┐    ┌──────────┴───────────┐    ┌────────┴────────┐
-│  Message       │    │    Business          │    │   Storage       │
-│  Gateway       │    │    Services          │    │   Services      │
-│                │    │                      │    │                 │
-│ • WebSocket    │    │ • User Service       │    │ • PostgreSQL    │
-│ • 消息推送      │    │ • Friend Service     │    │ • Redis         │
-│ • 连接管理      │    │ • Group Service      │    │ • Kafka         │
-│                │    │ • Message Server     │    │ • OSS           │
-└────────────────┘    └──────────────────────┘    └─────────────────┘
+        HTTP                                    WebSocket
+          │                                         │
+   ┌──────▼───────┐                        ┌────────▼────────┐
+   │ api-gateway  │  JWT / 限流 / 熔断 / 路由 │   msg-gateway   │ 连接表 / 定向投递
+   └──┬────────┬──┘                        └───┬─────────┬───┘
+      │ gRPC   │ gRPC                          │ 上行     │ 下行
+┌─────▼──────┐ └──────────►┌──────────────────┐◄┘         │
+│  relation  │             │    msg-server    │───────────┘
+│ 用户/好友/群 │             │ 生产 + 消费 + 推送 │
+└─────┬──────┘             └───┬──────────┬───┘
+      │                        │          │
+     PG                     Kafka       Redis
+                                 ▲
+                        Consul（注册 / 发现）
 ```
 
-### 服务组件
+| 服务 | 端口 | 职责 |
+|---|---|---|
+| `api-gateway` | HTTP 8000（容器对外 8080） | 统一入口、认证、限流、熔断、文件签名 |
+| `msg-gateway` | WS 8085 / gRPC 50001 | 长连接接入、连接注册表、消息下行 |
+| `msg-server` | gRPC 50010 + Kafka | 消息生产、批量落库、推送路由（`config-prod.yaml` 样例写的是 50002） |
+| `relation-service` | gRPC 50004 | 用户 / 好友 / 群组（模块化单体） |
 
-| 服务名称 | 端口 | 功能描述 |
-|---------|------|----------|
-| **api-gateway** | 8080 | API 网关：统一入口、认证授权、路由转发、限流熔断 |
-| **relation-service** | 50004 | 用户 / 好友 / 群组（模块化单体：一个进程、一个端口、一次注册） |
-| **msg-gateway** | 8085 / 50001 | WebSocket 接入（8085）与内部 gRPC 推送（50001） |
-| **msg-server** | 50010 / 50003 | 消息收发（chat 50010）与实时推送（pusher 50003） |
+`contract` / `runtime` / `cache` / `msg-storage` / `oss` 是库 crate，没有独立进程。
 
-> `oss` 与 `msg-storage` 是库 crate（分别被 api-gateway、msg-server 依赖），没有独立进程与端口。
-> `config.yaml` 中保留的 `rpc.friend` / `rpc.group` 段已不再监听，仅为兼容旧配置保留。
+## 快速开始
 
-## 🛠️ 技术栈
-
-### 后端技术
-- **语言**: Rust 1.75+
-- **异步运行时**: Tokio
-- **Web框架**: Axum (HTTP), Tonic (gRPC)
-- **数据库**: PostgreSQL, Redis, MongoDB
-- **消息队列**: Apache Kafka
-- **认证**: JWT
-- **监控**: Prometheus, Jaeger
-- **配置管理**: YAML/TOML/JSON
-
-### 基础设施
-- **容器化**: Docker, Docker Compose
-- **编排**: Kubernetes (可选)
-- **负载均衡**: Nginx (可选)
-- **服务发现**: Consul (可选)
-- **日志收集**: ELK Stack (可选)
-
-## 📋 环境要求
-
-### 开发环境
-- Rust 1.75+
-- Docker 20.10+
-- Docker Compose 2.0+
-- Git
-
-### 生产环境
-- 4 Core CPU, 8GB RAM (最小配置)
-- 100GB 存储空间
-- Docker 或 Kubernetes 环境
-
-## 🚀 快速开始
-
-### 0. 安装 Docker 环境 (必需)
-
-如果服务器还没有安装 Docker，请先运行安装脚本：
+### 方式一：本机跑服务，中间件用容器（开发推荐）
 
 ```bash
-# 克隆项目
-git clone https://github.com/yourusername/rust-im.git
-cd rust-im
+# 1. 依赖：Rust 1.85+、Docker
+docker compose -f docker-compose.dev.yml up -d     # PG / Kafka / ZK / Consul
+# Redis 复用本机实例或自行启动
 
-# 安装 Docker 环境 (支持 Ubuntu/Debian/CentOS/RHEL)
-chmod +x scripts/install-docker.sh
-./scripts/install-docker.sh
+# 2. 运行环境变量（.env 里只有 DATABASE_URL 等基础项；
+#    JWT_SECRET / OSS / 短信密钥在启动前导出，不要写回配置文件）
+set -a; source .env; set +a
+export JWT_SECRET=$(openssl rand -hex 32)
 
-# 安装完成后，重新登录或运行以下命令使 docker 组权限生效
-newgrp docker
+# 3. 建表（关系库 + 消息库一次建完）
+psql "$DATABASE_URL" -f docs/sql/init.sql
 
-# 验证 Docker 安装
-docker --version
-docker-compose --version
-docker run hello-world
+# 4. 构建 + 启动四个服务
+./scripts/build.sh release
+./scripts/start-services.sh start     # status / stop / restart
+
+# 5. 验证
+curl -s localhost:8000/health
+./tests/contract/api_contract.sh      # 9 项契约门禁，必须全绿
 ```
 
-**支持的操作系统:**
-- Ubuntu 18.04+
-- Debian 10+
-- CentOS 7+
-- RHEL 7+
-- Rocky Linux 8+
-- AlmaLinux 8+
-
-### 1. 克隆项目
+### 方式二：全容器
 
 ```bash
-git clone https://github.com/yourusername/rust-im.git
-cd rust-im
+docker compose -f docker-compose.prod.yml up -d
+curl -s localhost:8080/health
 ```
 
-### 2. 环境配置
+`docker-compose.prod.yml` 会带起 Consul、Kafka 3 broker（`min.insync.replicas=2`）、
+PG16、nginx 与四个业务服务；密钥通过环境变量注入，不要写回配置文件。
+
+### Kubernetes
 
 ```bash
-# 复制环境变量文件
-cp .env.example .env
-
-# 编辑配置文件
-vim .env
-```
-
-### 3. 一键部署
-
-```bash
-# 使用 Docker Compose 部署
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh
-
-# 或者手动部署
-docker-compose up -d
-```
-
-### 4. 验证部署
-
-```bash
-# 检查服务状态
-docker-compose ps
-
-# 查看日志
-docker-compose logs -f
-
-# 健康检查
-curl http://localhost:8080/health
-```
-
-## 🔧 配置说明
-
-### 环境变量
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `DATABASE_URL` | - | PostgreSQL 连接字符串 |
-| `REDIS_URL` | redis://localhost:6379 | Redis 连接地址 |
-| `KAFKA_BROKERS` | localhost:9092 | Kafka 集群地址 |
-| `JWT_SECRET` | - | JWT 签名密钥 |
-| `LOG_LEVEL` | info | 日志级别 |
-
-### 配置文件
-
-主配置文件位于 `config/config.yaml`，支持以下配置：
-
-- **数据库配置**: PostgreSQL, Redis, MongoDB 连接参数
-- **服务配置**: 各微服务的监听地址和端口
-- **认证配置**: JWT 密钥、过期时间等
-- **限流配置**: API 限流规则
-- **监控配置**: Prometheus 指标暴露
-
-## 🐳 Docker 部署
-
-### 构建镜像
-
-```bash
-# 构建所有服务镜像
-docker build -t rustim:latest .
-
-# 或使用多阶段构建
-docker build --target production -t rustim:prod .
-```
-
-### 使用 Docker Compose
-
-```bash
-# 启动所有服务
-docker-compose up -d
-
-# 启动特定服务
-docker-compose up -d postgres redis kafka
-
-# 查看服务状态
-docker-compose ps
-
-# 停止所有服务
-docker-compose down
-```
-
-### 生产环境部署
-
-```bash
-# 使用生产配置
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-
-# 启用监控
-docker-compose -f docker-compose.yml -f docker-compose.telemetry.yml up -d
-```
-
-## ☸️ Kubernetes 部署
-
-### 前置条件
-
-```bash
-# 安装 kubectl
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-
-# 安装 Helm (可选)
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-```
-
-### 部署步骤
-
-```bash
-# 创建命名空间
-kubectl create namespace rustim
-
-# 部署基础设施
-kubectl apply -f k8s/infrastructure/
-
-# 部署应用服务
-kubectl apply -f k8s/services/
-
-# 检查部署状态
+kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -f k8s/01-secrets.yaml
+kubectl apply -f k8s/            # consul / postgres / redis / kafka / 四个业务服务
 kubectl get pods -n rustim
 ```
 
-## 📊 监控和运维
+清单含 Deployment / Service / HPA / PDB，探针与摘流预算见 [k8s/README.md](k8s/README.md)。
 
-### 健康检查
+## 目录结构
+
+```
+chrisIM_rust/
+├── api-gateway/        HTTP 入口：认证、限流、熔断、路由转发、文件签名
+├── msg-gateway/        WebSocket 接入 + 内部 gRPC 推送（含 ws_bench / e2e_bench）
+├── msg-server/         消息生产、Kafka 消费、批量落库编排、推送
+├── relation-service/   用户 / 好友 / 群组（模块化单体）
+├── msg-storage/        读扩散存储实现：批量写、幂等、号段、水位
+├── cache/              Redis 领域封装（号段/会话/关系/在线/未读）
+├── oss/                对象存储抽象（S3 / COS / OSS，预签名直传）
+├── contract/           proto、领域类型、统一错误、会话键推导
+├── runtime/            配置、日志、服务注册发现、gRPC 客户端、优雅停机、分段计时
+├── config/             多环境配置样例
+├── tests/              契约测试 / 故障注入 / 性能基准
+├── scripts/            构建与进程管理脚本
+├── k8s/                K8s 清单
+├── CHANGELOG.md        版本变更记录
+└── docs/               文档与 SQL（索引见 docs/README.md）
+```
+
+## 文档索引
+
+完整导航（含「我想做什么 → 看哪篇」）见 [docs/README.md](docs/README.md)。
+
+| 文档 | 内容 |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统拓扑、消息链路、数据模型、一致性语义、关键取舍总表、已知落差 |
+| [docs/TECHNICAL.md](docs/TECHNICAL.md) | 性能模型与逐项优化（问题→做法→效果→代价）、高并发/高可用实现、容量模型、调优手册 |
+| [docs/PRODUCT.md](docs/PRODUCT.md) | 能力矩阵与成熟度、用户旅程、对外接口、已知行为坑、限制与路线图 |
+| [docs/operations/BASELINE.md](docs/operations/BASELINE.md) | 性能与契约基线，每次重构不得回退的底线 |
+| [docs/operations/CONSUL.md](docs/operations/CONSUL.md) | 服务注册、TTL 摘流、优雅停机 |
+| [docs/operations/TELEMETRY.md](docs/operations/TELEMETRY.md) | 日志分级与 OTLP 链路追踪 |
+| [docs/sql/init.sql](docs/sql/init.sql) | 完整建表脚本（关系库 + 消息存储，一次执行） |
+| [docs/UPGRADE_NOTES.md](docs/UPGRADE_NOTES.md) · [CHANGELOG.md](CHANGELOG.md) | 升级注意与版本变更记录 |
+| [docs/guides/file-upload-guide.md](docs/guides/file-upload-guide.md) | 文件上传（前端直传） |
+| [docs/guides/ci-cd-setup.md](docs/guides/ci-cd-setup.md) | CI/CD |
+
+## 性能设计要点
+
+一句话版本：**吞吐由 SQL 语句数决定，延迟由攒批窗口和热点行更新决定。**
+
+- **一条消息只写一次**（读扩散）：万人群发一条消息 2 行写入，写扩散是 10001 行。
+- **批量落库**：整批一条判重 + 一条多行 `INSERT ... ON CONFLICT DO NOTHING RETURNING`，
+  语句数从「每条 2~3 条」降到「每批 2 条」。这是 P99 从 7.5s 降到百毫秒的主因。
+- **Redis 号段**：热群不再有 `FOR UPDATE` 行锁争用；步长放大到 1000 让跨界回写从 30 次/秒降到 3 次/秒。
+- **水位按批 + 200ms 限频**：水位段从 100ms 降到 18µs，退出消费热路径。
+- **攒批窗口自适应**：满载 12ms、空闲 10ms、每 8ms 无新消息即收手，P50 从 117ms 降到 23ms。
+- **WS 缓冲 8KB + 单写任务 + 有界队列**：1 万连接 RSS 从 1313MB 降到 159MB。
+- **上行按会话哈希并行、群推单次序列化**：异会话并行、同会话保序，万人群内存分配 O(n)→O(1)。
+
+代价与失败语义（批量失败会不会连坐、撤回窗口为什么存在）在
+[TECHNICAL.md 第 6 节](docs/TECHNICAL.md#6-一致性细节批量写失败会连坐吗) 讲清楚。
+
+## 配置
+
+主配置 `config/config.yaml`，通过 `CONFIG_PATH` 指定其它文件。分段：
+`gateway`（路由表）/ `log` / `telemetry` / `database` / `message_storage` /
+`server` / `validation` / `service_center` / `websocket` / `rpc` / `redis` / `kafka` / `oss` / `sms`。
+
+密钥走环境变量：`JWT_SECRET`、`OSS_ACCESS_KEY`、`OSS_SECRET_KEY`、
+`SMS_SECRET_ID`、`SMS_SECRET_KEY`，以及 `ADVERTISE_HOST`、`CONSUL_HOST`、`CONSUL_PORT`。
+详见 [config/README.md](config/README.md)。
+
+诊断开关：`IM_STAGE_PROFILE=1` 打开分段耗时采样（默认关闭，关闭时零开销）。
+
+## 测试与门禁
 
 ```bash
-# API 网关健康检查
-curl http://localhost:8080/health
-
-# 各服务健康检查
-curl http://localhost:8080/api/users/health
-curl http://localhost:8080/api/friends/health
-curl http://localhost:8080/api/groups/health
+cargo test --workspace                      # 单测（DB 相关用例自动 ignored）
+./tests/contract/api_contract.sh            # 对外 HTTP 契约 9 项
+./tests/faults/rto-consul.sh ws msg-gateway kill9 20
+./tests/faults/dependency-down.sh redis 20   # 依赖故障注入
+JWT_SECRET=<same> ./tests/perf/e2e.sh 3000 64 15 10   # 端到端基准
+cargo audit                                  # 依赖安全审计
 ```
 
-### 监控指标
+CI（`.github/workflows/main.yml`）：Redis + Kafka 服务容器 → clippy（两个消息服务 `-D warnings`）
+→ 单测 → release 分支跑 `cargo audit` → 镜像构建 → Trivy 扫描。
 
-访问 Prometheus 指标端点：
-- API Gateway: http://localhost:8080/metrics
-- 各微服务: http://localhost:PORT/metrics
+## 后续优化与升级方向
 
-### 日志查看
+### 近期（补齐「注释等于实现」）
 
-```bash
-# 查看所有服务日志
-docker-compose logs -f
+1. **幂等判定并入号段脚本**：用同一次 Redis 往返里的 `SET NX` 判重，去掉每条消息一次 PG 预查询。
+2. **会话列表上 Redis ZSET**：当前是 DB 拼装 + 内存排序，会话上万后退化；DDL 注释已写但代码未实现。
+3. **最近 N 条消息缓存**：`hot_cache_messages` 目前只有配置项，没有实现，主从延迟下「刚发就拉不到」。
+4. **可观测性补齐**：msg-server / msg-gateway 没有 Prometheus 指标，消费延迟、死信数、在线连接数只能从日志推算。
+5. **批量冲突兜底**：`ON CONFLICT` 扩到覆盖主键，加批量前预校验，消除「一条脏数据拖整批重试」。
 
-# 查看特定服务日志
-docker-compose logs -f api-gateway
-docker-compose logs -f user-service
+### 中期（补齐产品形态）
 
-# 实时跟踪日志
-docker-compose logs -f --tail=100 msg-gateway
-```
+6. **离线推送**：APNs / FCM / 厂商通道，以及与在线投递的去重（当前移动端后台收不到消息）。
+7. **撤回窗口消除**：撤回未命中时写待撤回表，落库时应用，让「发完立刻撤回」不再失败。
+8. **群成员变更一致性**：成员变动清理缓存 + 系统消息，避免新成员拉到旧消息。
+9. **会话置顶/免打扰参与排序**（字段已存在，排序未使用）、消息内容检索。
 
-## 🧪 测试
+### 长期（规模化）
 
-### 单元测试
+10. **多租户**：`tenant_id` 目前只出现在对象存储路径，库表还没有租户维度。
+11. **Redis Cluster / PG 分片**：号段与在线路由都要跟着改。
+12. **多地域部署与跨地域同步**：当前所有依赖都是单集群。
+13. **端到端加密与密钥轮换**：现在只有传输层加密。
 
-```bash
-# 运行所有测试
-cargo test
+## 贡献
 
-# 运行特定服务测试
-cargo test -p user-service
-cargo test -p api-gateway
-```
+1. Fork 并新建分支
+2. `cargo fmt && cargo clippy --workspace`
+3. 补测试：行为变更必须有单测，对外契约变更必须更新 `tests/contract/api_contract.sh`
+4. 改性能路径请附上 `docs/operations/BASELINE.md` 口径的前后对比
 
-### 集成测试
+## 许可证
 
-```bash
-# 启动测试环境
-docker-compose -f docker-compose.test.yml up -d
-
-# 运行集成测试
-cargo test --test integration
-
-# 性能测试
-./scripts/benchmark.sh
-```
-
-### API 测试
-
-```bash
-# 使用 curl 测试
-curl -X POST http://localhost:8080/api/users/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"test","password":"123456","email":"test@example.com"}'
-
-# 使用 Postman 集合
-# 导入 docs/postman/RustIM.postman_collection.json
-```
-
-## 🔒 安全
-
-### 认证授权
-- JWT Token 认证
-- 角色权限控制
-- API 限流保护
-
-### 数据安全
-- 密码 bcrypt 加密
-- HTTPS/WSS 传输加密
-- 敏感数据脱敏
-
-### 网络安全
-- 防火墙配置
-- IP 白名单
-- DDoS 防护
-
-## 📈 性能优化
-
-### 数据库优化
-- 连接池配置
-- 索引优化
-- 读写分离
-
-### 缓存策略
-- Redis 缓存热点数据
-- 本地缓存减少网络开销
-- CDN 加速静态资源
-
-### 消息队列
-- Kafka 异步处理
-- 消息分区提高并发
-- 消费者组负载均衡
-
-## 🛠️ 开发指南
-
-### 代码结构
-
-```
-rust-im/
-├── api-gateway/          # HTTP 入口：路由、鉴权、限流
-├── relation-service/     # 用户/好友/群组（模块化单体）
-├── msg-gateway/          # WebSocket 长连接网关
-├── msg-server/           # 消息服务：生产、消费、推送
-├── msg-storage/          # 消息存储抽象
-├── cache/                # Redis 缓存封装
-├── oss/                  # 对象存储能力（库，被 api-gateway 依赖，无独立进程）
-├── contract/             # 契约层：proto、领域类型、错误类型
-├── runtime/              # 运行时基建：配置、日志、服务发现、gRPC 连接
-├── config/               # 配置文件
-├── scripts/              # 构建与启动脚本
-├── docs/                 # 运维与配置文档
-└── k8s/                  # Kubernetes 配置
-```
-
-> `contract` 与 `runtime` 由原 `common` 拆分而来：
-> 前者只放「各服务各存一份就会漂移」的契约（proto / 类型 / 错误），
-> 后者放与业务无关的基础设施适配。两者都不含任何业务逻辑。
-
-### 添加新服务
-
-1. 创建服务目录和 Cargo.toml
-2. 实现服务逻辑
-3. 添加到 workspace
-4. 更新 Docker 配置
-5. 添加路由配置
-
-### 代码规范
-
-```bash
-# 代码格式化
-cargo fmt
-
-# 代码检查
-cargo clippy
-
-# 安全审计
-cargo audit
-```
-
-## 🤝 贡献指南
-
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 🆘 支持
-
-- 📧 邮箱: support@rustim.com
-- 💬 QQ群: 123456789
-- 📖 文档: https://docs.rustim.com
-- 🐛 问题反馈: [GitHub Issues](https://github.com/yourusername/rust-im/issues)
-
-## 🗺️ 路线图
-
-- [ ] 支持音视频通话
-- [ ] 移动端 SDK
-- [ ] 消息加密
-- [ ] 多租户支持
-- [ ] AI 智能助手
-- [ ] 区块链集成
-
----
-
-⭐ 如果这个项目对你有帮助，请给我们一个 Star！
-
-## 🚀 新增功能
-
-### 统一文件上传签名接口 ✨
-
-支持腾讯云COS、阿里云OSS和AWS S3的统一文件上传签名接口，实现前端无感知的多云存储切换。
-
-**主要特性：**
-- 🌐 **多云支持**: 一套API适配三大云存储提供商
-- 🔒 **安全可靠**: JWT认证 + MD5校验 + 时效控制
-- 📱 **前端友好**: 统一响应格式，无需修改前端代码即可切换存储
-- ⚡ **高性能**: 直接上传到对象存储，减少服务器压力
-- 🛡️ **生产就绪**: 完整的错误处理、日志记录和监控支持
-
-[详细文档](docs/file-upload-signature-guide.md) | [快速开始](docs/quick-start.md)
+MIT，见 [LICENSE](LICENSE)。
