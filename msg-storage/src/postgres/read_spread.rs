@@ -354,6 +354,294 @@ impl MsgMetaRepo for PgMsgMetaRepo {
         Ok(written)
     }
 
+    async fn find_existing(
+        &self,
+        conversation_id: &str,
+        server_ids: &[String],
+    ) -> Result<Vec<(String, i64)>, Error> {
+        if server_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query_as::<_, (String, i64)>(
+            "SELECT server_id, seq FROM msg_meta
+             WHERE conversation_id = $1 AND server_id = ANY($2::varchar[])",
+        )
+        .bind(conversation_id)
+        .bind(server_ids.to_vec())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    async fn insert_batch_with_participants(
+        &self,
+        conversation_id: &str,
+        entries: &[MsgEntry],
+        members: &[String],
+        inline_max_bytes: usize,
+    ) -> Result<Vec<(String, i64)>, Error> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 列式参数：每列一个数组，由 unnest 按位置展开成多行。
+        // 这样整批只是一条语句、一次往返；参数个数固定，与批量大小无关。
+        let n = entries.len();
+        let mut seqs: Vec<i64> = Vec::with_capacity(n);
+        let mut server_ids: Vec<String> = Vec::with_capacity(n);
+        let mut send_ids: Vec<String> = Vec::with_capacity(n);
+        let mut msg_types: Vec<i32> = Vec::with_capacity(n);
+        let mut content_types: Vec<i32> = Vec::with_capacity(n);
+        let mut send_times: Vec<i64> = Vec::with_capacity(n);
+        let mut content_sizes: Vec<i32> = Vec::with_capacity(n);
+        let mut inline_contents: Vec<Option<Vec<u8>>> = Vec::with_capacity(n);
+        let mut details: Vec<String> = Vec::with_capacity(n);
+        let mut is_revokeds: Vec<bool> = Vec::with_capacity(n);
+        let mut revoke_times: Vec<i64> = Vec::with_capacity(n);
+        let mut revoked_bys: Vec<String> = Vec::with_capacity(n);
+
+        // 只有超大正文需要外置到 msg_content，单独两个数组
+        let mut body_ids: Vec<String> = Vec::new();
+        let mut body_contents: Vec<Vec<u8>> = Vec::new();
+
+        for entry in entries {
+            let inline = entry.should_inline(inline_max_bytes);
+            seqs.push(entry.seq);
+            server_ids.push(entry.msg.server_id.clone());
+            send_ids.push(entry.msg.send_id.clone());
+            msg_types.push(entry.msg.msg_type);
+            content_types.push(entry.msg.content_type);
+            send_times.push(entry.msg.send_time);
+            content_sizes.push(entry.msg.content.len() as i32);
+            inline_contents.push(if inline {
+                Some(entry.msg.content.clone())
+            } else {
+                None
+            });
+            details.push(detail_json(&entry.msg));
+            is_revokeds.push(entry.msg.is_revoked);
+            revoke_times.push(entry.msg.revoke_time);
+            revoked_bys.push(entry.msg.revoked_by.clone());
+
+            if !inline {
+                body_ids.push(entry.msg.server_id.clone());
+                body_contents.push(entry.msg.content.clone());
+            }
+        }
+
+        // body 用 JOIN ins 限定：并发下没插进去的行不写孤儿正文
+        let rows = sqlx::query_as::<_, (String, i64)>(
+            "WITH ins AS (
+                 INSERT INTO msg_meta
+                     (conversation_id, seq, server_id, send_id, msg_type, content_type,
+                      send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
+                 SELECT $1, t.seq, t.server_id, t.send_id, t.msg_type, t.content_type,
+                        t.send_time, t.content_size, t.inline_content, t.detail::jsonb,
+                        t.is_revoked, t.revoke_time, t.revoked_by
+                 FROM unnest(
+                     $2::bigint[], $3::varchar[], $4::varchar[], $5::int[], $6::int[],
+                     $7::bigint[], $8::int[], $9::bytea[], $10::text[], $11::bool[],
+                     $12::bigint[], $13::varchar[]
+                 ) AS t(seq, server_id, send_id, msg_type, content_type,
+                        send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
+                 ON CONFLICT (conversation_id, server_id) DO NOTHING
+                 RETURNING server_id, seq
+             )
+             , body AS (
+                 INSERT INTO msg_content (server_id, content)
+                 SELECT b.sid, b.content
+                 FROM unnest($14::varchar[], $15::bytea[]) AS b(sid, content)
+                 WHERE b.sid IN (SELECT server_id FROM ins)
+                 ON CONFLICT (server_id) DO NOTHING
+             )
+             , mem AS (
+                 INSERT INTO user_conversation (user_id, conversation_id)
+                 SELECT u, $1 FROM unnest($16::varchar[]) AS u
+                 ON CONFLICT (user_id, conversation_id) DO NOTHING
+             )
+             SELECT server_id, seq FROM ins",
+        )
+        .bind(conversation_id)
+        .bind(seqs)
+        .bind(server_ids)
+        .bind(send_ids)
+        .bind(msg_types)
+        .bind(content_types)
+        .bind(send_times)
+        .bind(content_sizes)
+        .bind(inline_contents)
+        .bind(details)
+        .bind(is_revokeds)
+        .bind(revoke_times)
+        .bind(revoked_bys)
+        .bind(body_ids)
+        .bind(body_contents)
+        .bind(members.to_vec())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    async fn find_existing_multi(
+        &self,
+        pairs: &[(String, String)],
+    ) -> Result<Vec<(String, String, i64)>, Error> {
+        if pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let (conversations, server_ids): (Vec<String>, Vec<String>) = pairs
+            .iter()
+            .fold(
+                (
+                    Vec::with_capacity(pairs.len()),
+                    Vec::with_capacity(pairs.len()),
+                ),
+                |(mut cs, mut ss), (c, s)| {
+                    cs.push(c.clone());
+                    ss.push(s.clone());
+                    (cs, ss)
+                },
+            );
+
+        // 用 unnest 驱动而不是 IN 列表：参数固定两个数组，
+        // 分区键按值裁剪，语句数与批量大小无关。
+        let rows = sqlx::query_as::<_, (String, String, i64)>(
+            "SELECT m.conversation_id, m.server_id, m.seq
+             FROM unnest($1::varchar[], $2::varchar[]) AS p(cid, sid)
+             JOIN msg_meta m ON m.conversation_id = p.cid AND m.server_id = p.sid",
+        )
+        .bind(conversations)
+        .bind(server_ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    async fn insert_batch_multi(
+        &self,
+        entries: &[MsgEntry],
+        members: &[(String, String)],
+        inline_max_bytes: usize,
+    ) -> Result<Vec<(String, String, i64)>, Error> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let n = entries.len();
+        let mut conversations: Vec<String> = Vec::with_capacity(n);
+        let mut seqs: Vec<i64> = Vec::with_capacity(n);
+        let mut server_ids: Vec<String> = Vec::with_capacity(n);
+        let mut send_ids: Vec<String> = Vec::with_capacity(n);
+        let mut msg_types: Vec<i32> = Vec::with_capacity(n);
+        let mut content_types: Vec<i32> = Vec::with_capacity(n);
+        let mut send_times: Vec<i64> = Vec::with_capacity(n);
+        let mut content_sizes: Vec<i32> = Vec::with_capacity(n);
+        let mut inline_contents: Vec<Option<Vec<u8>>> = Vec::with_capacity(n);
+        let mut details: Vec<String> = Vec::with_capacity(n);
+        let mut is_revokeds: Vec<bool> = Vec::with_capacity(n);
+        let mut revoke_times: Vec<i64> = Vec::with_capacity(n);
+        let mut revoked_bys: Vec<String> = Vec::with_capacity(n);
+
+        let mut body_ids: Vec<String> = Vec::new();
+        let mut body_contents: Vec<Vec<u8>> = Vec::new();
+
+        for entry in entries {
+            let inline = entry.should_inline(inline_max_bytes);
+            conversations.push(entry.conversation_id.clone());
+            seqs.push(entry.seq);
+            server_ids.push(entry.msg.server_id.clone());
+            send_ids.push(entry.msg.send_id.clone());
+            msg_types.push(entry.msg.msg_type);
+            content_types.push(entry.msg.content_type);
+            send_times.push(entry.msg.send_time);
+            content_sizes.push(entry.msg.content.len() as i32);
+            inline_contents.push(if inline {
+                Some(entry.msg.content.clone())
+            } else {
+                None
+            });
+            details.push(detail_json(&entry.msg));
+            is_revokeds.push(entry.msg.is_revoked);
+            revoke_times.push(entry.msg.revoke_time);
+            revoked_bys.push(entry.msg.revoked_by.clone());
+
+            if !inline {
+                body_ids.push(entry.msg.server_id.clone());
+                body_contents.push(entry.msg.content.clone());
+            }
+        }
+
+        let (member_users, member_convs): (Vec<String>, Vec<String>) = members.iter().fold(
+            (
+                Vec::with_capacity(members.len()),
+                Vec::with_capacity(members.len()),
+            ),
+            |(mut us, mut cs), (u, c)| {
+                us.push(u.clone());
+                cs.push(c.clone());
+                (us, cs)
+            },
+        );
+
+        let rows = sqlx::query_as::<_, (String, String, i64)>(
+            "WITH ins AS (
+                 INSERT INTO msg_meta
+                     (conversation_id, seq, server_id, send_id, msg_type, content_type,
+                      send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
+                 SELECT t.cid, t.seq, t.server_id, t.send_id, t.msg_type, t.content_type,
+                        t.send_time, t.content_size, t.inline_content, t.detail::jsonb,
+                        t.is_revoked, t.revoke_time, t.revoked_by
+                 FROM unnest(
+                     $1::varchar[], $2::bigint[], $3::varchar[], $4::varchar[], $5::int[], $6::int[],
+                     $7::bigint[], $8::int[], $9::bytea[], $10::text[], $11::bool[],
+                     $12::bigint[], $13::varchar[]
+                 ) AS t(cid, seq, server_id, send_id, msg_type, content_type,
+                        send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
+                 ON CONFLICT (conversation_id, server_id) DO NOTHING
+                 RETURNING conversation_id, server_id, seq
+             )
+             , body AS (
+                 INSERT INTO msg_content (server_id, content)
+                 SELECT b.sid, b.content
+                 FROM unnest($14::varchar[], $15::bytea[]) AS b(sid, content)
+                 WHERE b.sid IN (SELECT server_id FROM ins)
+                 ON CONFLICT (server_id) DO NOTHING
+             )
+             , mem AS (
+                 INSERT INTO user_conversation (user_id, conversation_id)
+                 SELECT m.uid, m.cid FROM unnest($16::varchar[], $17::varchar[]) AS m(uid, cid)
+                 ON CONFLICT (user_id, conversation_id) DO NOTHING
+             )
+             SELECT conversation_id, server_id, seq FROM ins",
+        )
+        .bind(conversations)
+        .bind(seqs)
+        .bind(server_ids)
+        .bind(send_ids)
+        .bind(msg_types)
+        .bind(content_types)
+        .bind(send_times)
+        .bind(content_sizes)
+        .bind(inline_contents)
+        .bind(details)
+        .bind(is_revokeds)
+        .bind(revoke_times)
+        .bind(revoked_bys)
+        .bind(body_ids)
+        .bind(body_contents)
+        .bind(member_users)
+        .bind(member_convs)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
     async fn fetch_after(
         &self,
         conversation_id: &str,

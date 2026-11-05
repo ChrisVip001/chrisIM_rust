@@ -372,8 +372,13 @@ redis:
   host: 127.0.0.1
   port: 6379
   # 会话号段的预留步长：越大回写 PG 越少，但崩溃后跳号越多。
-  # IM 场景 100 左右较为均衡（跳号不影响未读，未读用 last_msg_seq 计算）。
-  seq_step: 100
+  #
+  # 每次跨界都要把预留上界回写 PG（一次独立事务 + 提交 fsync）。
+  # 步长 100 时，64 会话 / 3000 msg/s 下每秒跨界约 30 次，
+  # 实测 PG 日志里这些 UPDATE 会偶发 60~100ms（fsync 尾部），
+  # 直接把该会话的消费卡住。跳号不影响未读（未读用 last_msg_seq 计算），
+  # 所以把步长放大到 1000，跨界频率降到约 3 次/秒。
+  seq_step: 1000
   max_connections: 100
   pool_timeout_ms:  5000
   connection_timeout_ms:  5000

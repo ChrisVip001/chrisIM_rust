@@ -122,6 +122,19 @@ struct RecvStats {
     frames: u64,
 }
 
+impl RecvStats {
+    /// 预分配到预期帧数：满载时每帧都触发 Vec/HashSet 扩容，
+    /// 扩容期间持有全局锁，会把测量到的尾延迟算到被测系统头上。
+    fn with_capacity(frames: usize) -> Self {
+        Self {
+            latencies: Vec::with_capacity(frames),
+            seen: HashSet::with_capacity(frames),
+            duplicates: 0,
+            frames: 0,
+        }
+    }
+}
+
 /// 预置 N 对会话（发送方 + 接收方）：JWT + Redis access token + 好友关系。
 /// 好友关系直接写缓存，权限校验走「缓存命中」路径（正常业务路径），不产生额外 RPC。
 async fn setup(
@@ -286,7 +299,8 @@ async fn receiver_task(url: String, recv: Arc<Mutex<RecvStats>>, min_create_time
 
 async fn run_e2e(a: &Args, client: reqwest::Client, pairs: Vec<(String, String)>) -> i32 {
     let url = format!("http://{}:{}/api/chat/send", a.host, a.api_port);
-    let recv = Arc::new(Mutex::new(RecvStats::default()));
+    let expected_frames = (a.effective_rate() * a.duration) as usize + 1024;
+    let recv = Arc::new(Mutex::new(RecvStats::with_capacity(expected_frames)));
     let send = Arc::new(SendStats::default());
     let min_create_time = now_millis() - 1000;
 

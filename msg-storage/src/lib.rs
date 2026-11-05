@@ -200,6 +200,7 @@ impl MessageWriter {
         }
 
         let seq = self.next_seq(&conversation_id, conv_type).await?;
+        // 号段耗时只上报给采样器，单条路径不需要它参与慢日志
         lap.lap(Stage::Seq);
 
         let entry = read_spread::MsgEntry::new(conversation_id.clone(), seq, msg.clone());
@@ -232,5 +233,247 @@ impl MessageWriter {
     /// 可能晚一个批次才刷新，消息本身已经落库并由推送即时送达。
     pub async fn touch_watermarks(&self, watermarks: &[(String, i64, i64)]) -> Result<(), Error> {
         self.repo.conversation.touch_batch(watermarks).await
+    }
+
+    /// 批量保存同一会话的多条消息
+    ///
+    /// 调用方保证 `msgs` 属于同一会话且按到达顺序排列——顺序即序号顺序。
+    /// 返回与 `msgs` 等长的 `(server_id, seq, 是否首次写入)`。
+    ///
+    /// 相对逐条 [`Self::save`]，数据库语句从「每消息 2 条」降到「每批 2 条」：
+    /// 一次批量判重 + 一次多行写入。本机每条语句约 0.25 核毫秒，
+    /// 语句数直接决定满载吞吐上限，所以这是整条链路最有效的一刀。
+    ///
+    /// 语义与逐条一致：重复投递不消耗号段（判重先行），并发抢先由唯一约束兜底。
+    pub async fn save_batch(
+        &self,
+        msgs: Vec<Msg>,
+        members: &[String],
+    ) -> Result<Vec<(String, i64, bool)>, Error> {
+        if msgs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 同一组即同一会话，会话键取第一条即可
+        let conversation_id = read_spread::conversation_id_of(&msgs[0]);
+        let conv_type = read_spread::conv_type_of(&msgs[0]);
+
+        let mut lap = Lap::start();
+
+        // 1. 一次判重查询代替每条一次 SELECT
+        let lookup: Vec<String> = msgs
+            .iter()
+            .filter(|m| !m.server_id.is_empty())
+            .map(|m| m.server_id.clone())
+            .collect();
+        let existing: std::collections::HashMap<String, i64> = self
+            .repo
+            .meta
+            .find_existing(&conversation_id, &lookup)
+            .await?
+            .into_iter()
+            .collect();
+        lap.lap(Stage::Idem);
+
+        // 2. 未出现过的消息按顺序领号：顺序即序号顺序，保序靠调用方
+        let mut result: Vec<(String, i64, bool)> = Vec::with_capacity(msgs.len());
+        let mut pending: Vec<read_spread::MsgEntry> = Vec::with_capacity(msgs.len());
+        let mut pending_slots: Vec<usize> = Vec::with_capacity(msgs.len());
+
+        for msg in msgs {
+            if let Some(&seq) = existing.get(&msg.server_id) {
+                result.push((msg.server_id, seq, false));
+                continue;
+            }
+
+            let seq = self.next_seq(&conversation_id, conv_type).await?;
+            pending_slots.push(result.len());
+            result.push((msg.server_id.clone(), seq, false));
+            pending.push(read_spread::MsgEntry::new(
+                conversation_id.clone(),
+                seq,
+                msg,
+            ));
+        }
+        // 号段耗时只上报给采样器，这里的批量慢日志只看写入段
+        lap.lap(Stage::Seq);
+
+        // 3. 一条多行语句写入整批
+        if !pending.is_empty() {
+            let inserted = self
+                .repo
+                .meta
+                .insert_batch_with_participants(
+                    &conversation_id,
+                    &pending,
+                    members,
+                    self.inline_max_bytes,
+                )
+                .await?;
+            let inserted: std::collections::HashMap<String, i64> =
+                inserted.into_iter().collect();
+
+            for slot in pending_slots {
+                let server_id = result[slot].0.clone();
+                // 不在返回值里 = 被并发消费者抢先写入了，视为重复
+                if let Some(&seq) = inserted.get(&server_id) {
+                    result[slot].1 = seq;
+                    result[slot].2 = true;
+                }
+            }
+        }
+        lap.lap(Stage::Insert);
+
+        Ok(result)
+    }
+
+    /// 跨会话批量保存
+    ///
+    /// `items` 为 `(消息, 该会话的参与者)`。返回与入参等长的
+    /// `(conversation_id, seq, 是否首次写入)`。
+    ///
+    /// 与 [`Self::save_batch`] 的差别是批量边界：那个按会话分批，
+    /// 每批仍有「会话数 × 2」条语句；这里整批一条判重 + 一条写入，
+    /// 语句数与消息数无关。满载时这是决定 PG 负载的唯一变量。
+    pub async fn save_batch_multi(
+        &self,
+        items: Vec<(Msg, Vec<String>)>,
+    ) -> Result<Vec<(String, i64, bool)>, Error> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let started = std::time::Instant::now();
+        let mut lap = Lap::start();
+
+        // 1. 一次跨会话判重
+        let pairs: Vec<(String, String)> = items
+            .iter()
+            .filter(|(m, _)| !m.server_id.is_empty())
+            .map(|(m, _)| (read_spread::conversation_id_of(m), m.server_id.clone()))
+            .collect();
+        let existing: std::collections::HashMap<(String, String), i64> = self
+            .repo
+            .meta
+            .find_existing_multi(&pairs)
+            .await?
+            .into_iter()
+            .map(|(c, s, seq)| ((c, s), seq))
+            .collect();
+        let idem = lap.lap(Stage::Idem);
+
+        // 2. 未出现过的按会话分组领号：组内串行保序，组间并发。
+        //    整批串行领号时号段是最大的单点（每批几十次往返串成一串）。
+        let mut result: Vec<(String, i64, bool)> = Vec::with_capacity(items.len());
+        let mut pending: Vec<Option<read_spread::MsgEntry>> =
+            (0..items.len()).map(|_| None).collect();
+        let mut members: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+
+        // 待领号的消息按会话归并，保留其在 items 中的下标
+        let mut groups: Vec<(String, i16, Vec<(usize, Msg)>)> = Vec::new();
+        let mut group_index: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
+        for (idx, (msg, participants)) in items.into_iter().enumerate() {
+            let conversation_id = read_spread::conversation_id_of(&msg);
+
+            if let Some(&seq) = existing.get(&(conversation_id.clone(), msg.server_id.clone())) {
+                result.push((conversation_id, seq, false));
+                continue;
+            }
+
+            for user in &participants {
+                members.insert((user.clone(), conversation_id.clone()));
+            }
+
+            // 先占位，领号成功后回填
+            result.push((conversation_id.clone(), 0, false));
+
+            let conv_type = read_spread::conv_type_of(&msg);
+            match group_index.get(&conversation_id) {
+                Some(&i) => groups[i].2.push((idx, msg)),
+                None => {
+                    group_index.insert(conversation_id.clone(), groups.len());
+                    groups.push((conversation_id, conv_type, vec![(idx, msg)]));
+                }
+            }
+        }
+
+        let allocated = futures::future::join_all(groups.iter().map(|(conv, conv_type, msgs)| {
+            let conv = conv.clone();
+            let conv_type = *conv_type;
+            async move {
+                let mut out = Vec::with_capacity(msgs.len());
+                for (idx, _) in msgs {
+                    let seq = self.next_seq(&conv, conv_type).await?;
+                    out.push((*idx, seq));
+                }
+                Ok::<_, Error>(out)
+            }
+        }))
+        .await;
+
+        let mut assigned: Vec<(usize, i64)> = Vec::with_capacity(result.len());
+        for allocated in allocated {
+            assigned.extend(allocated?);
+        }
+        let assigned: std::collections::HashMap<usize, i64> = assigned.into_iter().collect();
+
+        for (conv, _, msgs) in &groups {
+            for (idx, msg) in msgs {
+                if let Some(&seq) = assigned.get(idx) {
+                    result[*idx].1 = seq;
+                    pending[*idx] = Some(read_spread::MsgEntry::new(
+                        conv.clone(),
+                        seq,
+                        msg.clone(),
+                    ));
+                }
+            }
+        }
+        let seq_time = lap.lap(Stage::Seq);
+
+        // 3. 一条多行语句写入整批；下标与 result 一一对应
+        if pending.iter().any(|p| p.is_some()) {
+            let members: Vec<(String, String)> = members.into_iter().collect();
+            let entries: Vec<read_spread::MsgEntry> = pending.iter().flatten().cloned().collect();
+            let inserted = self
+                .repo
+                .meta
+                .insert_batch_multi(&entries, &members, self.inline_max_bytes)
+                .await?;
+            let inserted: std::collections::HashMap<(String, String), i64> = inserted
+                .into_iter()
+                .map(|(c, s, seq)| ((c, s), seq))
+                .collect();
+
+            for (idx, entry) in pending.iter().enumerate() {
+                let Some(entry) = entry else { continue };
+                let key = (
+                    entry.conversation_id.clone(),
+                    entry.msg.server_id.clone(),
+                );
+                if let Some(&seq) = inserted.get(&key) {
+                    result[idx].1 = seq;
+                    result[idx].2 = true;
+                }
+            }
+        }
+        let insert = lap.lap(Stage::Insert);
+
+        let total = started.elapsed();
+        if total > std::time::Duration::from_millis(100) {
+            ::tracing::warn!(
+                "批量落库耗时异常: 总={:?} 判重={:?} 领号={:?} 写入={:?} 条数={}",
+                total,
+                idem,
+                seq_time,
+                insert,
+                result.len()
+            );
+        }
+
+        Ok(result)
     }
 }

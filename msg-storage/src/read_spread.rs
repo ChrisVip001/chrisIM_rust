@@ -16,7 +16,7 @@ use std::fmt::Debug;
 
 use async_trait::async_trait;
 use contract::error::Error;
-use contract::proto::message::{Msg, MsgType};
+use contract::proto::message::Msg;
 
 /// 会话状态
 #[derive(Debug, Clone, Default)]
@@ -135,6 +135,55 @@ pub trait MsgMetaRepo: Sync + Send + Debug {
     async fn insert_batch(&self, entries: &[MsgEntry], inline_max_bytes: usize)
         -> Result<u64, Error>;
 
+    /// 批量判重：返回该会话内已存在的 `(server_id, seq)`
+    ///
+    /// 替代「每条消息一次 SELECT」。语义不变——重复投递仍然不消耗号段，
+    /// 只是把 N 次往返压成一次。调用方据返回值过滤掉重放消息后再领号。
+    async fn find_existing(
+        &self,
+        conversation_id: &str,
+        server_ids: &[String],
+    ) -> Result<Vec<(String, i64)>, Error>;
+
+    /// 同一会话的多条消息用一条语句写入
+    ///
+    /// 返回实际插入的 `(server_id, seq)`。并发下被别的消费者抢先写过的行
+    /// 由唯一约束挡掉，不会出现在返回值里——调用方据此跳过重复推送。
+    ///
+    /// 与 [`Self::insert_with_participants`] 的差别只在语句条数：
+    /// 那是「一条消息一条语句」，这里是「一批消息一条语句」。
+    /// 每条语句在本机要花约 0.25 核毫秒，语句数就是满载吞吐的上限。
+    async fn insert_batch_with_participants(
+        &self,
+        conversation_id: &str,
+        entries: &[MsgEntry],
+        members: &[String],
+        inline_max_bytes: usize,
+    ) -> Result<Vec<(String, i64)>, Error>;
+
+    /// 跨会话批量判重：返回已存在的 `(conversation_id, server_id, seq)`
+    ///
+    /// 一条语句覆盖整批，代替「每个会话一次 SELECT」。
+    /// 分区键随参数给出，PG 按值裁剪到相关分区。
+    async fn find_existing_multi(
+        &self,
+        pairs: &[(String, String)],
+    ) -> Result<Vec<(String, String, i64)>, Error>;
+
+    /// 跨会话批量写入：整批一条语句
+    ///
+    /// `entries` 里每条自带会话 id，`members` 是 `(user_id, conversation_id)` 对。
+    /// 返回实际插入的 `(conversation_id, server_id, seq)`。
+    ///
+    /// 这是「按会话分批」的升级：会话分批时每批仍有「会话数 × 2」条语句，
+    /// 只有跨会话合并才能把语句数从「每消息」压到「每批」。
+    async fn insert_batch_multi(
+        &self,
+        entries: &[MsgEntry],
+        members: &[(String, String)],
+        inline_max_bytes: usize,
+    ) -> Result<Vec<(String, String, i64)>, Error>;
+
     /// 按会话增量拉取
     ///
     /// 返回按 `seq` 升序的消息，正文已补齐（内联或回表）。
@@ -218,6 +267,7 @@ pub use contract::types::conversation::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use contract::proto::message::MsgType;
 
     #[test]
     fn single_conversation_id_is_order_independent() {

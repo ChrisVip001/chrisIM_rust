@@ -194,3 +194,192 @@ async fn write_fetch_and_idempotency() {
         conversation_id
     );
 }
+
+/// 批量写入必须与逐条写入等价
+///
+/// 覆盖：返回顺序与入参一致、序号按入参顺序连续、重放不消耗号段、
+/// 内联与外置正文都能取回、参与者仍然登记。
+/// 这是满载改造的正确性底线——批量只为省语句数，不改任何可观测语义。
+#[tokio::test]
+#[ignore = "需要本地 PostgreSQL 与 Redis"]
+async fn batch_write_matches_single_write() {
+    let config = load_config();
+    let cache = cache::cache(&config).await;
+    let repo = Arc::new(
+        ReadSpreadRepo::from_config(&config)
+            .await
+            .expect("建表检查失败，请先执行 docs/MESSAGES_STORAGE_DDL.sql"),
+    );
+    let writer = MessageWriter::new(
+        repo.clone(),
+        cache,
+        config.message_storage.inline_content_max_bytes,
+    );
+
+    let suffix = unique_suffix();
+    let group_id = format!("g_batch_{}", suffix);
+    let conversation_id = group_conversation_id(&group_id);
+    let members: Vec<String> = ["u1", "u2"].iter().map(|s| s.to_string()).collect();
+
+    let base = Msg {
+        send_id: "u1".into(),
+        receiver_id: group_id.clone(),
+        group_id: group_id.clone(),
+        msg_type: MsgType::GroupMsg as i32,
+        send_time: 1_700_000_000_000,
+        ..Default::default()
+    };
+    let build = |i: usize, content: Vec<u8>| Msg {
+        server_id: format!("batch_{}_{}", suffix, i),
+        content,
+        send_time: 1_700_000_000_000 + i as i64,
+        ..base.clone()
+    };
+
+    let batch = vec![
+        build(0, b"one".to_vec()),
+        build(1, vec![9u8; 4096]), // 超过内联阈值，走 msg_content 回表
+        build(2, b"three".to_vec()),
+    ];
+
+    let saved = writer
+        .save_batch(batch.clone(), &members)
+        .await
+        .expect("批量写入失败");
+    assert_eq!(saved.len(), 3);
+    for (i, (server_id, seq, inserted)) in saved.iter().enumerate() {
+        assert_eq!(
+            server_id,
+            &format!("batch_{}_{}", suffix, i),
+            "返回顺序必须与入参一致"
+        );
+        assert_eq!(*seq, (i + 1) as i64, "序号应按入参顺序连续分配");
+        assert!(*inserted, "首次批量写入应全部标记为新写入");
+    }
+
+    // 重放同一批：不分配新序号、不再写入
+    let replay = writer
+        .save_batch(batch.clone(), &members)
+        .await
+        .expect("重放失败");
+    for (i, (_, seq, inserted)) in replay.iter().enumerate() {
+        assert_eq!(*seq, (i + 1) as i64, "重放不应分配新序号");
+        assert!(!inserted, "重放应被唯一约束拦下");
+    }
+
+    // 正文完整：内联原样返回，外置回表补齐
+    let fetched = repo
+        .meta
+        .fetch_after(&conversation_id, 0, 50)
+        .await
+        .expect("拉取失败");
+    assert_eq!(fetched.len(), 3, "三条消息都应落库");
+    assert_eq!(fetched[0].content, b"one");
+    assert_eq!(fetched[1].content, vec![9u8; 4096], "外置正文应回表补齐");
+    assert_eq!(fetched[2].content, b"three");
+
+    // 参与者登记仍然生效（批量路径不能漏登记）
+    let states = repo
+        .user_conversation
+        .list("u2", 100)
+        .await
+        .expect("查询用户会话失败");
+    assert!(
+        states.iter().any(|s| s.conversation_id == conversation_id),
+        "成员应被登记到 user_conversation"
+    );
+
+    println!(
+        "批量写入通过: conversation={}, seq=1..3 连续、重放不消耗号段、内联/外置正文一致",
+        conversation_id
+    );
+}
+
+/// 跨会话批量写入：整批一条语句，各会话序号互不影响
+///
+/// 这是满载主路径（`save_batch_multi`）的正确性底线：
+/// 会话 A、B 的消息混在一批里，各自的序号必须从 1 开始独立递增，
+/// 重放仍不消耗号段，成员按会话分别登记。
+#[tokio::test]
+#[ignore = "需要本地 PostgreSQL 与 Redis"]
+async fn batch_write_spans_conversations() {
+    let config = load_config();
+    let cache = cache::cache(&config).await;
+    let repo = Arc::new(
+        ReadSpreadRepo::from_config(&config)
+            .await
+            .expect("建表检查失败，请先执行 docs/MESSAGES_STORAGE_DDL.sql"),
+    );
+    let writer = MessageWriter::new(
+        repo.clone(),
+        cache,
+        config.message_storage.inline_content_max_bytes,
+    );
+
+    let suffix = unique_suffix();
+    let group_a = format!("g_multi_a_{}", suffix);
+    let group_b = format!("g_multi_b_{}", suffix);
+    let conv_a = group_conversation_id(&group_a);
+    let conv_b = group_conversation_id(&group_b);
+    let members_a: Vec<String> = ["u1", "u2"].iter().map(|s| s.to_string()).collect();
+    let members_b: Vec<String> = ["u3", "u4"].iter().map(|s| s.to_string()).collect();
+
+    let build = |group: &str, i: usize, send_id: &str| Msg {
+        server_id: format!("multi_{}_{}_{}", suffix, group, i),
+        send_id: send_id.into(),
+        receiver_id: group.into(),
+        group_id: group.into(),
+        msg_type: MsgType::GroupMsg as i32,
+        content: format!("m{}", i).into_bytes(),
+        send_time: 1_700_000_000_000 + i as i64,
+        ..Default::default()
+    };
+
+    // 交错排列：A1 B1 A2 B2，验证批内顺序与会话内顺序互不干扰
+    let items = vec![
+        (build(&group_a, 1, "u1"), members_a.clone()),
+        (build(&group_b, 1, "u3"), members_b.clone()),
+        (build(&group_a, 2, "u1"), members_a.clone()),
+        (build(&group_b, 2, "u3"), members_b.clone()),
+    ];
+
+    let saved = writer
+        .save_batch_multi(items.clone())
+        .await
+        .expect("跨会话批量写入失败");
+    assert_eq!(saved.len(), 4);
+
+    let seqs: Vec<(String, i64, bool)> = saved.clone();
+    assert_eq!(seqs[0].0, conv_a, "第 1 条应落在会话 A");
+    assert_eq!(seqs[0].1, 1);
+    assert!(seqs[0].2);
+    assert_eq!(seqs[1].0, conv_b, "第 2 条应落在会话 B");
+    assert_eq!(seqs[1].1, 1, "会话 B 的序号独立从 1 开始");
+    assert!(seqs[1].2);
+    assert_eq!(seqs[2].0, conv_a);
+    assert_eq!(seqs[2].1, 2, "会话 A 的第二条应为 2");
+    assert_eq!(seqs[3].1, 2, "会话 B 的第二条应为 2");
+
+    // 重放整批：不分配新序号
+    let replay = writer
+        .save_batch_multi(items)
+        .await
+        .expect("跨会话重放失败");
+    for (i, (_, seq, inserted)) in replay.iter().enumerate() {
+        assert_eq!(*seq, ((i / 2) + 1) as i64, "重放不应分配新序号");
+        assert!(!inserted, "重放应被唯一约束拦下");
+    }
+
+    // 两个会话的正文各自独立可取
+    let a = repo.meta.fetch_after(&conv_a, 0, 10).await.expect("拉取 A 失败");
+    let b = repo.meta.fetch_after(&conv_b, 0, 10).await.expect("拉取 B 失败");
+    assert_eq!(a.len(), 2);
+    assert_eq!(b.len(), 2);
+    assert_eq!(a[0].content, b"m1");
+    assert_eq!(b[0].content, b"m1");
+
+    println!(
+        "跨会话批量写入通过: A={}, B={}，序号独立、重放不消耗号段",
+        conv_a, conv_b
+    );
+}

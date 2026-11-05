@@ -9,6 +9,8 @@ runtime = { path = "../runtime" }
 cache = { version = "0.1.0", path = "../cache" }
 
 async-trait = "0.1.79"
+futures = { workspace = true }
+tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true, features = [

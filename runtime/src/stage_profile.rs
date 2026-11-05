@@ -41,16 +41,22 @@ pub enum Stage {
     Push,
     /// 端到端总耗时
     Total,
+    /// 生产段：消息从 `create_time` 到被 broker 接收（api-gateway → Kafka）
+    ///
+    /// 单看 [`Stage::Wait`] 无法区分「消息还没进 Kafka」和「进了 Kafka 没被消费」，
+    /// 这两者的修复方向完全相反，所以单独打一段。
+    Produce,
 }
 
 impl Stage {
-    const ALL: [Stage; 6] = [
+    const ALL: [Stage; 7] = [
         Stage::Wait,
         Stage::Idem,
         Stage::Seq,
         Stage::Insert,
         Stage::Push,
         Stage::Total,
+        Stage::Produce,
     ];
 
     fn index(self) -> usize {
@@ -61,6 +67,7 @@ impl Stage {
             Stage::Insert => 3,
             Stage::Push => 4,
             Stage::Total => 5,
+            Stage::Produce => 6,
         }
     }
 
@@ -72,11 +79,12 @@ impl Stage {
             Stage::Insert => "写入",
             Stage::Push => "推送",
             Stage::Total => "端到端",
+            Stage::Produce => "生产",
         }
     }
 }
 
-type Buckets = [Vec<u64>; 6];
+type Buckets = [Vec<u64>; 7];
 
 static ENABLED: OnceLock<bool> = OnceLock::new();
 static BUCKETS: OnceLock<Mutex<Buckets>> = OnceLock::new();

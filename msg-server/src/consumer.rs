@@ -39,7 +39,7 @@ const BATCH_SIZE: usize = 64;
 /// 2ms 窗口只能等到 1 条消息，批内并行度退化为 1，
 /// 消费吞吐被压到与单条处理时延同阶。
 /// 30ms 窗口在 200ms 延迟预算内换回足够的批内并行度。
-const BATCH_MAX_WAIT: Duration = Duration::from_millis(30);
+const BATCH_MAX_WAIT: Duration = Duration::from_millis(12);
 
 /// 空闲/低速率时的攒批窗口
 ///
@@ -49,6 +49,13 @@ const BATCH_MIN_WAIT: Duration = Duration::from_millis(10);
 
 /// 判定「满载」的上一批条数：低于它不值得用长窗口换并行度
 const BATCH_BUSY_HINT: usize = 6;
+
+/// 会话水位回写的最小间隔
+///
+/// 水位是派生数据（会话列表热排序在 Redis ZSET），滞后 200ms 不可观测；
+/// 但每批写一次会让 `conversation` 行被高频改写（实测约 5000 行/秒），
+/// 持续制造死元组，把 autovacuum 拖进热路径。
+const WATERMARK_FLUSH_INTERVAL_MS: u64 = 200;
 
 /// 排空批次时相邻两条消息的最大间隔
 ///
@@ -70,6 +77,8 @@ struct PendingMessage {
     offset: i64,
     /// 分组键：同一会话必须串行，保证序号顺序与消息顺序一致
     group: String,
+    /// broker 接收时间（毫秒），用于把「生产端晚到」与「消费端停顿」分开
+    broker_ts: i64,
 }
 
 /// 需要回写的会话水位
@@ -141,6 +150,15 @@ pub struct ConsumerService {
 
     /// 主主题名，仅用于日志
     topic: String,
+
+    /// 待回写的会话水位（同一会话合并成最大值后批量提交）
+    pending_watermarks: tokio::sync::Mutex<std::collections::HashMap<String, (i64, i64)>>,
+
+    /// 上次水位回写时间（毫秒），用于限频
+    last_watermark_flush: std::sync::atomic::AtomicU64,
+
+    /// 是否已有延迟回写任务在等待，避免重复 spawn
+    watermark_flush_scheduled: std::sync::atomic::AtomicBool,
 }
 
 impl ConsumerService {
@@ -197,6 +215,9 @@ impl ConsumerService {
             dlq_producer,
             dead_letter_topic,
             topic: config.kafka.topic.clone(),
+            pending_watermarks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            last_watermark_flush: std::sync::atomic::AtomicU64::new(0),
+            watermark_flush_scheduled: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -238,6 +259,9 @@ impl ConsumerService {
             dlq_producer: self.dlq_producer.clone(),
             dead_letter_topic: self.dead_letter_topic.clone(),
             topic: self.topic.clone(),
+            pending_watermarks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            last_watermark_flush: std::sync::atomic::AtomicU64::new(0),
+            watermark_flush_scheduled: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -321,6 +345,7 @@ impl ConsumerService {
             partition: message.partition(),
             offset: message.offset(),
             group,
+            broker_ts: message.timestamp().to_millis().unwrap_or(0),
         })
     }
 
@@ -338,6 +363,9 @@ impl ConsumerService {
 
     /// 并行处理一批消息，并按分区提交位点
     async fn process_batch(self: &Arc<Self>, batch: Vec<PendingMessage>) {
+        let batch_started = Instant::now();
+        let batch_len = batch.len();
+
         // 批内每个分区的最大位点
         let mut max_offsets: std::collections::HashMap<(String, i32), i64> =
             std::collections::HashMap::new();
@@ -350,56 +378,233 @@ impl ConsumerService {
             }
         }
 
-        // 按会话分组：组内串行保序，组间并行
-        let mut groups: std::collections::HashMap<String, Vec<PendingMessage>> =
-            std::collections::HashMap::new();
+        // 按会话归并：组内保序，组间并行。用保序数组而不是 HashMap，
+        // 落库结果才能按位置回填。
+        let profiling = Lap::start();
+        let mut by_conv: Vec<(String, Vec<(PendingMessage, Msg, i64)>)> = Vec::new();
+        let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut rest: Vec<PendingMessage> = Vec::new();
+
         for m in batch {
-            groups.entry(m.group.clone()).or_default().push(m);
-        }
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PendingMessage>();
-
-        let mut handles = Vec::with_capacity(groups.len());
-        for (_, msgs) in groups {
-            let svc = self.clone();
-            let tx = tx.clone();
-
-            handles.push(tokio::spawn(async move {
-                // 本组（同一会话）落库成功的水位，整批结束后汇总回写一次
-                let mut watermarks = Vec::with_capacity(msgs.len());
-                for m in msgs {
-                    let payload = m.payload.clone();
-                    let result = retry_with_backoff(MAX_ATTEMPTS, RETRY_BACKOFF, || {
-                        svc.handle_msg(&payload)
-                    })
-                    .await;
-
-                    match result {
-                        Ok(Some(mark)) => watermarks.push(mark),
-                        Ok(None) => {}
-                        Err(e) => {
-                            error!("消息处理失败且重试耗尽: {:?}", e);
-                            // 优先转死信；死信也写不进去时，把该分区标记为需要回退
-                            if let Err(dlq_err) = kafka::send_to_topic(
-                                &svc.dlq_producer,
-                                &svc.dead_letter_topic,
-                                &m.payload,
-                                &m.group,
-                            )
-                            .await
-                            {
-                                warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
-                                let _ = tx.send(m);
-                            }
+            match Self::parse_persistable(&m.payload) {
+                Some(msg) => {
+                    let create_time = msg.create_time;
+                    if profiling.enabled() && create_time > 0 {
+                        let now = now_millis();
+                        if m.broker_ts > 0 {
+                            record(
+                                Stage::Produce,
+                                Duration::from_millis((m.broker_ts - create_time).max(0) as u64),
+                            );
+                        }
+                        record(
+                            Stage::Wait,
+                            Duration::from_millis((now - create_time).max(0) as u64),
+                        );
+                    }
+                    let conv = conversation_id_of(&msg);
+                    match index.get(&conv) {
+                        Some(&i) => by_conv[i].1.push((m, msg, create_time)),
+                        None => {
+                            index.insert(conv.clone(), by_conv.len());
+                            by_conv.push((conv, vec![(m, msg, create_time)]));
                         }
                     }
                 }
-                watermarks
+                None => rest.push(m),
+            }
+        }
+
+        let after_parse = batch_started.elapsed();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PendingMessage>();
+        let mut watermarks: Vec<Watermark> = Vec::new();
+
+        // 每个会话一次成员查询，落库参与者与推送路由共用（原先每条消息一次）
+        let mut meta: std::collections::HashMap<String, (MsgType2, Vec<String>)> =
+            std::collections::HashMap::new();
+        let mut batchable = !by_conv.is_empty();
+
+        if batchable {
+            // 并发查：批处理头部串行做「会话数」次 I/O 时，任何一次慢都会
+            // 阻塞整批，表现为等待段的尖刺（消息在客户端队列里排队）。
+            let queries: Vec<(String, Msg, MsgType2)> = by_conv
+                .iter()
+                .filter_map(|(conv, msgs)| {
+                    let first = &msgs[0].1;
+                    MsgType::try_from(first.msg_type)
+                        .ok()
+                        .map(|mt| (conv.clone(), first.clone(), MsgType2::classify_msg_type(mt).0))
+                })
+                .collect();
+
+            if queries.len() != by_conv.len() {
+                batchable = false;
+            } else {
+                let results = futures::future::join_all(queries.into_iter().map(
+                    |(conv, msg, msg_type)| async move {
+                        let ids = self.group_member_ids(&msg_type, &msg).await;
+                        (conv, msg_type, ids)
+                    },
+                ))
+                .await;
+
+                for (conv, msg_type, ids) in results {
+                    match ids {
+                        Ok(ids) => {
+                            meta.insert(conv, (msg_type, ids));
+                        }
+                        Err(e) => {
+                            error!("查询会话成员失败，本批退回逐条: {:?}", e);
+                            batchable = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let after_members = batch_started.elapsed();
+        let conv_count = meta.len();
+
+        // 整批一次落库：一条判重 + 一条多行写入
+        let mut saved: Vec<(String, i64, bool)> = Vec::new();
+        if batchable {
+            let mut items: Vec<(Msg, Vec<String>)> = Vec::with_capacity(index.len());
+            for (conv, msgs) in &by_conv {
+                let (msg_type, member_ids) = &meta[conv];
+                for (_, msg, _) in msgs {
+                    let mut participants = member_ids.clone();
+                    if !msg.send_id.is_empty() {
+                        participants.push(msg.send_id.clone());
+                    }
+                    if *msg_type != MsgType2::Group && !msg.receiver_id.is_empty() {
+                        participants.push(msg.receiver_id.clone());
+                    }
+                    items.push((msg.clone(), participants));
+                }
+            }
+
+            match retry_with_backoff(MAX_ATTEMPTS, RETRY_BACKOFF, || {
+                self.writer.save_batch_multi(items.clone())
+            })
+            .await
+            {
+                Ok(v) => saved = v,
+                Err(e) => {
+                    error!("批量落库失败，本批退回逐条重试: {:?}", e);
+                    batchable = false;
+                }
+            }
+        }
+
+        // 批量不可用时整批退回逐条：一条坏消息不能连坐同批其他消息
+        if !batchable {
+            let mut all = rest;
+            for (_, msgs) in by_conv {
+                all.extend(msgs.into_iter().map(|(m, _, _)| m));
+            }
+            rest = all;
+            by_conv = Vec::new();
+        }
+
+        let after_save = batch_started.elapsed();
+
+        // 推送按会话并行、组内串行保序
+        let saved = std::sync::Arc::new(saved);
+        let profiling_enabled = profiling.enabled();
+        let mut cursor = 0usize;
+        let mut handles = Vec::with_capacity(by_conv.len());
+
+        for (conv, msgs) in by_conv {
+            let Some((msg_type, member_ids)) = meta.remove(&conv) else {
+                continue;
+            };
+
+            let svc = self.clone();
+            let tx = tx.clone();
+            let saved = saved.clone();
+            let base = cursor;
+            cursor += msgs.len();
+
+            handles.push(tokio::spawn(async move {
+                let mut marks = Vec::with_capacity(msgs.len());
+
+                for (j, (m, mut msg, create_time)) in msgs.into_iter().enumerate() {
+                    let (_, seq, inserted) = saved[base + j];
+                    if !inserted {
+                        // 重放/并发重复：不重复推送，位点正常推进
+                        continue;
+                    }
+                    msg.seq = seq;
+
+                    let mut push_lap = Lap::start();
+                    let pushed = svc.push_msg(msg.clone(), &msg_type, member_ids.clone()).await;
+                    push_lap.lap(Stage::Push);
+
+                    if let Err(e) = pushed {
+                        error!("批量路径推送失败: server_id={}, {:?}", msg.server_id, e);
+                        // 与逐条路径一致：先转死信，死信也失败才退回重投
+                        if let Err(dlq_err) = kafka::send_to_topic(
+                            &svc.dlq_producer,
+                            &svc.dead_letter_topic,
+                            &m.payload,
+                            &m.group,
+                        )
+                        .await
+                        {
+                            warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
+                            let _ = tx.send(m);
+                        }
+                        continue;
+                    }
+
+                    if profiling_enabled && create_time > 0 {
+                        record(
+                            Stage::Total,
+                            Duration::from_millis((now_millis() - create_time).max(0) as u64),
+                        );
+                    }
+
+                    marks.push(Watermark {
+                        conversation_id: conv.clone(),
+                        seq,
+                        send_time: msg.send_time,
+                    });
+                }
+
+                marks
             }));
+        }
+
+        // 兜底：已读消息、信令、坏负载，以及批量失败退回的消息
+        for m in rest {
+            let payload = m.payload.clone();
+            let result =
+                retry_with_backoff(MAX_ATTEMPTS, RETRY_BACKOFF, || self.handle_msg(&payload)).await;
+
+            match result {
+                Ok(Some(mark)) => watermarks.push(mark),
+                Ok(None) => {}
+                Err(e) => {
+                    error!("消息处理失败且重试耗尽: {:?}", e);
+                    // 优先转死信；死信也写不进去时，把该分区标记为需要回退
+                    if let Err(dlq_err) = kafka::send_to_topic(
+                        &self.dlq_producer,
+                        &self.dead_letter_topic,
+                        &m.payload,
+                        &m.group,
+                    )
+                    .await
+                    {
+                        warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
+                        let _ = tx.send(m);
+                    }
+                }
+            }
         }
         drop(tx);
 
-        let mut watermarks = Vec::new();
         for handle in handles {
             match handle.await {
                 Ok(marks) => watermarks.extend(marks),
@@ -407,9 +612,28 @@ impl ConsumerService {
             }
         }
 
+        let after_push = batch_started.elapsed();
+
         // 水位按会话汇总成最大值，整批只写一次
         if !watermarks.is_empty() {
             self.flush_watermarks(watermarks).await;
+        }
+
+        // 单批超过 200ms 必然把后续消息顶成可见的等待尖刺，
+        // 打印分段才能判断是「消费循环卡」还是「某一段慢」
+        let total = batch_started.elapsed();
+        if total > Duration::from_millis(200) {
+            warn!(
+                "批次耗时异常: 总={:?} 解析={:?} 成员={:?} 落库={:?} 推送={:?} 水位={:?} 消息={} 会话={}",
+                total,
+                after_parse,
+                after_members.saturating_sub(after_parse),
+                after_save.saturating_sub(after_members),
+                after_push.saturating_sub(after_save),
+                total.saturating_sub(after_push),
+                batch_len,
+                conv_count,
+            );
         }
 
         // 收集需要回退的分区及最小位点
@@ -542,42 +766,7 @@ impl ConsumerService {
         lap.reset();
 
         // 推送使用会话级序号：同一会话的所有成员看到同一个 seq
-        let members: Vec<GroupMemSeq> = member_ids
-            .into_iter()
-            .map(|mem_id| GroupMemSeq {
-                mem_id,
-                cur_seq: msg.seq,
-                max_seq: msg.seq,
-                need_update: false,
-            })
-            .collect();
-
-        let mut tasks = Vec::with_capacity(1);
-
-        let pusher = self.pusher.clone();
-        let to_pusher = tokio::spawn(async move {
-            debug!(
-                "开始推送消息: server_id={}, 类型={:?}",
-                msg.server_id, msg_type
-            );
-            match msg_type {
-                MsgType2::Friend => pusher.push_single_msg(msg).await,
-                MsgType2::Group => pusher.push_group_msg(msg, members).await,
-                MsgType2::System => {
-                    // TODO系统消息暂未实现
-                    warn!("系统消息暂未实现: {:?}", msg_type);
-                    Ok(())
-                }
-            }
-        });
-
-        tasks.push(to_pusher);
-
-        // 落库与推送必须都成功才算处理完成，否则位点不推进
-        for task in tasks {
-            task.await
-                .map_err(|e| Error::Internal(format!("消息处理任务执行失败: {}", e)))??;
-        }
+        self.push_msg(msg, &msg_type, member_ids).await?;
 
         lap.lap(Stage::Push);
         if lap.enabled() && create_time > 0 {
@@ -594,30 +783,119 @@ impl ConsumerService {
         Ok(watermark)
     }
 
-    /// 按会话汇总本批水位并回写一次
+    /// 推送到网关
+    ///
+    /// 群聊与单聊的差别只在携带的成员序号列表；系统消息暂未实现。
+    async fn push_msg(
+        &self,
+        msg: Msg,
+        msg_type: &MsgType2,
+        member_ids: Vec<String>,
+    ) -> Result<(), Error> {
+        debug!(
+            "开始推送消息: server_id={}, 类型={:?}",
+            msg.server_id, msg_type
+        );
+
+        // 推送使用会话级序号：同一会话的所有成员看到同一个 seq
+        let members: Vec<GroupMemSeq> = member_ids
+            .into_iter()
+            .map(|mem_id| GroupMemSeq {
+                mem_id,
+                cur_seq: msg.seq,
+                max_seq: msg.seq,
+                need_update: false,
+            })
+            .collect();
+
+        match msg_type {
+            MsgType2::Friend => self.pusher.push_single_msg(msg).await,
+            MsgType2::Group => self.pusher.push_group_msg(msg, members).await,
+            MsgType2::System => {
+                // TODO系统消息暂未实现
+                warn!("系统消息暂未实现: {:?}", msg_type);
+                Ok(())
+            }
+        }
+    }
+
+    /// 解析并判断这条负载能否走批量落库路径
+    fn parse_persistable(payload: &str) -> Option<Msg> {
+        let msg: Msg = serde_json::from_str(payload).ok()?;
+        let mt = MsgType::try_from(msg.msg_type).ok()?;
+        let (_t, _need_seq, need_history) = MsgType2::classify_msg_type(mt);
+        if Self::get_send_to_db_flag(&mt) && !msg.is_revoked && need_history {
+            Some(msg)
+        } else {
+            None
+        }
+    }
+
+    /// 按会话汇总本批水位，限频后批量回写
     ///
     /// 失败只记日志、不影响位点提交：消息本身已落库，水位由下一批
     /// （同一会话的下一条消息）继续推进；如果因此不提交位点，
     /// 这批消息会重新投递、全部被幂等闸门拦下，水位反而永远不会回写。
-    async fn flush_watermarks(&self, watermarks: Vec<Watermark>) {
-        let mut merged: std::collections::HashMap<String, (i64, i64)> =
-            std::collections::HashMap::with_capacity(watermarks.len());
-        for mark in watermarks {
-            let entry = merged
-                .entry(mark.conversation_id)
-                .or_insert((mark.seq, mark.send_time));
-            if mark.seq > entry.0 {
-                entry.0 = mark.seq;
-            }
-            if mark.send_time > entry.1 {
-                entry.1 = mark.send_time;
+    async fn flush_watermarks(self: &Arc<Self>, watermarks: Vec<Watermark>) {
+        // 合并进待回写表：同一会话只保留最大的 seq 与时间
+        {
+            let mut pending = self.pending_watermarks.lock().await;
+            for mark in watermarks {
+                let entry = pending
+                    .entry(mark.conversation_id)
+                    .or_insert((mark.seq, mark.send_time));
+                if mark.seq > entry.0 {
+                    entry.0 = mark.seq;
+                }
+                if mark.send_time > entry.1 {
+                    entry.1 = mark.send_time;
+                }
             }
         }
 
-        let batch: Vec<(String, i64, i64)> = merged
-            .into_iter()
-            .map(|(id, (seq, time))| (id, seq, time))
-            .collect();
+        // 回写放到后台：这是一次独立事务，提交时的 fsync 尾部（本机 Docker
+        // 虚拟盘上偶发 100ms）不该占用消费循环，否则后续消息全部排在这一批后面。
+        // 用 atomic 保证同一时刻最多一个回写在飞；未到间隔则由后台任务自己等。
+        if self
+            .watermark_flush_scheduled
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let now = now_millis();
+            let last = svc
+                .last_watermark_flush
+                .load(std::sync::atomic::Ordering::Relaxed) as i64;
+            let wait = WATERMARK_FLUSH_INTERVAL_MS as i64 - (now - last);
+            if wait > 0 {
+                tokio::time::sleep(Duration::from_millis(wait as u64)).await;
+            }
+            svc.flush_pending_watermarks().await;
+            svc.watermark_flush_scheduled
+                .store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// 把待回写的水位一次性落库
+    async fn flush_pending_watermarks(&self) {
+        let batch: Vec<(String, i64, i64)> = {
+            let mut pending = self.pending_watermarks.lock().await;
+            pending
+                .drain()
+                .map(|(id, (seq, time))| (id, seq, time))
+                .collect()
+        };
+        if batch.is_empty() {
+            return;
+        }
+
+        self.last_watermark_flush.store(
+            now_millis().max(0) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         if let Err(e) = self.writer.touch_watermarks(&batch).await {
             warn!(
@@ -860,6 +1138,40 @@ mod tests {
             _members: &[String],
             _inline_max_bytes: usize,
         ) -> Result<(bool, Option<i64>), Error> {
+            unimplemented!()
+        }
+
+        async fn find_existing(
+            &self,
+            _conversation_id: &str,
+            _server_ids: &[String],
+        ) -> Result<Vec<(String, i64)>, Error> {
+            unimplemented!()
+        }
+
+        async fn insert_batch_with_participants(
+            &self,
+            _conversation_id: &str,
+            _entries: &[MsgEntry],
+            _members: &[String],
+            _inline_max_bytes: usize,
+        ) -> Result<Vec<(String, i64)>, Error> {
+            unimplemented!()
+        }
+
+        async fn find_existing_multi(
+            &self,
+            _pairs: &[(String, String)],
+        ) -> Result<Vec<(String, String, i64)>, Error> {
+            unimplemented!()
+        }
+
+        async fn insert_batch_multi(
+            &self,
+            _entries: &[MsgEntry],
+            _members: &[(String, String)],
+            _inline_max_bytes: usize,
+        ) -> Result<Vec<(String, String, i64)>, Error> {
             unimplemented!()
         }
 
