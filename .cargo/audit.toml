@@ -12,14 +12,6 @@ ignore = [
     # 仅在启用 common 的 `telemetry` feature 时进入依赖图
     "RUSTSEC-2026-0258",
 
-    # rustls-webpki 0.101（RUSTSEC-2026-0104 / 0098 / 0099）
-    # 来源：aws-smithy-http-client -> rustls 0.21 -> rustls-webpki 0.101
-    # 仅在启用 common/oss 的 `s3` feature 时进入依赖图；
-    # 上游修复需等待 aws-smithy-http-client 迁移到 hyper 1.x / rustls 0.23
-    "RUSTSEC-2026-0104",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-
     # rsa 0.9 Marvin Attack（RUSTSEC-2023-0071，上游无修复版本）
     # 来源：可选依赖链（aws-sdk / 遥测）；本项目 JWT 使用 HS256，不涉及 RSA 解密路径
     "RUSTSEC-2023-0071",

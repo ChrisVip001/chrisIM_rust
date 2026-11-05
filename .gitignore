@@ -3,7 +3,6 @@
 .tokeignore
 *.log
 /docs/server_config.md
-Cargo.lock
 .ci
 .cursor
 .codebuddy/
