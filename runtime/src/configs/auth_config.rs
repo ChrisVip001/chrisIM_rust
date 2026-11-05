@@ -11,6 +11,13 @@ pub struct AuthConfig {
     /// 路径白名单（不需要认证的路径）
     #[serde(default)]
     pub path_whitelist: Vec<String>,
+    /// 受信反向代理地址
+    ///
+    /// 只有直连对端在这个列表里时才会采信 `X-Forwarded-For`。
+    /// 默认为空 = 完全忽略 XFF，避免客户端伪造 IP 绕过黑名单/限流。
+    /// 部署在 nginx/LB 之后时，把代理的出口地址填进来。
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
     /// 安全头配置
     pub security_headers: Option<SecurityHeadersConfig>,
     /// 请求验证配置

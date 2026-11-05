@@ -1,5 +1,6 @@
 // API网关核心模块
 pub mod auth;
+pub mod error;
 pub mod metrics;
 pub mod middleware;
 pub mod proxy;

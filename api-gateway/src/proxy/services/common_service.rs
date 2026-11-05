@@ -1,22 +1,20 @@
 use axum::{
     body::Body,
-    http::{Method, Response, StatusCode},
+    http::{Method, Response},
 };
-use crate::proxy::grpc_clients::{UserServiceGrpcClient, FriendServiceGrpcClient, GroupServiceGrpcClient};
+use crate::proxy::grpc_clients::{FriendServiceGrpcClient, GroupServiceGrpcClient};
 use contract::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
 use runtime::auth::Claims;
 use super::common::{
-    success_response, extract_string_param, get_optional_string, 
-    get_i64_param, timestamp_to_datetime_string, get_user_id_from_jwt,
-    format_timestamp,
+    success_response, get_optional_string, timestamp_to_datetime_string, get_user_id_from_jwt,
 };
+use crate::error::GatewayError;
 
 /// 通用服务处理器，整合用户、好友和群组服务
 #[derive(Clone)]
 pub struct CommonServiceHandler {
-    user_client: UserServiceGrpcClient,
     friend_client: FriendServiceGrpcClient,
     group_client: GroupServiceGrpcClient,
 }
@@ -24,11 +22,10 @@ pub struct CommonServiceHandler {
 impl CommonServiceHandler {
     /// 创建新的通用服务处理器
     pub fn new(
-        user_client: UserServiceGrpcClient,
         friend_client: FriendServiceGrpcClient,
         group_client: GroupServiceGrpcClient,
     ) -> Self {
-        Self { user_client, friend_client, group_client }
+        Self { friend_client, group_client }
     }
 
     /// 处理通用服务请求
@@ -38,7 +35,7 @@ impl CommonServiceHandler {
         path: &str,
         body: Value,
         jwt_user_info: Option<Claims>,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("处理通用服务请求: {} {}", method, path);
 
         // 从JWT中获取用户ID
@@ -57,7 +54,7 @@ impl CommonServiceHandler {
                     return Ok(success_response(json!({
                         "friends": [],
                         "groups": []
-                    }), StatusCode::OK));
+                    })));
                 }
                 
                 // 使用friend_client的get_friend_list_with_params接口搜索好友
@@ -92,7 +89,7 @@ impl CommonServiceHandler {
                 Ok(success_response(json!({
                     "friends": friends,
                     "groups": groups
-                }), StatusCode::OK))
+                })))
             },
             
           
@@ -101,7 +98,7 @@ impl CommonServiceHandler {
             // 其他未实现的方法
             _ => {
                 error!("通用服务不支持的方法: {} {}", method, method_name);
-                Err(anyhow::anyhow!("通用服务不支持的方法: {}", method_name))
+                Err(GatewayError::not_found(format!("通用服务不支持的接口: {method_name}")))
             }
         }
     }
@@ -109,29 +106,6 @@ impl CommonServiceHandler {
     // ===== 转换方法，将不同服务的数据转换为JSON格式 =====
     
     /// 将详细好友信息转换为JSON
-    fn convert_detailed_friend_to_json(&self, friend: &proto::friend::DetailedFriend) -> Value {
-        // 转换好友类型为文本
-        let friend_type_text = match friend.friend_type {
-            0 => "friend",     // 普通好友
-            1 => "official",   // 官方账号
-            2 => "system",     // 系统账号
-            _ => "friend",     // 默认普通好友
-        };
-        
-        json!({
-            "id": friend.id,
-            "username": friend.username,
-            "nickname": friend.nickname,
-            "avatarUrl": friend.avatar_url,
-            "friendshipCreatedAt": timestamp_to_datetime_string(&friend.friendship_created_at),
-            "remark": friend.remark,
-            "isOnline": friend.is_online,
-            "isStarred": friend.is_starred,
-            "isTop": friend.is_top,
-            "relationStatus": friend.relation_status,
-            "friendType": friend_type_text
-        })
-    }
     
     /// 将用户群组转换为JSON
     fn convert_user_group_to_json(&self, group: &proto::group::UserGroup) -> Value {

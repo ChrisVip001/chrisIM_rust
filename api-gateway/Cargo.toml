@@ -47,9 +47,6 @@ uuid = { workspace = true, features = ["v4"] }
 chrono = { version = "0.4.31", features = ["serde"] }
 once_cell = "1.19.0"
 
-# IP位置查询
-ip2region = "0.1.0"
-
 # 限流
 governor = "0.9.0"
 

@@ -71,7 +71,8 @@ gateway:
           enabled: true
 
       # 注册接口限流
-      - path_prefix: "/api/user/register"
+      # 真实路径是 /api/users/registerByPhone 与 /api/users/registerByUsername（复数，由关系服务处理）；
+      - path_prefix: "/api/users/register"
         rule:
           requests_per_second: 2
           burst_size: 5
@@ -123,6 +124,9 @@ gateway:
       # 注册头像上传相关的API路径
       - "/api/files/register-avatar"
       - "/api/files/validate-register-avatar"
+    # 受信反向代理地址：只有直连对端命中这里时才采信 X-Forwarded-For，
+    # 否则客户端可伪造 IP 绕过黑名单与限流。留空 = 完全忽略 XFF。
+    trusted_proxies: []
     # 安全头配置
     security_headers:
       enabled: true
@@ -155,6 +159,16 @@ gateway:
     enabled: true
     failure_threshold: 5
     half_open_timeout_secs: 30
+    # 半开态同时放行的探测请求数：超出的请求快速失败（503），不再打下游
+    half_open_max_probes: 3
+    # 半开态连续成功多少次才真正关闭熔断器
+    half_open_success_threshold: 2
+
+  # 跨域配置：来源写死过一串开发端口，release 构建不再放行本地端口。
+  # 生产按需填真实站点；留空 = 不放行任何跨域来源。
+  cors:
+    allowed_origins: []
+    allow_credentials: false
 
 component: all # all, api, ws, rpc, db, pusher
 
@@ -395,4 +409,9 @@ sms:
     region: ap-guangzhou                               # 地域，如ap-guangzhou
     throttle_enabled: true                             # 是否启用防重复发送限制
     throttle_seconds: 20                              # 限制时间内不允许重复发送（秒）
+
+# Prometheus 指标导出（msg-server / msg-gateway 使用；api-gateway 有自己的 :9090）
+metrics:
+  enabled: true       # 生产默认打开
+  port: 0             # 0 = 服务默认端口（msg-server 9101 / msg-gateway 9102）
 

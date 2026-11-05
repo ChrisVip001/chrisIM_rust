@@ -61,6 +61,7 @@ futures = "0.3"
 config = "0.15.11"
 clap = { version = "4", features = ["derive"] }
 metrics = "0.24.1"
+metrics-exporter-prometheus = "0.16.2"
 prometheus = "0.13"
 tokio-tungstenite = "0.26.2" # WebSocket for message gateway
 reqwest = { version = "0.12.15", features = ["json"] }

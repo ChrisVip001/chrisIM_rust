@@ -29,6 +29,7 @@ pub mod configs;
 pub mod grpc;
 pub mod grpc_client;
 pub mod logging;
+pub mod metrics_server;
 pub mod service;
 pub mod service_discovery;
 pub mod service_register_center;

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use metrics::{counter, describe_counter, describe_histogram, histogram};
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::producer::FutureProducer;
@@ -100,6 +101,31 @@ const RETRY_BACKOFF: Duration = Duration::from_millis(200);
 
 /// 死信主题后缀
 const DEAD_LETTER_SUFFIX: &str = ".dlq";
+
+/// 注册本服务指标的含义说明
+///
+/// 只在启动时调用一次；`/metrics` 的 `# HELP` 行即来自这里。
+/// 计数器同时以 0 值登记一次，没有流量时抓取也不是空响应；
+/// 直方图不做这件事 —— 记录 0 会污染分布。
+pub fn describe_metrics() {
+    describe_counter!("msg_consume_batch_total", "消费批次总数（result=ok 一次写成 / fallback 退化逐条）");
+    describe_histogram!("msg_consume_batch_size", "单批消息条数");
+    describe_histogram!("msg_consume_batch_duration_seconds", "单批处理耗时（解析+成员+落库+推送+水位）");
+    describe_counter!("msg_inserted_total", "真正新落库的消息条数");
+    describe_counter!("msg_duplicate_total", "幂等命中而跳过的重复消息条数");
+    describe_counter!("msg_precheck_rejected_total", "批量落库预校验剔除、转逐条处理的脏消息条数");
+    describe_counter!("msg_push_total", "推送结果（result=success/failure）");
+    describe_counter!("msg_dead_letter_total", "成功写入死信主题的消息条数");
+
+    counter!("msg_consume_batch_total", "result" => "ok").increment(0);
+    counter!("msg_consume_batch_total", "result" => "fallback").increment(0);
+    counter!("msg_inserted_total").increment(0);
+    counter!("msg_duplicate_total").increment(0);
+    counter!("msg_precheck_rejected_total").increment(0);
+    counter!("msg_push_total", "result" => "success").increment(0);
+    counter!("msg_push_total", "result" => "failure").increment(0);
+    counter!("msg_dead_letter_total").increment(0);
+}
 
 /// 消息消费者服务
 ///
@@ -365,6 +391,7 @@ impl ConsumerService {
     async fn process_batch(self: &Arc<Self>, batch: Vec<PendingMessage>) {
         let batch_started = Instant::now();
         let batch_len = batch.len();
+        histogram!("msg_consume_batch_size").record(batch_len as f64);
 
         // 批内每个分区的最大位点
         let mut max_offsets: std::collections::HashMap<(String, i32), i64> =
@@ -384,6 +411,9 @@ impl ConsumerService {
         let mut by_conv: Vec<(String, Vec<(PendingMessage, Msg, i64)>)> = Vec::new();
         let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut rest: Vec<PendingMessage> = Vec::new();
+        // 预校验剔除计数：只在批末汇总打一条日志，避免脏消息刷屏
+        let mut precheck_rejected = 0usize;
+        let mut precheck_reason_sample: Option<&'static str> = None;
 
         for m in batch {
             match Self::parse_persistable(&m.payload) {
@@ -403,6 +433,12 @@ impl ConsumerService {
                         );
                     }
                     let conv = conversation_id_of(&msg);
+                    if let Some(reason) = Self::precheck_reason(&msg, &conv) {
+                        precheck_rejected += 1;
+                        precheck_reason_sample.get_or_insert(reason);
+                        rest.push(m);
+                        continue;
+                    }
                     match index.get(&conv) {
                         Some(&i) => by_conv[i].1.push((m, msg, create_time)),
                         None => {
@@ -415,6 +451,15 @@ impl ConsumerService {
             }
         }
 
+        if precheck_rejected > 0 {
+            counter!("msg_precheck_rejected_total").increment(precheck_rejected as u64);
+            warn!(
+                "本批 {} 条消息未通过批量落库预校验（示例原因：{}），已转入逐条处理",
+                precheck_rejected,
+                precheck_reason_sample.unwrap_or("未知")
+            );
+        }
+
         let after_parse = batch_started.elapsed();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PendingMessage>();
@@ -424,6 +469,8 @@ impl ConsumerService {
         let mut meta: std::collections::HashMap<String, (MsgType2, Vec<String>)> =
             std::collections::HashMap::new();
         let mut batchable = !by_conv.is_empty();
+        // 记下本批原本是否有批量路径可走：后续 fallback 打点只针对本来能批量的批
+        let attempted_batch = batchable;
 
         if batchable {
             // 并发查：批处理头部串行做「会话数」次 I/O 时，任何一次慢都会
@@ -498,6 +545,23 @@ impl ConsumerService {
             }
         }
 
+        // 批量结果打点：ok=整批一次写成，fallback=落库失败/成员查询失败后退化逐条
+        if attempted_batch {
+            counter!(
+                "msg_consume_batch_total",
+                "result" => if batchable { "ok" } else { "fallback" }
+            )
+            .increment(1);
+        }
+        if batchable {
+            // 批量路径的落库结果顺带统计幂等命中率（逐条路径在 handle_msg 里各自计数）
+            let inserted = saved.iter().filter(|(_, _, inserted)| *inserted).count();
+            counter!("msg_inserted_total").increment(inserted as u64);
+            if saved.len() > inserted {
+                counter!("msg_duplicate_total").increment((saved.len() - inserted) as u64);
+            }
+        }
+
         // 批量不可用时整批退回逐条：一条坏消息不能连坐同批其他消息
         if !batchable {
             let mut all = rest;
@@ -545,7 +609,7 @@ impl ConsumerService {
                     if let Err(e) = pushed {
                         error!("批量路径推送失败: server_id={}, {:?}", msg.server_id, e);
                         // 与逐条路径一致：先转死信，死信也失败才退回重投
-                        if let Err(dlq_err) = kafka::send_to_topic(
+                        match kafka::send_to_topic(
                             &svc.dlq_producer,
                             &svc.dead_letter_topic,
                             &m.payload,
@@ -553,8 +617,11 @@ impl ConsumerService {
                         )
                         .await
                         {
-                            warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
-                            let _ = tx.send(m);
+                            Ok(()) => counter!("msg_dead_letter_total").increment(1),
+                            Err(dlq_err) => {
+                                warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
+                                let _ = tx.send(m);
+                            }
                         }
                         continue;
                     }
@@ -589,7 +656,7 @@ impl ConsumerService {
                 Err(e) => {
                     error!("消息处理失败且重试耗尽: {:?}", e);
                     // 优先转死信；死信也写不进去时，把该分区标记为需要回退
-                    if let Err(dlq_err) = kafka::send_to_topic(
+                    match kafka::send_to_topic(
                         &self.dlq_producer,
                         &self.dead_letter_topic,
                         &m.payload,
@@ -597,8 +664,11 @@ impl ConsumerService {
                     )
                     .await
                     {
-                        warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
-                        let _ = tx.send(m);
+                        Ok(()) => counter!("msg_dead_letter_total").increment(1),
+                        Err(dlq_err) => {
+                            warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
+                            let _ = tx.send(m);
+                        }
                     }
                 }
             }
@@ -622,6 +692,7 @@ impl ConsumerService {
         // 单批超过 200ms 必然把后续消息顶成可见的等待尖刺，
         // 打印分段才能判断是「消费循环卡」还是「某一段慢」
         let total = batch_started.elapsed();
+        histogram!("msg_consume_batch_duration_seconds").record(total.as_secs_f64());
         if total > Duration::from_millis(200) {
             warn!(
                 "批次耗时异常: 总={:?} 解析={:?} 成员={:?} 落库={:?} 推送={:?} 水位={:?} 消息={} 会话={}",
@@ -752,9 +823,11 @@ impl ConsumerService {
             );
             if !inserted {
                 // 位点回退/重复投递：不重复推送，位点正常推进
+                counter!("msg_duplicate_total").increment(1);
                 info!("消息已处理过，跳过重复投递: server_id={}", msg.server_id);
                 return Ok(None);
             }
+            counter!("msg_inserted_total").increment(1);
             watermark = Some(Watermark {
                 conversation_id,
                 seq,
@@ -808,7 +881,7 @@ impl ConsumerService {
             })
             .collect();
 
-        match msg_type {
+        let result = match msg_type {
             MsgType2::Friend => self.pusher.push_single_msg(msg).await,
             MsgType2::Group => self.pusher.push_group_msg(msg, members).await,
             MsgType2::System => {
@@ -816,7 +889,15 @@ impl ConsumerService {
                 warn!("系统消息暂未实现: {:?}", msg_type);
                 Ok(())
             }
-        }
+        };
+
+        // 两条路径（批量/逐条）共用这里，推送成败只在出口打一次点
+        counter!(
+            "msg_push_total",
+            "result" => if result.is_ok() { "success" } else { "failure" }
+        )
+        .increment(1);
+        result
     }
 
     /// 解析并判断这条负载能否走批量落库路径
@@ -829,6 +910,24 @@ impl ConsumerService {
         } else {
             None
         }
+    }
+
+    /// 批量落库前的预校验：返回 `Some(原因)` 表示这条消息不能进批量路径。
+    ///
+    /// 批量是一条 SQL 写整批，任何一行触发约束错误都会让整批回滚。把注定失败的消息
+    /// 在这里剔出去走逐条（逐条有独立重试与死信），避免一条脏数据拖垮同批其他会话。
+    fn precheck_reason(msg: &Msg, conversation_id: &str) -> Option<&'static str> {
+        if msg.server_id.trim().is_empty() {
+            return Some("server_id 为空，幂等键失效");
+        }
+        if conversation_id.trim().is_empty() {
+            return Some("conversation_id 为空，无法定位会话");
+        }
+        // content_size 列是 INT，超长会在绑定参数阶段直接报错并回滚整批
+        if msg.content.len() > i32::MAX as usize {
+            return Some("content 超过 INT 上限");
+        }
+        None
     }
 
     /// 按会话汇总本批水位，限频后批量回写
@@ -1096,6 +1195,26 @@ mod tests {
     use contract::proto::message::{Msg, MsgType};
     use msg_storage::read_spread::MsgEntry;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn precheck_rejects_unbatchable_messages() {
+        let mut msg = Msg {
+            send_id: "u1".into(),
+            receiver_id: "u2".into(),
+            msg_type: MsgType::SingleMsg as i32,
+            server_id: String::new(),
+            ..Default::default()
+        };
+        // server_id 为空：幂等键失效，空串之间还会互相冲突
+        assert!(ConsumerService::precheck_reason(&msg, "c1").is_some());
+
+        // conversation_id 为空：无法定位分区与主键
+        msg.server_id = "m1".into();
+        assert!(ConsumerService::precheck_reason(&msg, "  ").is_some());
+
+        // 正常消息必须放行
+        assert!(ConsumerService::precheck_reason(&msg, "c1").is_none());
+    }
 
     #[test]
     fn payload_group_uses_the_shared_conversation_key() {

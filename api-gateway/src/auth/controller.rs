@@ -1,8 +1,8 @@
 use cache::{PresenceCache, SessionCache};
-use crate::proxy::services::common::{error_response, success_response};
-use axum::body::Body;
+use crate::error::GatewayError;
+use crate::proxy::services::common::success_response;
 use axum::extract::{Extension, State};
-use axum::http::{HeaderMap, Response, StatusCode};
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
 use runtime::auth::{jwt, Claims};
@@ -12,18 +12,26 @@ use contract::proto::message::PlatformType;
 use contract::proto::user::user_service_client::UserServiceClient;
 use contract::proto::user::VerifyPasswordRequest;
 use runtime::service_discovery::LbWithServiceDiscovery;
-use runtime::utils::verify_image_code;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
+
+/// 批量在线状态查询一次最多带多少个用户 ID
+const MAX_BATCH_ONLINE_QUERY: usize = 200;
 
 /// 错误wrapper，实现IntoResponse trait
+///
+/// 内部用 anyhow 装箱，但优先按 [`GatewayError`] 还原状态码与对外文案：
+/// 只有真正没有语义的错误才折叠成 500，避免「参数错了」也回 500。
 pub struct AppError(anyhow::Error);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        error_response(&self.0.to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+        match self.0.downcast::<GatewayError>() {
+            Ok(gateway) => gateway.into_response(),
+            Err(err) => GatewayError::internal(format!("{err:#}")).into_response(),
+        }
     }
 }
 
@@ -45,10 +53,6 @@ pub struct LoginRequest {
     pub password: String,
     /// 租户ID
     pub tenant_id: String,
-    /// 图片验证码
-    pub image_code: String,
-    /// 图片验证码Key
-    pub image_code_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,25 +85,18 @@ pub struct RefreshTokenRequest {
     pub refresh_token: String,
 }
 
-/// 用户信息响应
-#[derive(Debug, Serialize)]
-pub struct UserInfoResponse {
-    /// 用户ID
-    pub user_id: String,
-    /// 用户名
-    pub username: String,
-    /// 租户ID
-    pub tenant_id: String,
-    /// 租户名称
-    pub tenant_name: String,
-    /// 用户邮箱
-    pub email: Option<String>,
-    /// 用户昵称
-    pub nickname: Option<String>,
-    /// 头像URL
-    pub avatar_url: Option<String>,
-    /// 密信id
-    pub custom_id: Option<String>,
+/// 登录链路的下游失败映射
+///
+/// 登录不能把「用户不存在 / 密码错误」直接透成 404 或 400 —— 那是账号枚举。
+/// 但对「下游不可用」又必须如实给 503，否则运维会把自身故障当成用户密码输错。
+fn login_failure(err: tonic::Status) -> GatewayError {
+    match err.code() {
+        tonic::Code::Unavailable | tonic::Code::DeadlineExceeded => GatewayError::unavailable(err),
+        code => {
+            debug!("登录校验下游返回 {:?}: {}", code, err.message());
+            GatewayError::unauthorized("用户名或密码不正确")
+        }
+    }
 }
 
 /// 从请求头中提取平台信息
@@ -149,41 +146,38 @@ impl SharedUserService {
     pub async fn verify_password(
         &self,
         request: VerifyPasswordRequest,
-    ) -> Result<contract::proto::user::VerifyPasswordResponse, anyhow::Error> {
+    ) -> Result<contract::proto::user::VerifyPasswordResponse, tonic::Status> {
         // 克隆基础客户端
         let mut client = self.0.clone();
         client
             .verify_password(request)
             .await
             .map(|response| response.into_inner())
-            .map_err(Into::into)
     }
 
     /// 验证手机验证码登录
     pub async fn verify_phone_code_login(
         &self,
         request: contract::proto::user::VerifyPhoneCodeRequest,
-    ) -> Result<contract::proto::user::VerifyPasswordResponse, anyhow::Error> {
+    ) -> Result<contract::proto::user::VerifyPasswordResponse, tonic::Status> {
         // 克隆基础客户端
         let mut client = self.0.clone();
         client
             .verify_phone_code_login(request)
             .await
             .map(|response| response.into_inner())
-            .map_err(Into::into)
     }
 
     pub async fn update_last_login_time(
         &self,
         request: contract::proto::user::UpdateLastLoginTimeRequest,
-    ) -> Result<contract::proto::user::UpdateLastLoginTimeResponse, anyhow::Error> {
+    ) -> Result<contract::proto::user::UpdateLastLoginTimeResponse, tonic::Status> {
         // 克隆基础客户端
         let mut client = self.0.clone();
         client
             .update_last_login_time(request)
             .await
             .map(|response| response.into_inner())
-            .map_err(Into::into)
     }
 }
 
@@ -210,23 +204,18 @@ pub async fn login_by_phone(
     };
 
     // 调用用户服务验证手机验证码
-    let response = user_service.verify_phone_code_login(verify_request).await?;
+    let response = user_service
+        .verify_phone_code_login(verify_request)
+        .await
+        .map_err(login_failure)?;
 
-    // 检查验证是否有效
-    if !response.valid || response.user.is_none() {
-        return Ok(error_response(
-            "手机号或验证码不正确",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
-    }
-
-    // 获取用户信息
-    let user = response.user.unwrap();
+    // 检查验证是否有效：凭据错误是 401，不是服务故障
+    let user = response
+        .user
+        .filter(|_| response.valid)
+        .ok_or_else(|| GatewayError::unauthorized("手机号或验证码不正确"))?;
     if login_req.tenant_id != user.tenant_id {
-        return Ok(error_response(
-            "企业号错误",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
+        return Err(GatewayError::forbidden("企业号不匹配").into());
     }
     info!(
         "用户 {} 手机号登录成功，平台: {}",
@@ -257,7 +246,7 @@ pub async fn login_by_phone(
     user_service.update_last_login_time(login_time_req).await?;
     
     // 返回响应
-    Ok(success_response(login_response, StatusCode::OK))
+    Ok(success_response(login_response))
 }
 
 /// 处理登录请求
@@ -281,33 +270,24 @@ pub async fn login(
         password: login_req.password,
     };
 
-    // 图片验证码校验
-    // if !verify_image_code(&login_req.image_code_key, &login_req.image_code) {
-    //     return Ok(error_response(
-    //         "图片验证码错误",
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //     ));
-    // }
+    // 说明：图片验证码当前**未实现**。启用需要先由 relation-service 的 genCaptchaImage
+    // 把验证码写入 Redis，再在这里用非阻塞客户端校验并消费掉。
 
     // 调用用户服务验证密码
-    let response = user_service.verify_password(verify_request).await?;
+    let response = user_service
+        .verify_password(verify_request)
+        .await
+        .map_err(login_failure)?;
 
-    // 检查密码是否有效
-    if !response.valid || response.user.is_none() {
-        return Ok(error_response(
-            "用户名或密码不正确",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
-    }
-
-    // 获取用户信息
-    let user = response.user.unwrap();
+    // 检查密码是否有效：凭据错误是 401，且文案不能区分「用户不存在」与「密码错误」
+    // （能区分就是账号枚举漏洞）
+    let user = response
+        .user
+        .filter(|_| response.valid)
+        .ok_or_else(|| GatewayError::unauthorized("用户名或密码不正确"))?;
 
     if login_req.tenant_id != user.tenant_id {
-        return Ok(error_response(
-            "企业号错误",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ));
+        return Err(GatewayError::forbidden("企业号不匹配").into());
     }
     info!(
         "用户 {} 登录成功，平台: {}",
@@ -339,7 +319,7 @@ pub async fn login(
     
     
     // 返回响应
-    Ok(success_response(login_response, StatusCode::OK))
+    Ok(success_response(login_response))
 }
 
 /// 处理令牌刷新请求
@@ -358,35 +338,23 @@ pub async fn refresh_token(
 
     let jwt_config = &config.gateway.auth.jwt;
 
-    // 验证刷新令牌
-    let user_info = match jwt::verify_token(&refresh_req.refresh_token, jwt_config) {
-        Ok(user_info) => user_info,
-        Err(e) => {
-            return Ok(success_response(&format!("令牌验证失败: {:?}", e), StatusCode::UNAUTHORIZED))
-        }
-    };
+    // 验证刷新令牌（失败细节只进日志，不回给客户端）
+    let user_info = jwt::verify_token(&refresh_req.refresh_token, jwt_config).map_err(|e| {
+        debug!("刷新令牌校验失败: {:?}", e);
+        GatewayError::unauthorized("刷新令牌无效或已过期，请重新登录")
+    })?;
 
     // 验证Redis中的刷新令牌是否存在且匹配
     match cache_instance
         .get_refresh_token_for_platform(&user_info.sub, platform as i32)
         .await
     {
-        Ok(Some(stored_token)) => {
-            if stored_token != refresh_req.refresh_token {
-                return Ok(success_response(
-                    "令牌已过期或已注销，请重新登录",
-                    StatusCode::UNAUTHORIZED,
-                ));
-            }
+        Ok(Some(stored_token)) if stored_token == refresh_req.refresh_token => {}
+        Ok(_) => {
+            return Err(GatewayError::unauthorized("令牌已过期或已注销，请重新登录").into());
         }
-        Ok(None) => {
-            return Ok(success_response(
-                "令牌已过期或已注销，请重新登录",
-                StatusCode::UNAUTHORIZED,
-            ));
-        }
-        Err(_) => {
-            return Ok(error_response("令牌验证服务错误", StatusCode::INTERNAL_SERVER_ERROR));
+        Err(e) => {
+            return Err(GatewayError::internal(format!("读取刷新令牌失败: {e}")).into());
         }
     }
     // 构建额外信息
@@ -407,7 +375,7 @@ pub async fn refresh_token(
     .await?;
 
     // 返回响应
-    Ok(success_response(refresh_response, StatusCode::OK))
+    Ok(success_response(refresh_response))
 }
 
 /// 从用户信息中提取额外数据
@@ -541,8 +509,7 @@ pub async fn logout(
 
     // 返回成功响应
     Ok(success_response(
-        serde_json::json!({}),
-        StatusCode::OK,
+        serde_json::json!({})
     ))
 }
 
@@ -571,15 +538,19 @@ pub async fn batch_get_friends_online_status(
     Extension(cache_instance): Extension<Arc<dyn PresenceCache>>,
     Extension(user_info): Extension<Claims>,
     Json(request): Json<BatchGetFriendsOnlineRequest>,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<impl IntoResponse, AppError> {
     let requester_user_id = user_info.sub;
 
     // 验证请求参数
     if request.user_ids.is_empty() {
-        return Ok(error_response(
-            "用户ID列表不能为空",
-            StatusCode::BAD_REQUEST,
-        ));
+        return Err(GatewayError::bad_request("用户ID列表不能为空").into());
+    }
+    // 批量查 Redis 是 O(n) 往返，没有上限就是一个放大器
+    if request.user_ids.len() > MAX_BATCH_ONLINE_QUERY {
+        return Err(GatewayError::bad_request(format!(
+            "一次最多查询 {MAX_BATCH_ONLINE_QUERY} 个用户"
+        ))
+        .into());
     }
 
     // 去重用户ID
@@ -594,11 +565,7 @@ pub async fn batch_get_friends_online_status(
     {
         Ok(status_list) => status_list,
         Err(e) => {
-            error!("批量获取用户在线状态失败: {}", e);
-            return Ok(error_response(
-                "获取好友在线状态失败",
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ));
+            return Err(GatewayError::internal(format!("批量获取在线状态失败: {e}")).into());
         }
     };
 
@@ -621,5 +588,5 @@ pub async fn batch_get_friends_online_status(
         online_count,
     };
 
-    Ok(success_response(response, StatusCode::OK))
+    Ok(success_response(response))
 }

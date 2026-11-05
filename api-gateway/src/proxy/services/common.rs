@@ -7,34 +7,28 @@ use axum::{
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use prost_types::Timestamp;
 use serde_json::{json, Value};
-use regex::Regex;
-use once_cell::sync::Lazy;
 use runtime::auth::Claims;
 
-// 预编译正则表达式，匹配gRPC错误消息格式
-static GRPC_ERROR_REGEX: Lazy<Regex> = Lazy::new(|| {
-    // 匹配两种可能的格式：带转义的引号和不带转义的引号
-    Regex::new(r#"message: (?:\\"|")(.+?)(?:\\"|")"#).unwrap()
-});
+use crate::error::GatewayError;
 
-/// 通用响应生成辅助函数 - 成功响应
-pub fn success_response<T: serde::Serialize>(data: T, status_code: StatusCode) -> axum::response::Response<Body> {
+/// 成功响应（HTTP 与 `code` 恒为 200）
+pub fn success_response<T: serde::Serialize>(data: T) -> axum::response::Response<Body> {
     (
         StatusCode::OK,
         Json(json!({
-            "code": status_code.as_u16(),
+            "code": StatusCode::OK.as_u16(),
             "data": data,
             "success": true
         })),
     ).into_response()
 }
 
-/// 通用响应生成辅助函数 - 成功带消息
-pub fn success_with_message<T: serde::Serialize>(data: T, message: &str, status_code: StatusCode) -> axum::response::Response<Body> {
+/// 成功响应（带 message 字段）
+pub fn success_with_message<T: serde::Serialize>(data: T, message: &str) -> axum::response::Response<Body> {
     (
         StatusCode::OK,
         Json(json!({
-            "code": status_code.as_u16(),
+            "code": StatusCode::OK.as_u16(),
             "data": data,
             "message": message,
             "success": true
@@ -42,37 +36,20 @@ pub fn success_with_message<T: serde::Serialize>(data: T, message: &str, status_
     ).into_response()
 }
 
-/// 通用响应生成辅助函数 - 错误响应
+/// 错误响应（迁移期桥接函数）
+///
+/// 形状统一走 [`GatewayError`]，避免出现第二套信封。新代码请直接返回
+/// `Err(GatewayError::xxx(..))`，由 `IntoResponse` 输出。
 pub fn error_response(message: &str, status_code: StatusCode) -> axum::response::Response<Body> {
-    // 检查是否为gRPC错误消息格式
-    let processed_message = if (message.contains("message: \"") || message.contains("message: \\\"")) && 
-                              (message.contains("\", details:") || message.contains("\\\", details:")) {
-        // 从gRPC错误消息中提取主要错误信息
-        if let Some(captures) = GRPC_ERROR_REGEX.captures(message) {
-            if let Some(matched) = captures.get(1) {
-                matched.as_str()
-            } else {
-                message
-            }
-        } else {
-            message
-        }
-    } else {
-        message
-    };
-    
-    (
-        status_code,
-        Json(json!({
-            "code": status_code.as_u16(),
-            "message": processed_message,
-            "success": false
-        })),
-    ).into_response()
+    GatewayError::with_status(status_code, message).into_response()
 }
 
 /// 参数提取辅助函数 - 从JSON中提取字符串参数 （必填）
-pub fn extract_string_param(body: &Value, param_name: &str, alt_name: Option<&str>) -> Result<String, anyhow::Error> {
+pub fn extract_string_param(
+    body: &Value,
+    param_name: &str,
+    alt_name: Option<&str>,
+) -> Result<String, GatewayError> {
     body.get(param_name)
         .or_else(|| alt_name.and_then(|alt| body.get(alt)))
         .map(|v| match v {
@@ -82,7 +59,7 @@ pub fn extract_string_param(body: &Value, param_name: &str, alt_name: Option<&st
             _ => String::new()
         })
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("参数 {} 缺失或格式错误", param_name))
+        .ok_or_else(|| GatewayError::bad_request(format!("参数 {} 缺失或格式错误", param_name)))
 }
 
 /// 参数提取辅助函数 - 从JSON中提取可选字符串参数 （非必填）
@@ -120,14 +97,18 @@ pub fn get_i64_param(body: &Value, param_name: &str, default: i64) -> i64 {
 }
 
 /// 参数提取辅助函数 - 从JSON中提取i64整数参数 （必填）
-pub fn extract_i64_param(body: &Value, param_name: &str, alt_name: Option<&str>) -> Result<i64, anyhow::Error> {
+pub fn extract_i64_param(
+    body: &Value,
+    param_name: &str,
+    alt_name: Option<&str>,
+) -> Result<i64, GatewayError> {
     body.get(param_name)
         .or_else(|| alt_name.and_then(|alt| body.get(alt)))
         .and_then(|v| {
             if v.is_i64() || v.is_u64() {
                 v.as_i64()
-            } else if v.is_f64() {
-                let f = v.as_f64().unwrap();
+            } else if let Some(f) = v.as_f64() {
+                // JSON 里 1.0 与 1 等价；非整数（1.5）视为格式错误
                 if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 {
                     Some(f as i64)
                 } else {
@@ -139,21 +120,21 @@ pub fn extract_i64_param(body: &Value, param_name: &str, alt_name: Option<&str>)
                 None
             }
         })
-        .ok_or_else(|| anyhow::anyhow!("参数 {} 缺失或格式错误", param_name))
+        .ok_or_else(|| GatewayError::bad_request(format!("参数 {} 缺失或格式错误", param_name)))
 }
 
 /// 从JWT用户信息中获取用户ID（字符串类型）
-pub fn get_user_id_from_jwt(jwt_user_info: Option<&Claims>) -> Result<String, anyhow::Error> {
+pub fn get_user_id_from_jwt(jwt_user_info: Option<&Claims>) -> Result<String, GatewayError> {
     Ok(jwt_user_info
-        .ok_or_else(|| anyhow::anyhow!("用户未登录"))?
+        .ok_or_else(|| GatewayError::unauthorized("用户未登录"))?
         .sub
         .to_string())
 }
 
 /// 从JWT用户信息中获取用户登录平台
-pub fn get_platform_from_jwt(jwt_user_info: Option<&Claims>) -> Result<i32, anyhow::Error> {
+pub fn get_platform_from_jwt(jwt_user_info: Option<&Claims>) -> Result<i32, GatewayError> {
     Ok(jwt_user_info
-        .ok_or_else(|| anyhow::anyhow!("用户未登录"))?
+        .ok_or_else(|| GatewayError::unauthorized("用户未登录"))?
         .platform)
 }
 
@@ -231,7 +212,11 @@ pub fn get_option_bool_param(body: &Value, param_name: &str, alt_name: Option<&s
 }
 
 /// 参数提取辅助函数 - 从JSON中提取字符串数组参数 （必填）
-pub fn extract_string_array_param(body: &Value, param_name: &str, alt_name: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+pub fn extract_string_array_param(
+    body: &Value,
+    param_name: &str,
+    alt_name: Option<&str>,
+) -> Result<Vec<String>, GatewayError> {
     body.get(param_name)
         .or_else(|| alt_name.and_then(|alt| body.get(alt)))
         .and_then(|v| v.as_array())
@@ -246,7 +231,9 @@ pub fn extract_string_array_param(body: &Value, param_name: &str, alt_name: Opti
                 .collect::<Vec<String>>()
         })
         .filter(|arr| !arr.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("参数 {} 缺失、格式错误或为空数组", param_name))
+        .ok_or_else(|| {
+            GatewayError::bad_request(format!("参数 {} 缺失、格式错误或为空数组", param_name))
+        })
 }
 
 /// 参数提取辅助函数 - 从JSON中提取可选字符串数组参数 （非必填）

@@ -316,3 +316,38 @@ health 200+version / 业务信封 {code,message,success} / 缺字段 422 可定�
 
 契约 9/9；全 workspace 71 passed / 0 failed / 3 ignored（新增跨会话批量写入用例
 `batch_write_spans_conversations` 与单会话批量用例，均需本地 PG/Redis）。
+
+## 低风险优化项落地（2026-11-05）
+
+按 `docs/TECHNICAL.md` 9.2 只做了成本/风险为「极低」「低」的四项：注册限流前缀、
+批量冲突兜底 + 预校验、熔断半开态探测限流、msg-server / msg-gateway 指标导出。
+
+### 门禁（本轮）
+
+- `cargo test --workspace`：**85 passed / 0 failed / 4 ignored**
+  （ignored 全是 `msg-storage/tests/read_spread_e2e.rs` 里需要本地 PG 的用例）。
+- `tests/contract/api_contract.sh`：**9/9**。
+
+### 指标导出实测
+
+用 `metrics.enabled: true` 的临时配置各起一份实例（错开端口，避免干扰在跑的服务）：
+
+```bash
+curl -s 127.0.0.1:19102/metrics | grep ^ws_
+# ws_connections 0 / ws_upstream_total 0 / ws_downstream_total 0
+# ws_outbound_dropped_total 0 / ws_dead_conn_total 0
+curl -s 127.0.0.1:19101/metrics | grep ^msg_
+# msg_consume_batch_total{result="ok"|"fallback"} / msg_inserted_total / msg_duplicate_total
+# msg_precheck_rejected_total / msg_push_total{result="success"|"failure"} / msg_dead_letter_total
+```
+
+注意这是「零值也在」的验证：计数器与 gauge 在启动时以 0 登记一次，
+没有流量时抓取也不返回空响应，否则 Prometheus 告警表达式会因为序列不存在而静默失效。
+
+### 未复测的部分
+
+3000 msg/s / 64 会话的 P99 本轮**没有重跑**：e2e 压测需要 api-gateway、msg-gateway、
+msg-server、relation-service 全部按同一份代码重启，本轮只做了单元/契约门禁与指标端点验证。
+代码层面这四项都不在消费热路径上（批次级计数器、批量前 O(1) 判断、熔断器内存计数器），
+`config.yaml` 的 `metrics.enabled` 仍是 `false`，埋点退化为 noop recorder。
+下一轮做性能复测时按上一节的口径（每轮前确认 `msg_meta` 行数、数据量）重跑即可。

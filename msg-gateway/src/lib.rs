@@ -57,3 +57,6 @@ mod manager;
 mod push_payload;
 pub mod rpc;
 pub mod ws_server;
+
+/// 指标帮助文本注册（`manager` 模块本身不对外，只暴露这一个入口）
+pub use manager::describe_metrics;

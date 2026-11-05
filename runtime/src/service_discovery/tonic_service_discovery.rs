@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use tonic::client::GrpcService;
 use tonic::transport::{Channel, Endpoint};
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use contract::Error;
 
@@ -397,6 +397,13 @@ impl<Fetcher: ServiceFetcher> DynamicServiceDiscovery<Fetcher> {
             tokio::time::sleep(wait).await;
             // 从服务注册中心获取服务
             if let Err(e) = self.discovery().await {
+                // 接收端已销毁（持有 channel 的客户端被替换/丢弃）：
+                // 这个轮询任务已经没有意义，必须退出 —— 否则网关每次重建客户端
+                // 都会泄漏一个永久查询 Consul 的任务。
+                if self.sender.is_closed() {
+                    debug!("服务发现接收端已关闭，停止轮询: {:?}", e);
+                    return;
+                }
                 error!("服务发现错误:{:?}", e);
             }
         }

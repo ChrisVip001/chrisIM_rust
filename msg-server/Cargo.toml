@@ -25,6 +25,8 @@ tonic-health = {  workspace = true }
 tower = { workspace = true, features = ["discover"]}
 tracing = { workspace = true }
 anyhow = "1.0.98"
+# 指标埋点：recorder 由 runtime::metrics_server 安装，这里只需要打点宏
+metrics = { workspace = true }
 
 [features]
 static = ["rdkafka/cmake-build"]

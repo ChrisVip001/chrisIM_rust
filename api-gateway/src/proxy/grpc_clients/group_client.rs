@@ -1,4 +1,5 @@
-use anyhow::Result;
+// 统一错误类型：保留 tonic::Status，由上层按 gRPC 码映射 HTTP 状态
+type Result<T> = std::result::Result<T, tonic::Status>;
 use tonic::Request;
 use prost_types;
 

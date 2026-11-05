@@ -5,7 +5,7 @@
 # 用法：./tests/contract/api_contract.sh [gateway_addr]
 #   gateway_addr 默认 http://127.0.0.1:8000
 #
-# 契约内容（重构不得改变）：
+# 契约内容：
 #   1. /health 返回 200 且含 version 字段
 #   2. 业务响应统一信封：{code, message, success} 三键
 #   3. 请求体缺字段 → 422，错误信息可定位到字段

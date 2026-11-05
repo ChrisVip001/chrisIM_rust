@@ -8,6 +8,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use futures::stream::{self, StreamExt};
+use metrics::{counter, describe_counter, describe_gauge, gauge};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -35,6 +36,25 @@ const GROUP_PUSH_CONCURRENCY: usize = 32;
 /// 有界队列提供背压：worker 处理不过来时，消息发送方（连接读循环）
 /// 在入队处等待，而不是无限堆积内存。
 const UPSTREAM_QUEUE_CAP: usize = 256;
+
+/// 注册本服务指标的含义说明
+///
+/// 只在启动时调用一次；`/metrics` 的 `# HELP` 行即来自这里。
+/// 同时把它们以 0 值登记一次：没有流量时 `/metrics` 也不是空响应，
+/// 否则告警表达式（`rate()` / 直接比较）会因为序列不存在而静默失效。
+pub fn describe_metrics() {
+    describe_gauge!("ws_connections", "当前登记的 WebSocket 连接数（按用户+平台计）");
+    describe_counter!("ws_upstream_total", "客户端上行消息成功进入处理队列的条数");
+    describe_counter!("ws_downstream_total", "下行帧成功入队（交给连接写任务）的条数");
+    describe_counter!("ws_outbound_dropped_total", "下行帧入队失败而丢弃的条数（连接已销毁）");
+    describe_counter!("ws_dead_conn_total", "心跳连续未收到 Pong 而判定死链断开的连接数");
+
+    gauge!("ws_connections").increment(0.0);
+    counter!("ws_upstream_total").increment(0);
+    counter!("ws_downstream_total").increment(0);
+    counter!("ws_outbound_dropped_total").increment(0);
+    counter!("ws_dead_conn_total").increment(0);
+}
 
 /// 用户ID类型别名
 type UserID = String;
@@ -257,6 +277,12 @@ impl Manager {
         let platform = client.platform;
         let (conn_id, evicted) = self.hub.register(&id, platform, client);
 
+        // 在线连接数：被顶下线的旧连接不会走到 unregister（conn_id 不匹配），
+        // 所以只有「没有顶掉旧连接」时才是净增一条
+        if evicted.is_none() {
+            gauge!("ws_connections").increment(1.0);
+        }
+
         if let Err(e) = self
             .cache
             .register_user_gateway_route(&id, platform as i32, &self.gateway_addr)
@@ -290,6 +316,7 @@ impl Manager {
     /// 只有连接ID匹配时才会移除；用户的所有平台都断开后自动清理用户条目。
     pub async fn unregister(&mut self, id: String, platform: PlatformType, conn_id: u64) {
         if self.hub.unregister(&id, platform, conn_id) {
+            gauge!("ws_connections").decrement(1.0);
             debug!("注销客户端连接: user={}, platform={:?}, conn={}", id, platform, conn_id);
 
             // 只在确实移除了登记项时清理路由；被顶下线的旧连接
@@ -420,8 +447,11 @@ impl Manager {
             let (platform, conn) = (entry.key(), entry.value());
             // Utf8Bytes 克隆是引用计数操作，不复制报文内容
             if let Err(e) = conn.client.send_frame(frame.clone()).await {
+                // 入队失败只发生在连接已销毁（写任务退出且队列关闭）时，等同于该帧被丢弃
+                counter!("ws_outbound_dropped_total").increment(1);
                 error!("向平台 {:?} 发送消息失败: {}", platform, e);
             } else {
+                counter!("ws_downstream_total").increment(1);
                 sent += 1;
             }
         }
@@ -559,10 +589,14 @@ impl Manager {
             return Err(Error::BroadCastError("上行worker未运行".to_string()));
         }
         let idx = Self::worker_index(&key, worker_count);
-        self.upstream[idx]
+        let result = self.upstream[idx]
             .send(msg)
             .await
-            .map_err(|e| Error::BroadCastError(e.to_string()))
+            .map_err(|e| Error::BroadCastError(e.to_string()));
+        if result.is_ok() {
+            counter!("ws_upstream_total").increment(1);
+        }
+        result
     }
 
 }

@@ -1,16 +1,15 @@
 use axum::{
     body::Body,
-    http::{Method, Response, StatusCode},
+    http::{Method, Response},
 };
 use crate::proxy::grpc_clients::UserServiceGrpcClient;
-use contract::{proto, Error};
+use contract::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug, info};
 use runtime::auth::Claims;
-use contract::proto::user::{CaptchaImageRequest, VerifyPasswordRequest};
-use runtime::utils::verify_image_code;
 use crate::proxy::services::common::get_user_id_from_jwt;
-use super::common::{success_response, success_with_message, error_response, extract_string_param, get_optional_string, format_timestamp};
+use super::common::{success_response, success_with_message, extract_string_param, get_optional_string, format_timestamp};
+use crate::error::GatewayError;
 
 /// 用户服务处理器
 #[derive(Clone)]
@@ -31,7 +30,7 @@ impl UserServiceHandler {
         path: &str,
         body: Value,
         jwt_user_info: Option<Claims>,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("处理用户服务请求: {} {}", method, path);
         
         // 从路径提取方法名 - 格式: /api/users/[method]
@@ -44,9 +43,9 @@ impl UserServiceHandler {
                 let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
 
                 let response = self.client.get_user(current_user_id,&user_id).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let user = response.user.ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
 
-                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+                Ok(success_response(self.convert_user_to_json(&user)))
             }
 
             // 增强的用户查询（包含好友状态、拉黑状态、在线状态）
@@ -56,7 +55,7 @@ impl UserServiceHandler {
                 let user_id = extract_string_param(&body, "userId", Some("user_id"))?;
 
                 let response = self.client.get_enhanced_user(current_user_id, &user_id).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let user = response.user.ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
                 
                 // 构建基本结果
                 let mut result = json!({
@@ -93,7 +92,7 @@ impl UserServiceHandler {
                     }
                 }
 
-                Ok(success_response(result, StatusCode::OK))
+                Ok(success_response(result))
             }
 
             // 用户名查询
@@ -101,9 +100,9 @@ impl UserServiceHandler {
                 let username = extract_string_param(&body, "username", None)?;
 
                 let response = self.client.get_user_by_username(&username).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let user = response.user.ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
 
-                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+                Ok(success_response(self.convert_user_to_json(&user)))
             }
 
             // 创建用户
@@ -123,12 +122,11 @@ impl UserServiceHandler {
                 };
 
                 let response = self.client.create_user(request).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let user = response.user.ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
 
                 Ok(success_with_message(
                     self.convert_user_to_json(&user),
-                    "用户创建成功",
-                    StatusCode::OK
+                    "用户创建成功"
                 ))
             }
 
@@ -169,12 +167,11 @@ impl UserServiceHandler {
                 };
 
                 let response = self.client.update_user(request).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let user = response.user.ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
 
                 Ok(success_with_message(
                     self.convert_user_to_json(&user),
-                    "用户更新成功",
-                    StatusCode::OK
+                    "用户更新成功"
                 ))
             }
 
@@ -198,16 +195,15 @@ impl UserServiceHandler {
                         if response.success {
                             Ok(success_with_message(
                                 json!({}),
-                                "用户注销成功",
-                                StatusCode::OK
+                                "用户注销成功"
                             ))
                         } else {
-                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                            Err(GatewayError::bad_request(response.message))
                         }
                     }
                     Err(err) => {
                         error!("用户注销失败: {}", err);
-                        Ok(error_response(&format!("用户注销失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                        Err(err.into())
                     }
                 }
             }
@@ -216,7 +212,7 @@ impl UserServiceHandler {
             (&Method::POST, "registerByUsername") => {
                 let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
                 if tenant_id != "1122" {
-                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
+                    return Err(GatewayError::forbidden("企业号不匹配").into());
                 }
                 let username = extract_string_param(&body,"username",None)?;
                 let password = extract_string_param(&body,"password",None)?;
@@ -239,16 +235,15 @@ impl UserServiceHandler {
                     Ok(response) => {
                         let user = response
                             .user
-                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                            .ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
                         Ok(success_with_message(
                             self.convert_user_to_json(&user),
-                            "用户注册成功",
-                            StatusCode::OK
+                            "用户注册成功"
                         ))
                     }
                     Err(err) => {
                         error!("注册用户失败: {}", err);
-                        Ok(error_response(&format!("注册用户失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                        Err(err.into())
                     }
                 }
             }
@@ -258,7 +253,7 @@ impl UserServiceHandler {
 
                 let tenant_id = extract_string_param(&body,"tenantId",Some("tenant_id"))?;
                 if tenant_id != "1122" {
-                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
+                    return Err(GatewayError::forbidden("企业号不匹配").into());
                 }
                 let phone = extract_string_param(&body,"phone",None)?;
                 let password = extract_string_param(&body,"password",None)?;
@@ -281,16 +276,15 @@ impl UserServiceHandler {
                     Ok(response) => {
                         let user = response
                             .user
-                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                            .ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
                         Ok(success_with_message(
                             self.convert_user_to_json(&user),
-                            "用户注册成功",
-                            StatusCode::OK
+                            "用户注册成功"
                         ))
                     }
                     Err(err) => {
                         error!("注册用户失败: {}", err);
-                        Ok(error_response(&format!("注册用户失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                        Err(err.into())
                     }
                 }
             }
@@ -303,7 +297,7 @@ impl UserServiceHandler {
                 let phone = get_optional_string(&body, "phone", None).unwrap_or_default();
                 let verify_code = get_optional_string(&body, "verifyCode", Some("verify_code")).unwrap_or_default();
                 if tenant_id != "1122" {
-                    return Ok(error_response("企业号错误", StatusCode::BAD_REQUEST));
+                    return Err(GatewayError::forbidden("企业号不匹配").into());
                 }
                 let request = proto::user::ForgetPasswordRequest {
                     password: password.to_string(),
@@ -316,16 +310,15 @@ impl UserServiceHandler {
                     Ok(response) => {
                         let user = response
                             .user
-                            .ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                            .ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
                         Ok(success_with_message(
                             self.convert_user_to_json(&user),
-                            "密码更新成功",
-                            StatusCode::OK
+                            "密码更新成功"
                         ))
                     }
                     Err(err) => {
                         error!("密码更新失败: {}", err);
-                        Ok(error_response(&format!("密码更新失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                        Err(err.into())
                     }
                 }
             }
@@ -337,7 +330,7 @@ impl UserServiceHandler {
                 let response = self.client.get_user_config(&current_user_id).await?;
                 let user_config = response.user_config.unwrap_or_default();
                 info!("时间: {}", user_config.clone().create_time.unwrap_or_default());
-                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+                Ok(success_response(self.convert_user_config_to_json(&user_config)))
             }
 
             // 保存用户设置
@@ -374,7 +367,7 @@ impl UserServiceHandler {
                 };
                 let response = self.client.save_user_config(request).await?;
                 let user_config = response.user_config.unwrap_or_default();
-                Ok(success_response(self.convert_user_config_to_json(&user_config), StatusCode::OK))
+                Ok(success_response(self.convert_user_config_to_json(&user_config)))
             }
             
             // 发送手机验证码
@@ -392,16 +385,15 @@ impl UserServiceHandler {
                         if response.success {
                             Ok(success_with_message(
                                 json!({}),
-                                &response.message,
-                                StatusCode::OK
+                                &response.message
                             ))
                         } else {
-                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                            Err(GatewayError::bad_request(response.message))
                         }
                     }
                     Err(err) => {
                         error!("发送验证码失败: {}", err);
-                        Ok(error_response(&format!("发送验证码失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                        Err(err.into())
                     }
                 }
             }
@@ -425,16 +417,15 @@ impl UserServiceHandler {
                         if response.valid {
                             Ok(success_with_message(
                                 json!({"valid": true}),
-                                &response.message,
-                                StatusCode::OK
+                                &response.message
                             ))
                         } else {
-                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                            Err(GatewayError::bad_request(response.message))
                         }
                     }
                     Err(err) => {
                         error!("验证码验证失败: {}", err);
-                        Ok(error_response(&format!("验证码验证失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                        Err(err.into())
                     }
                 }
             }
@@ -460,16 +451,15 @@ impl UserServiceHandler {
                         if response.success {
                             Ok(success_with_message(
                                 json!({"phone": new_phone}),
-                                "手机号更新成功",
-                                StatusCode::OK
+                                "手机号更新成功"
                             ))
                         } else {
-                            Ok(error_response(&response.message, StatusCode::BAD_REQUEST))
+                            Err(GatewayError::bad_request(response.message))
                         }
                     }
                     Err(err) => {
                         error!("更新手机号失败: {}", err);
-                        Ok(error_response(&format!("更新手机号失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR))
+                        Err(err.into())
                     }
                 }
             }
@@ -479,9 +469,9 @@ impl UserServiceHandler {
                 // 从JWT中获取用户ID
                 let current_user_id = get_user_id_from_jwt(jwt_user_info.as_ref())?;
                 let response = self.client.get_user(current_user_id.clone(),&current_user_id).await?;
-                let user = response.user.ok_or_else(|| anyhow::anyhow!("用户数据为空"))?;
+                let user = response.user.ok_or_else(|| GatewayError::upstream("下游返回的用户数据为空"))?;
 
-                Ok(success_response(self.convert_user_to_json(&user), StatusCode::OK))
+                Ok(success_response(self.convert_user_to_json(&user)))
             }
 
             // 图片验证码生成
@@ -501,13 +491,13 @@ impl UserServiceHandler {
                     "code_key": code_key,
                     "image_content": image_content,
                 });
-                Ok(success_response(ret_data, StatusCode::OK))
+                Ok(success_response(ret_data))
             }
 
             // 其他未知方法
             _ => {
                 error!("未知的用户服务方法: {}", method_name);
-                Err(anyhow::anyhow!("未实现的方法: {}", method_name))
+                Err(GatewayError::not_found(format!("用户服务不支持的接口: {method_name}")))
             }
         }
     }

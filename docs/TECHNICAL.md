@@ -355,20 +355,114 @@ PG CPU 需求  ≈ 语句总数 × 0.25ms ≈ (批次数 × 2) × 0.25ms
 
 ### 9.2 按 ROI 排序的优化候选
 
-| 优先级 | 事项 | 预期收益 | 成本/风险 |
-|---|---|---|---|
-| 高 | 幂等判定并入 Redis 号段脚本（`SET NX` 同往返判重） | 去掉每条消息一次 PG 预查询，判重段从毫秒级降到 Redis 往返 | 中；Redis 丢失退化为浪费一个序号，DB 唯一约束仍是最终权威 |
-| 高 | msg-server / msg-gateway 导出 Prometheus 指标 | 消费延迟、死信数、在线数、批次耗时直方图可见 | 低 |
-| 高 | 批量冲突兜底改 `ON CONFLICT DO NOTHING` + 批量前预校验 | 消除「一条脏数据拖整批重试」 | 低 |
-| 中 | 会话列表上 Redis ZSET | 会话列表从 O(会话数) 次查询降到 1 次 | 中；需要处理双写一致性 |
-| 中 | 最近 N 条消息缓存 | 解决主从延迟下「刚发就拉不到」 | 中 |
-| 中 | Kafka 分区数 16 → 64 | 消费并行度上限提升 4 倍 | 需要重建主题/迁移 |
-| 中 | 跨分区批量提交（减少 commit 次数） | 位点提交开销下降 | 中；需保证回退语义 |
-| 低 | 修正注册限流前缀（`/api/user/register` → `/api/users/register*`） | 注册拿到 2 rps 的独立保护，而不是混在 `/api/users` 的 10 rps 里 | 极低 |
-| 低 | 心跳死链口径与注释对齐（`missed > max` 实际是第 3 个周期约 90s，配置注释写「约 60 秒」） | 排查断连时不被注释误导 | 极低 |
-| 低 | 半开态限并发/成功率 | 熔断恢复更平滑 | 低 |
-| 低 | 集群级限流（Redis 计数器） | 多实例限流精确 | 中；热路径多一次 Redis |
-| 低 | Redis Cluster 支持 | 单点消除 | 高；号段与路由都要改 |
+| 优先级 | 事项 | 预期收益 | 成本/风险 | 状态 |
+|---|---|---|---|---|
+| 高 | 幂等判定并入 Redis 号段脚本（`SET NX` 同往返判重） | 去掉每条消息一次 PG 预查询，判重段从毫秒级降到 Redis 往返 | 中；Redis 丢失退化为浪费一个序号，DB 唯一约束仍是最终权威 | 待办 |
+| 高 | msg-server / msg-gateway 导出 Prometheus 指标 | 消费延迟、死信数、在线数、批次耗时直方图可见 | 低 | 已实施（见 9.2.1） |
+| 高 | 批量冲突兜底改 `ON CONFLICT DO NOTHING` + 批量前预校验 | 消除「一条脏数据拖整批重试」 | 低 | 已实施（见 9.2.2） |
+| 中 | 会话列表上 Redis ZSET | 会话列表从 O(会话数) 次查询降到 1 次 | 中；需要处理双写一致性 | 待办 |
+| 中 | 最近 N 条消息缓存 | 解决主从延迟下「刚发就拉不到」 | 中 | 待办 |
+| 中 | Kafka 分区数 16 → 64 | 消费并行度上限提升 4 倍 | 需要重建主题/迁移 | 待办 |
+| 中 | 跨分区批量提交（减少 commit 次数） | 位点提交开销下降 | 中；需保证回退语义 | 待办 |
+| 低 | 修正注册限流前缀（`/api/user/register` → `/api/users/register`） | 注册拿到 2 rps 的独立保护，而不是混在 `/api/users` 的 10 rps 里 | 极低 | 已实施（见 9.2.3） |
+| 低 | 心跳死链口径与注释对齐（`missed > max` 实际是第 3 个周期约 90s，配置注释写「约 60 秒」） | 排查断连时不被注释误导 | 极低 | 已实施（见 9.2.4） |
+| 低 | 半开态限并发/成功率 | 熔断恢复更平滑 | 低 | 已实施（见 9.2.5、9.2.6） |
+| 低 | 集群级限流（Redis 计数器） | 多实例限流精确 | 中；热路径多一次 Redis | 待办 |
+| 低 | Redis Cluster 支持 | 单点消除 | 高；号段与路由都要改 | 待办 |
+
+#### 9.2.1 指标导出（已实施）
+
+`runtime::metrics_server` 起独立的 `/metrics` 监听：msg-server 默认 `9101`、msg-gateway 默认 `9102`
+（`metrics.enabled` 控制开关，`metrics.port: 0` 表示用服务默认端口；api-gateway 仍用自己的 `:9090` 路由）。
+
+注意别用 `PrometheusBuilder::install_recorder()` 去做这件事：它只装 recorder、不 spawn 监听，
+端口会永远连不上（`runtime` 里的 `serves_metrics_on_configured_port` 就是这条的回归用例）。
+
+| 服务 | 指标 |
+|---|---|
+| msg-server | `msg_consume_batch_total{result}`、`msg_consume_batch_size`、`msg_consume_batch_duration_seconds`、`msg_inserted_total`、`msg_duplicate_total`、`msg_precheck_rejected_total`、`msg_push_total{result}`、`msg_dead_letter_total` |
+| msg-gateway | `ws_connections`、`ws_upstream_total`、`ws_downstream_total`、`ws_outbound_dropped_total`、`ws_dead_conn_total` |
+
+语义：
+
+- `msg_consume_batch_total{result="fallback"}` 上升 = 批量落库在退化逐条，先看 `msg_precheck_rejected_total`
+  与 msg-server 日志里的「批量落库失败」；
+- `msg_duplicate_total` 上升是重放/并发重复的正常表现，与 `msg_inserted_total` 一起看幂等命中率；
+- `ws_connections` 是「用户 × 平台」的登记数，被顶下线的旧连接是否泄漏看它是否只增不减；
+- `ws_outbound_dropped_total` 上升说明下行帧入队时连接已销毁（写任务退出）。
+
+#### 9.2.2 批量冲突兜底（已实施）
+
+`msg_meta` 的写入改成无 target 的 `ON CONFLICT DO NOTHING`，同时覆盖唯一索引
+`(conversation_id, server_id)` 与主键 `(conversation_id, seq)`；`RETURNING` 仍只返回真正插入的行，
+`inserted` 语义不变。
+
+再加一层预校验：`server_id` 为空、`conversation_id` 为空、`content` 超过 `INT` 上限的消息
+不进批量，直接移出到逐条路径（逐条有重试与死信，不静默丢弃），并计入 `msg_precheck_rejected_total`。
+这样「一条脏数据连坐整批」从两个方向都被堵住：脏数据提前分流，剩下的冲突目标不再只覆盖一半。
+
+#### 9.2.3 注册限流前缀（已实施）
+
+`config.yaml` / `config-prod.yaml` 的注册规则前缀改为 `/api/users/register`，前缀匹配天然覆盖
+`registerByPhone` 与 `registerByUsername`；路径匹配是**最长前缀**，所以不需要调整规则顺序。
+登录仍是网关静态路由 `/api/user/login`（单数，原本就正确）。
+
+#### 9.2.4 心跳死链口径（已实施）
+
+实现是「未收到 Pong 的累计次数 > `heartbeat_max_missed` 才断开」，默认 `heartbeat_max_missed=2`
+→ 第 3 个周期断开（心跳间隔 30s，约 90s）。配置注释与两个压测工具
+（`msg-gateway/src/bin/ws_bench.rs`、`e2e_bench.rs`）的行内注释已统一到这个口径。
+
+#### 9.2.5 半开态探测限流（已实施）
+
+`api-gateway/src/circuit_breaker/mod.rs` 给半开态加了两个门槛：
+
+- `half_open_max_probes`（默认 3）：半开时同时在飞的探测请求上限，超出的请求直接快速失败，不打下游；
+- `half_open_success_threshold`（默认 2）：连续成功达到该次数才转 `Closed`，避免恢复瞬间把全部流量打回尚未恢复的下游。
+
+半开态任意一次失败立即回 `Open` 并清零计数；`Closed` / `Open` 转换时同样清零，避免跨周期脏值。
+两个字段都有 serde 默认值，旧配置文件无需改动。
+
+#### 9.2.6 熔断分桶与作用域（已实施）
+
+半开态修好之后发现分桶本身是错的，一并修掉：
+
+- **键用真实服务名**：原来按 `/api/users` → `user-service`、`/api/friends` → `friend-service`、
+  `/api/groups` → `group-service`、`/api/chat` → `chat-service` 分桶，而实际注册名只有
+  `relation`（用户/好友/群组同进程）、`chat`、`ws`。**同一个下游被拆成 3 个熔断器**，
+  失败要分别攒够 5 次才各自打开，阈值被稀释成 1/3。现在统一映射到 `sn::RELATION` / `sn::CHAT`。
+- **只覆盖转发的路径**：`/health`、`/metrics`、`/api/user/*`（登录/刷新/登出）、
+  `/api/files/*` 与 404 原本全落进 `unknown-service`，网关自己一个 5xx 就能把登录也熔断掉。
+  现在这些路径直接透传；`/api/friends/online-status` 虽然是网关本地实现，也不再记到 relation 头上。
+- **删掉 `X-Target-Service`**：请求头由客户端控制，任意值都会在 breaker 表里新建一条永不回收的记录。
+- **熔断器表由 Layer 持有**：`Router::layer` 会对**每条路由**各调一次 `layer()`，
+  表若在中间件里 `new()`，`/api/users` 与 `/api/groups` 会各持一张表，等于按路由条数放大阈值。
+  现在 `CircuitBreakerLayer::new` 建一次表，`layer()` 分发同一张（单测 `layer_shares_one_breaker_table_across_routes` 守着）。
+- **`enabled` 生效**：`gateway.circuit_breaker.enabled: false` 时整体透传，此前该字段没有任何读取点。
+
+实测（临时配置起在 18000）：`/api/users/registerByUsername` 连击 5 次打开 relation 熔断器后，
+`/api/groups/1`、`/api/friends/1` 立刻 503（同一桶），`/api/chat/send` 仍是 401（另一桶未熔断），
+`/health` 200、`/api/user/login` 正常进业务（不再被自伤），`enabled: false` 时 6 次失败也不开熔断。
+
+#### 9.2.7 api-gateway 错误契约与故障隔离（已实施）
+
+重构前网关对外只有一种错误：**500**，且 body 里带着下游 gRPC `Status` 原文。
+全仓 `tonic::Code` 使用次数为 0 —— 下游说「参数错了」，客户端只能看到「服务内部错误」。
+
+- **统一错误类型** `error.rs::GatewayError`：`{code,message,success:false}` 且
+  **HTTP 状态码 == `code`**；`From<tonic::Status>` 把 gRPC 码映射成
+  400/401/403/404/409/429/502/503/504，`Internal`/`Unknown` 归为 **502**（下游的锅不背成 500）。
+- **细节不外泄**：5xx 只回稳定文案，`detail` 进日志；`success_response` 不再接受状态码参数
+  （此前 `HTTP 200 + code:401 + success:true`，客户端只看状态码就会误判成功）。
+- **畸形 JSON → 400**（此前静默退化成「只有 query 参数」，最终表现成「参数缺失」→500）。
+- **登录**：凭据错误统一 401 且文案不区分「用户不存在/密码错」（消除账号枚举）；
+  下游不可用时如实 503。
+- **限流 429** 也用同一信封，并按层短路（被全局限流后不再扣路径/IP 配额）。
+- **故障隔离**：客户端按需**单点重建** + 指数退避（1s→30s），此前每个请求重建全部 4 条连接，
+  后端宕机期间等于每请求 4 次 Consul 查询；`DynamicServiceDiscovery::run` 现在在接收端关闭时退出，
+  不再每次重建泄漏一个永久轮询任务。
+
+回归网：`tests/contract/error_contract.sh`（20 项：状态码、信封、无内部细节、429 信封）。
 
 ### 9.3 明确不做的事
 

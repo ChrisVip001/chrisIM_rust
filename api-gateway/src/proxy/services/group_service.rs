@@ -1,20 +1,19 @@
 use axum::{
     body::Body,
-    http::{Method, Response, StatusCode},
+    http::{Method, Response},
 };
 use crate::proxy::grpc_clients::GroupServiceGrpcClient;
 use contract::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
-use chrono::{DateTime, TimeZone, Utc};
 use std::time::{Duration as StdDuration, SystemTime};
-use contract::proto::group::MemberSettings;
 use runtime::auth::Claims;
 use super::common::{
     success_response, extract_string_param, get_optional_string, 
     get_i64_param, timestamp_to_datetime_string, get_user_id_from_jwt,
     get_bool_param,get_option_bool_param,
 };
+use crate::error::GatewayError;
 
 /// 群组服务处理器
 #[derive(Clone)]
@@ -35,7 +34,7 @@ impl GroupServiceHandler {
         path: &str,
         body: Value,
         jwt_user_info: Option<Claims>,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("处理群组服务请求: {} {}", method, path);
 
         // 从JWT中获取用户ID
@@ -71,9 +70,9 @@ impl GroupServiceHandler {
                     members
                 ).await?;
 
-                let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
+                let group = response.group.ok_or_else(|| GatewayError::upstream("下游返回的群组数据为空"))?;
 
-                Ok(success_response(self.convert_group_to_json(&group), StatusCode::OK))
+                Ok(success_response(self.convert_group_to_json(&group)))
             }
 
             // 获取群组信息
@@ -81,10 +80,10 @@ impl GroupServiceHandler {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
 
                 let response = self.client.get_group(&group_id).await?;
-                let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
+                let group = response.group.ok_or_else(|| GatewayError::upstream("下游返回的群组数据为空"))?;
                 let settings_response = self.client.get_member_settings(&group_id, &current_user_id).await?;
-                let member_settings = settings_response.settings.ok_or_else(|| anyhow::anyhow!("群组成员设置数据为空"))?;
-                Ok(success_response(self.convert_group_and_setting_to_json(&group,  &member_settings), StatusCode::OK))
+                let member_settings = settings_response.settings.ok_or_else(|| GatewayError::upstream("下游返回的群组成员设置数据为空"))?;
+                Ok(success_response(self.convert_group_and_setting_to_json(&group,  &member_settings)))
             }
 
             // 更新群组信息
@@ -103,9 +102,9 @@ impl GroupServiceHandler {
                     current_user_id,
                 ).await?;
                 
-                let group = response.group.ok_or_else(|| anyhow::anyhow!("群组数据为空"))?;
+                let group = response.group.ok_or_else(|| GatewayError::upstream("下游返回的群组数据为空"))?;
 
-                Ok(success_response(self.convert_group_to_json(&group), StatusCode::OK))
+                Ok(success_response(self.convert_group_to_json(&group)))
             }
 
             // 删除群组
@@ -115,8 +114,7 @@ impl GroupServiceHandler {
                 let response = self.client.delete_group(&group_id, &current_user_id).await?;
 
                 Ok(success_response(
-                    response.success,
-                    StatusCode::OK,
+                    response.success
                 ))
             }
 
@@ -139,7 +137,7 @@ impl GroupServiceHandler {
                 
                 // 确保有成员要添加
                 if members.is_empty() {
-                    return Err(anyhow::anyhow!("没有指定要添加的成员"));
+                    return Err(GatewayError::bad_request("没有指定要添加的成员"));
                 }
 
                 // 固定使用普通成员角色
@@ -151,8 +149,7 @@ impl GroupServiceHandler {
                     json!({
                         "success": response.success,
                         "addedCount": response.added_count
-                    }),
-                    StatusCode::OK
+                    })
                 ))
             }
 
@@ -175,14 +172,13 @@ impl GroupServiceHandler {
                 
                 // 确保有成员要移除
                 if members.is_empty() {
-                    return Err(anyhow::anyhow!("没有指定要移除的成员"));
+                    return Err(GatewayError::bad_request("没有指定要移除的成员"));
                 }
 
                 let response = self.client.remove_member(&group_id, members, &current_user_id).await?;
                 
                 Ok(success_response(
-                    response.success,
-                    StatusCode::OK
+                    response.success
                 ))
             }
 
@@ -193,8 +189,7 @@ impl GroupServiceHandler {
                 let response = self.client.leave_group(&group_id, &current_user_id).await?;
 
                 Ok(success_response(
-                    response.success,
-                    StatusCode::OK
+                    response.success
                 ))
             }
 
@@ -212,9 +207,9 @@ impl GroupServiceHandler {
                 };
 
                 let response = self.client.update_member_role(&group_id, &member_id, &current_user_id, role).await?;
-                let member = response.member.ok_or_else(|| anyhow::anyhow!("成员数据为空"))?;
+                let member = response.member.ok_or_else(|| GatewayError::upstream("下游返回的成员数据为空"))?;
 
-                Ok(success_response(self.convert_member_to_json(&member), StatusCode::OK))
+                Ok(success_response(self.convert_member_to_json(&member)))
             }
 
             // 获取群组成员列表
@@ -237,8 +232,7 @@ impl GroupServiceHandler {
                         "total": response.total,
                         "page": response.page,
                         "pageSize": response.page_size
-                    }), 
-                    StatusCode::OK
+                    })
                 ))
             }
 
@@ -247,7 +241,7 @@ impl GroupServiceHandler {
                 let response = self.client.get_user_groups(&current_user_id).await?;
                 let groups = response.groups.iter().map(|g| self.convert_user_group_to_json(g)).collect::<Vec<_>>();
 
-                Ok(success_response(groups, StatusCode::OK))
+                Ok(success_response(groups))
             }
 
             // 检查用户是否在群组中
@@ -272,8 +266,7 @@ impl GroupServiceHandler {
                         "isMember": response.is_member,
                         "role": response.role,
                         "roleText": role_text
-                    }),
-                    StatusCode::OK
+                    })
                 ))
             }
 
@@ -294,9 +287,9 @@ impl GroupServiceHandler {
                     is_pinned
                 ).await?;
 
-                let announcement = response.announcement.ok_or_else(|| anyhow::anyhow!("公告数据为空"))?;
+                let announcement = response.announcement.ok_or_else(|| GatewayError::upstream("下游返回的公告数据为空"))?;
 
-                Ok(success_response(self.convert_announcement_to_json(&announcement), StatusCode::OK))
+                Ok(success_response(self.convert_announcement_to_json(&announcement)))
             }
 
             // 获取群公告
@@ -304,9 +297,9 @@ impl GroupServiceHandler {
                 let announcement_id = extract_string_param(&body, "announcementId", Some("announcement_id"))?;
 
                 let response = self.client.get_announcement(&announcement_id).await?;
-                let announcement = response.announcement.ok_or_else(|| anyhow::anyhow!("公告数据为空"))?;
+                let announcement = response.announcement.ok_or_else(|| GatewayError::upstream("下游返回的公告数据为空"))?;
 
-                Ok(success_response(self.convert_announcement_to_json(&announcement), StatusCode::OK))
+                Ok(success_response(self.convert_announcement_to_json(&announcement)))
             }
 
             // 获取群组所有公告
@@ -318,7 +311,7 @@ impl GroupServiceHandler {
                     .map(|a| self.convert_announcement_to_json(a))
                     .collect::<Vec<_>>();
 
-                Ok(success_response(announcements, StatusCode::OK))
+                Ok(success_response(announcements))
             }
 
             // 删除群公告
@@ -328,8 +321,7 @@ impl GroupServiceHandler {
                 let response = self.client.delete_announcement(&announcement_id, &current_user_id).await?;
 
                 Ok(success_response(
-                    response.success,
-                    StatusCode::OK
+                    response.success
                 ))
             }
 
@@ -338,9 +330,9 @@ impl GroupServiceHandler {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
 
                 let response = self.client.get_group_settings(&group_id).await?;
-                let settings = response.settings.ok_or_else(|| anyhow::anyhow!("群组设置数据为空"))?;
+                let settings = response.settings.ok_or_else(|| GatewayError::upstream("下游返回的群组设置数据为空"))?;
 
-                Ok(success_response(self.convert_group_settings_to_json(&settings), StatusCode::OK))
+                Ok(success_response(self.convert_group_settings_to_json(&settings)))
             }
 
             // 更新群组设置
@@ -364,9 +356,9 @@ impl GroupServiceHandler {
                     all_member_muted
                 ).await?;
 
-                let settings = response.settings.ok_or_else(|| anyhow::anyhow!("群组设置数据为空"))?;
+                let settings = response.settings.ok_or_else(|| GatewayError::upstream("下游返回的群组设置数据为空"))?;
 
-                Ok(success_response(self.convert_group_settings_to_json(&settings), StatusCode::OK))
+                Ok(success_response(self.convert_group_settings_to_json(&settings)))
             }
 
             // 获取群组黑名单
@@ -378,7 +370,7 @@ impl GroupServiceHandler {
                     .map(|e| self.convert_blacklist_entry_to_json(e))
                     .collect::<Vec<_>>();
 
-                Ok(success_response(entries, StatusCode::OK))
+                Ok(success_response(entries))
             }
 
             // 添加用户到黑名单
@@ -394,9 +386,9 @@ impl GroupServiceHandler {
                     &reason
                 ).await?;
 
-                let entry = response.entry.ok_or_else(|| anyhow::anyhow!("黑名单数据为空"))?;
+                let entry = response.entry.ok_or_else(|| GatewayError::upstream("下游返回的黑名单数据为空"))?;
 
-                Ok(success_response(self.convert_blacklist_entry_to_json(&entry), StatusCode::OK))
+                Ok(success_response(self.convert_blacklist_entry_to_json(&entry)))
             }
 
             // 从黑名单移除用户
@@ -411,8 +403,7 @@ impl GroupServiceHandler {
                 ).await?;
 
                 Ok(success_response(
-                    response.success,
-                    StatusCode::OK
+                    response.success
                 ))
             }
 
@@ -428,8 +419,7 @@ impl GroupServiceHandler {
                 ).await?;
                 
                 Ok(success_response(
-                    response.success,
-                    StatusCode::OK
+                    response.success
                 ))
             }
 
@@ -445,8 +435,7 @@ impl GroupServiceHandler {
                 ).await?;
 
                 Ok(success_response(
-                    response.success,
-                    StatusCode::OK
+                    response.success
                 ))
             }
 
@@ -459,7 +448,7 @@ impl GroupServiceHandler {
                     .map(|e| self.convert_member_to_json(e))
                     .collect::<Vec<_>>();
 
-                Ok(success_response(entries, StatusCode::OK))
+                Ok(success_response(entries))
             }
 
             // 获取成员设置
@@ -471,9 +460,9 @@ impl GroupServiceHandler {
                     .to_string();
 
                 let response = self.client.get_member_settings(&group_id, &target_user_id).await?;
-                let settings = response.settings.ok_or_else(|| anyhow::anyhow!("成员设置数据为空"))?;
+                let settings = response.settings.ok_or_else(|| GatewayError::upstream("下游返回的成员设置数据为空"))?;
 
-                Ok(success_response(self.convert_member_settings_to_json(&settings), StatusCode::OK))
+                Ok(success_response(self.convert_member_settings_to_json(&settings)))
             }
 
             // 更新成员设置
@@ -499,9 +488,9 @@ impl GroupServiceHandler {
                     show_nickname
                 ).await?;
 
-                let settings = response.settings.ok_or_else(|| anyhow::anyhow!("成员设置数据为空"))?;
+                let settings = response.settings.ok_or_else(|| GatewayError::upstream("下游返回的成员设置数据为空"))?;
 
-                Ok(success_response(self.convert_member_settings_to_json(&settings), StatusCode::OK))
+                Ok(success_response(self.convert_member_settings_to_json(&settings)))
             }
 
             // 创建群二维码
@@ -529,9 +518,9 @@ impl GroupServiceHandler {
                     is_permanent
                 ).await?;
 
-                let qrcode = response.qrcode.ok_or_else(|| anyhow::anyhow!("二维码数据为空"))?;
+                let qrcode = response.qrcode.ok_or_else(|| GatewayError::upstream("下游返回的二维码数据为空"))?;
 
-                Ok(success_response(self.convert_qrcode_to_json(&qrcode), StatusCode::OK))
+                Ok(success_response(self.convert_qrcode_to_json(&qrcode)))
             }
 
             // 获取群二维码
@@ -539,15 +528,15 @@ impl GroupServiceHandler {
                 let group_id = extract_string_param(&body, "groupId", Some("group_id"))?;
 
                 let response = self.client.get_group_qrcode(&group_id).await?;
-                let qrcode = response.qrcode.ok_or_else(|| anyhow::anyhow!("二维码数据为空"))?;
+                let qrcode = response.qrcode.ok_or_else(|| GatewayError::upstream("下游返回的二维码数据为空"))?;
 
-                Ok(success_response(self.convert_qrcode_to_json(&qrcode), StatusCode::OK))
+                Ok(success_response(self.convert_qrcode_to_json(&qrcode)))
             }
 
             // 其他未实现的方法
             _ => {
                 error!("群组服务不支持的方法: {} {}", method, method_name);
-                Err(anyhow::anyhow!("群组服务不支持的方法: {}", method_name))
+                Err(GatewayError::not_found(format!("群组服务不支持的接口: {method_name}")))
             }
         }
     }
@@ -672,23 +661,6 @@ impl GroupServiceHandler {
     }
 
     /// 将禁言条目转换为JSON
-    fn convert_mute_entry_to_json(&self, entry: &proto::group::MuteEntry) -> Value {
-        let mute_until = timestamp_to_datetime_string(&entry.mute_until);
-        let now = chrono::Utc::now().to_rfc3339();
-
-        json!({
-            "id": entry.id,
-            "groupId": entry.group_id,
-            "userId": entry.user_id,
-            "creatorId": entry.creator_id,
-            "reason": entry.reason,
-            "muteUntil": mute_until,
-            "isPermanent": entry.is_permanent,
-            "isActive": entry.is_permanent || mute_until > now,
-            "createdAt": timestamp_to_datetime_string(&entry.created_at),
-            "updatedAt": timestamp_to_datetime_string(&entry.updated_at),
-        })
-    }
 
     /// 将成员设置转换为JSON
     fn convert_member_settings_to_json(&self, settings: &proto::group::MemberSettings) -> Value {

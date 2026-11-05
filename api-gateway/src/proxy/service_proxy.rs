@@ -1,32 +1,59 @@
 use axum::{
     body::Body,
-    http::{Request, Response, StatusCode},
-    response::IntoResponse,
+    http::{Request, Response},
 };
 use runtime::configs::routes_config::ServiceType;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{error, info, warn};
-use crate::proxy::services::common::error_response;
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, info, warn};
+
 use runtime::config::AppConfig;
 use contract::Error;
-use crate::proxy::grpc_clients::{FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient};
-use runtime::grpc_client::base::get_rpc_client;
-use runtime::grpc_client::base::service_names as sn;
+use crate::error::GatewayError;
+use crate::proxy::grpc_clients::{
+    ChatServiceGrpcClient, FriendServiceGrpcClient, GroupServiceGrpcClient, UserServiceGrpcClient,
+};
+
+use super::extract_request_body;
+use super::services::ChatServiceHandler;
+use super::services::CommonServiceHandler;
+use super::services::FriendServiceHandler;
+use super::services::GroupServiceHandler;
+use super::services::UserServiceHandler;
+use contract::proto::message::chat_service_client::ChatServiceClient;
 use contract::proto::friend::friend_service_client::FriendServiceClient;
 use contract::proto::group::group_service_client::GroupServiceClient;
 use contract::proto::user::user_service_client::UserServiceClient;
+use runtime::grpc_client::base::get_rpc_client;
+use runtime::grpc_client::base::service_names as sn;
 use runtime::service_discovery::LbWithServiceDiscovery;
-use crate::proxy::extract_request_body;
-use crate::proxy::services::{ChatServiceHandler, CommonServiceHandler, FriendServiceHandler, GroupServiceHandler, UserServiceHandler};
-use tokio::sync::{Mutex, RwLock};
-use contract::proto::message::chat_service_client::ChatServiceClient;
+
+/// 需要单独重建的下游客户端
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ClientKind {
+    User,
+    Friend,
+    Group,
+    Chat,
+}
+
+/// 重建退避门：冷却期内不再打 Consul
+#[derive(Debug, Default, Clone, Copy)]
+struct RetryGate {
+    /// 早于这个时刻不再尝试重建
+    not_before: Option<Instant>,
+    /// 连续失败次数，用于指数退避
+    failures: u32,
+}
 
 /// 服务客户端连接池
 struct ServiceClients {
     user_client: Option<UserServiceGrpcClient>,
     friend_client: Option<FriendServiceGrpcClient>,
     group_client: Option<GroupServiceGrpcClient>,
-    chat_client: Option<ChatServiceClient<LbWithServiceDiscovery>>,
+    chat_client: Option<ChatServiceGrpcClient>,
 }
 
 impl ServiceClients {
@@ -43,215 +70,254 @@ impl ServiceClients {
 /// 服务代理 - 负责转发请求到后端服务
 #[derive(Clone)]
 pub struct ServiceProxy {
-    // 应用配置
     config: Arc<AppConfig>,
-    // 服务客户端连接池
     clients: Arc<RwLock<ServiceClients>>,
-    // 串行化连接池重建，避免并发请求触发多次重建
-    rebuild_lock: Arc<Mutex<()>>,
+    /// 每个下游一把锁：只重建缺失的那一个，别的服务不受影响
+    rebuild_locks: Arc<HashMap<ClientKind, Arc<Mutex<()>>>>,
+    /// 重建失败后的冷却/退避状态
+    gates: Arc<Mutex<HashMap<ClientKind, RetryGate>>>,
 }
 
 impl ServiceProxy {
     /// 创建新的服务代理
-    ///
-    /// 配置由调用方注入，不再回读全局单例，
-    /// 这样本结构可以在测试里用一份临时配置构造。
     pub async fn new(config: Arc<AppConfig>) -> Self {
+        let rebuild_locks = [
+            ClientKind::User,
+            ClientKind::Friend,
+            ClientKind::Group,
+            ClientKind::Chat,
+        ]
+        .into_iter()
+        .map(|kind| (kind, Arc::new(Mutex::new(()))))
+        .collect();
+
         let proxy = Self {
             config,
             clients: Arc::new(RwLock::new(ServiceClients::new())),
-            rebuild_lock: Arc::new(Mutex::new(())),
+            rebuild_locks: Arc::new(rebuild_locks),
+            gates: Arc::new(Mutex::new(HashMap::new())),
         };
 
-        // 启动时初始化服务客户端；个别失败不阻塞启动，
-        // 后续请求发现客户端缺失时会自动重建（见 get_or_rebuild）
-        if let Err(e) = proxy.initialize_clients().await {
-            warn!("启动时初始化服务客户端失败（将在请求时自动重试）: {}", e);
-        }
+        // 启动预热：四个下游并行建连，个别失败不阻塞启动
+        let (user, friend, group, chat) = tokio::join!(
+            proxy.get_user_client(true),
+            proxy.get_friend_client(true),
+            proxy.get_group_client(true),
+            proxy.get_chat_client(true),
+        );
+        let ready = [user.is_some(), friend.is_some(), group.is_some(), chat.is_some()]
+            .iter()
+            .filter(|ok| **ok)
+            .count();
+        info!("服务客户端预热完成: {}/4 可用", ready);
         proxy
     }
 
-    /// 获取客户端；缺失时尝试重建连接池
+    /// 取客户端；缺失时按需重建
     ///
-    /// 此前初始化只有 OnceCell 一次机会，后端服务不可用时客户端
-    /// 永远为 None，对应路由持续 503 直到进程重启。
-    /// 现在请求路径发现缺失即按需重建，重建期间并发请求串行等待。
-    async fn get_or_rebuild<T>(&self, extract: impl Fn(&ServiceClients) -> Option<T>) -> Option<T> {
-        if let Some(client) = extract(&*self.clients.read().await) {
+    /// 1. 只重建缺失的那一个，已有连接保持不变；
+    /// 2. 重建失败后进入指数退避（1s→30s），冷却期内直接返回 `None`；
+    /// 3. 同一个下游同时只有一个重建在跑（按 `ClientKind` 加锁），
+    ///    排队期间若已被别的请求重建成功则直接复用。
+    async fn obtain<T, Peek, Store>(
+        &self,
+        kind: ClientKind,
+        force: bool,
+        peek: Peek,
+        build: impl Future<Output = Result<T, Error>>,
+        store: Store,
+    ) -> Option<T>
+    where
+        T: Clone,
+        Peek: Fn(&ServiceClients) -> Option<T>,
+        Store: Fn(&mut ServiceClients, T),
+    {
+        if let Some(client) = peek(&*self.clients.read().await) {
             return Some(client);
         }
 
-        let _guard = self.rebuild_lock.lock().await;
-        // 双检：等待期间可能已被其他请求重建
-        if let Some(client) = extract(&*self.clients.read().await) {
-            return Some(client);
+        if !force {
+            let gates = self.gates.lock().await;
+            if let Some(gate) = gates.get(&kind) {
+                if gate.not_before.is_some_and(|t| Instant::now() < t) {
+                    // 冷却中：快速失败，别再打 Consul
+                    return None;
+                }
+            }
         }
 
-        warn!("服务客户端缺失，尝试重建连接池...");
-        if let Err(e) = self.initialize_clients().await {
-            error!("重建服务客户端连接池失败: {}", e);
+        let Some(lock) = self.rebuild_locks.get(&kind).cloned() else {
             return None;
-        }
-        extract(&*self.clients.read().await)
-    }
-
-    /// 异步初始化所有服务客户端
-    async fn initialize_clients(&self) -> Result<(), Error> {
-        info!("开始异步初始化服务客户端连接池...");
-        
-        // 并行创建所有客户端连接
-        let user_task = async {
-            get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(&self.config, sn::RELATION.to_string())
-                .await
-                .map(|client| UserServiceGrpcClient::new(client))
         };
+        let _guard = lock.lock().await;
 
-        let friend_task = async {
-            get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(&self.config, sn::RELATION.to_string())
+        // 双检：排队期间可能已被别的请求重建成功
+        if let Some(client) = peek(&*self.clients.read().await) {
+            return Some(client);
+        }
+
+        debug!(?kind, "重建下游客户端");
+        match build.await {
+            Ok(client) => {
+                store(&mut *self.clients.write().await, client);
+                self.gates.lock().await.remove(&kind);
+                peek(&*self.clients.read().await)
+            }
+            Err(e) => {
+                let mut gates = self.gates.lock().await;
+                let gate = gates.entry(kind).or_default();
+                gate.failures = gate.failures.saturating_add(1);
+                let backoff = Duration::from_secs(1u64 << gate.failures.min(5)).min(Duration::from_secs(30));
+                gate.not_before = Some(Instant::now() + backoff);
+                warn!(
+                    ?kind,
+                    failures = gate.failures,
+                    backoff_secs = backoff.as_secs(),
+                    "下游客户端重建失败，进入冷却: {}",
+                    e
+                );
+                None
+            }
+        }
+    }
+
+    async fn get_user_client(&self, force: bool) -> Option<UserServiceGrpcClient> {
+        self.obtain(
+            ClientKind::User,
+            force,
+            |c| c.user_client.clone(),
+            async {
+                get_rpc_client::<UserServiceClient<LbWithServiceDiscovery>>(
+                    &self.config,
+                    sn::RELATION.to_string(),
+                )
                 .await
-                .map(|client| FriendServiceGrpcClient::new(client))
-        };
+                .map(UserServiceGrpcClient::new)
+            },
+            |c, client| c.user_client = Some(client),
+        )
+        .await
+    }
 
-        let group_task = async {
-            get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(&self.config, sn::RELATION.to_string())
+    async fn get_friend_client(&self, force: bool) -> Option<FriendServiceGrpcClient> {
+        self.obtain(
+            ClientKind::Friend,
+            force,
+            |c| c.friend_client.clone(),
+            async {
+                get_rpc_client::<FriendServiceClient<LbWithServiceDiscovery>>(
+                    &self.config,
+                    sn::RELATION.to_string(),
+                )
                 .await
-                .map(|client| GroupServiceGrpcClient::new(client))
-        };
+                .map(FriendServiceGrpcClient::new)
+            },
+            |c, client| c.friend_client = Some(client),
+        )
+        .await
+    }
 
-        let chat_task = async {
-            get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(&self.config, sn::CHAT.to_string())
+    async fn get_group_client(&self, force: bool) -> Option<GroupServiceGrpcClient> {
+        self.obtain(
+            ClientKind::Group,
+            force,
+            |c| c.group_client.clone(),
+            async {
+                get_rpc_client::<GroupServiceClient<LbWithServiceDiscovery>>(
+                    &self.config,
+                    sn::RELATION.to_string(),
+                )
                 .await
-        };
-
-        let (user_result, friend_result, group_result,  chat_result) = tokio::join!(user_task, friend_task, group_task, chat_task);
-
-        // 更新客户端连接池
-        let mut clients = self.clients.write().await;
-        
-        match user_result {
-            Ok(client) => {
-                clients.user_client = Some(client);
-                info!("用户服务客户端初始化成功");
-            }
-            Err(e) => warn!("用户服务客户端初始化失败: {}", e),
-        }
-        
-        match friend_result {
-            Ok(client) => {
-                clients.friend_client = Some(client);
-                info!("好友服务客户端初始化成功");
-            }
-            Err(e) => warn!("好友服务客户端初始化失败: {}", e),
-        }
-        
-        match group_result {
-            Ok(client) => {
-                clients.group_client = Some(client);
-                info!("群组服务客户端初始化成功");
-            }
-            Err(e) => warn!("群组服务客户端初始化失败: {}", e),
-        }
-        
-        match chat_result {
-            Ok(client) => {
-                clients.chat_client = Some(client);
-                info!("聊天服务客户端初始化成功");
-            }
-            Err(e) => warn!("聊天服务客户端初始化失败: {}", e),
-        }
-
-        info!("服务客户端连接池初始化完成");
-        Ok(())
+                .map(GroupServiceGrpcClient::new)
+            },
+            |c, client| c.group_client = Some(client),
+        )
+        .await
     }
 
-    /// 获取用户服务客户端
-    async fn get_user_client(&self) -> Option<UserServiceGrpcClient> {
-        self.get_or_rebuild(|c| c.user_client.clone()).await
-    }
-
-    /// 获取好友服务客户端
-    async fn get_friend_client(&self) -> Option<FriendServiceGrpcClient> {
-        self.get_or_rebuild(|c| c.friend_client.clone()).await
-    }
-
-    /// 获取群组服务客户端
-    async fn get_group_client(&self) -> Option<GroupServiceGrpcClient> {
-        self.get_or_rebuild(|c| c.group_client.clone()).await
-    }
-
-    /// 获取chat服务客户端
-    async fn get_chat_client(&self) -> Option<ChatServiceClient<LbWithServiceDiscovery>> {
-        self.get_or_rebuild(|c| c.chat_client.clone()).await
+    async fn get_chat_client(&self, force: bool) -> Option<ChatServiceGrpcClient> {
+        self.obtain(
+            ClientKind::Chat,
+            force,
+            |c| c.chat_client.clone(),
+            async {
+                get_rpc_client::<ChatServiceClient<LbWithServiceDiscovery>>(
+                    &self.config,
+                    sn::CHAT.to_string(),
+                )
+                .await
+                .map(ChatServiceGrpcClient::new)
+            },
+            |c, client| c.chat_client = Some(client),
+        )
+        .await
     }
 
     /// 转发请求到后端服务
+    ///
+    /// 返回的 [`GatewayError`] 带语义：参数问题 400、下游不可用 503、
+    /// 下游报错 502、下游超时 504。
     pub async fn forward_request(
         &self,
         req: Request<Body>,
         service_type: &ServiceType,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         // 提取请求信息
-        let (method, path, body, user_info) = match extract_request_body(req).await {
-            Ok(data) => data,
-            Err(err) => {
-                error!("请求解析失败: {}", err);
-                return Ok(error_response(&format!("请求解析失败: {}", err), StatusCode::BAD_REQUEST));
-            }
-        };
+        let (method, path, body, user_info) = extract_request_body(req).await?;
 
         // 根据服务类型决定转发方式
         match service_type {
             // 核心业务服务使用gRPC转发
             ServiceType::User => {
-                if let Some(user_client) = self.get_user_client().await {
-                    UserServiceHandler::new(user_client).handle_request(&method, &path, body, user_info).await
-                } else {
-                    warn!("用户服务客户端不可用");
-                    Ok(error_response(&format!("服务暂时不可用: {}","user"),  StatusCode::SERVICE_UNAVAILABLE))
-                }
+                let Some(user_client) = self.get_user_client(false).await else {
+                    return Err(GatewayError::unavailable("用户服务客户端未就绪"));
+                };
+                UserServiceHandler::new(user_client)
+                    .handle_request(&method, &path, body, user_info)
+                    .await
             }
             ServiceType::Friend => {
-                if let Some(friend_client) = self.get_friend_client().await {
-                    FriendServiceHandler::new(friend_client).handle_request(&method, &path, body, user_info).await
-                } else {
-                    warn!("好友服务客户端不可用");
-                    Ok(error_response(&format!("服务暂时不可用: {}","friend"),  StatusCode::SERVICE_UNAVAILABLE))
-                }
+                let Some(friend_client) = self.get_friend_client(false).await else {
+                    return Err(GatewayError::unavailable("好友服务客户端未就绪"));
+                };
+                FriendServiceHandler::new(friend_client)
+                    .handle_request(&method, &path, body, user_info)
+                    .await
             }
             ServiceType::Group => {
-                if let Some(group_client) = self.get_group_client().await {
-                    GroupServiceHandler::new(group_client).handle_request(&method, &path, body, user_info).await
-                } else {
-                    warn!("群组服务客户端不可用");
-                    Ok(error_response(&format!("服务暂时不可用: {}", "group"), StatusCode::SERVICE_UNAVAILABLE))
-                }
+                let Some(group_client) = self.get_group_client(false).await else {
+                    return Err(GatewayError::unavailable("群组服务客户端未就绪"));
+                };
+                GroupServiceHandler::new(group_client)
+                    .handle_request(&method, &path, body, user_info)
+                    .await
             }
             ServiceType::Common => {
-                // 通用服务需要多个客户端
-                let user_client = self.get_user_client().await;
-                let friend_client = self.get_friend_client().await;
-                let group_client = self.get_group_client().await;
+                // 通用服务只用到好友与群组两个客户端
+                let (friend_client, group_client) = tokio::join!(
+                    self.get_friend_client(false),
+                    self.get_group_client(false),
+                );
 
-                if let (Some(user_client), Some(friend_client), Some(group_client)) = 
-                    (user_client, friend_client, group_client) {
-                    CommonServiceHandler::new(user_client, friend_client, group_client)
-                        .handle_request(&method, &path, body, user_info).await
-                } else {
-                    warn!("通用服务所需的客户端不完整");
-                    Ok(error_response(&format!("通用服务所需的客户端不完整: {}", "common"), StatusCode::SERVICE_UNAVAILABLE))
-                }
+                let (Some(friend_client), Some(group_client)) = (friend_client, group_client)
+                else {
+                    return Err(GatewayError::unavailable("通用服务所需的下游客户端不完整"));
+                };
+                CommonServiceHandler::new(friend_client, group_client)
+                    .handle_request(&method, &path, body, user_info)
+                    .await
             }
             ServiceType::Chat => {
-                if let Some(chat_client) = self.get_chat_client().await {
-                    ChatServiceHandler::new(chat_client).handle_request(&method, &path, body, user_info).await
-                } else {
-                    warn!("聊天服务客户端不可用");
-                    Ok(error_response(&format!("服务暂时不可用: {}", "chat"), StatusCode::SERVICE_UNAVAILABLE))
-                }
+                let Some(chat_client) = self.get_chat_client(false).await else {
+                    return Err(GatewayError::unavailable("聊天服务客户端未就绪"));
+                };
+                ChatServiceHandler::new(chat_client)
+                    .handle_request(&method, &path, body, user_info)
+                    .await
             }
-            _ => {
-                Ok(error_response("无效的服务类型", StatusCode::BAD_REQUEST))
-            }
+            _ => Err(GatewayError::bad_request("无效的服务类型")),
         }
     }
 }
+
+use std::future::Future;

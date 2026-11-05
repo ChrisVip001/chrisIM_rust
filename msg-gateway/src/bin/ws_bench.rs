@@ -206,7 +206,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             break;
                         }
                         Ok(Message::Ping(data)) => {
-                            // 服务端心跳 Ping 必须回 Pong，否则连续 missed 次会被判死链
+                            // 服务端心跳 Ping 必须回 Pong，否则未回次数超过 heartbeat_max_missed
+                            // 会被判死链（默认第 3 个周期，约 90s）
                             let _ = pong_tx.send(Message::Pong(data)).await;
                         }
                         Ok(_) => {

@@ -1,9 +1,9 @@
-use super::common::{error_response, extract_i64_param, extract_string_array_param, get_optional_string_array,extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
-use axum::{body::Body, http::{Method, Response, StatusCode}};
+use super::common::{extract_i64_param, extract_string_array_param, get_optional_string_array,extract_string_param, get_i64_param, get_optional_string, get_platform_from_jwt, get_user_id_from_jwt, success_response};
+use crate::error::GatewayError;
+use crate::proxy::grpc_clients::ChatServiceGrpcClient;
+use axum::{body::Body, http::{Method, Response}};
 use chrono::Utc;
-use contract::proto::message::chat_service_client::ChatServiceClient;
-use contract::proto::message::{ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest, GetDbMessagesRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, MsgType, RevokeMessageRequest, SendMsgRequest, GetConversationsResponse};
-use runtime::service_discovery::LbWithServiceDiscovery;
+use contract::proto::message::{ContentType, DeleteMessagesRequest, ForwardMessageRequest, GetConversationsRequest, GetDbMessagesRequest, MarkMessagesAsReadRequest, MarkConversationAsReadRequest, Msg, RevokeMessageRequest, SendMsgRequest};
 use serde_json::Value;
 use tracing::{debug, error};
 use runtime::auth::Claims;
@@ -11,12 +11,12 @@ use runtime::auth::Claims;
 /// 聊天服务处理器
 #[derive(Clone)]
 pub struct ChatServiceHandler {
-    client: ChatServiceClient<LbWithServiceDiscovery>,
+    client: ChatServiceGrpcClient,
 }
 
 impl ChatServiceHandler {
     /// 创建新的聊天服务处理器
-    pub fn new(client: ChatServiceClient<LbWithServiceDiscovery>) -> Self {
+    pub fn new(client: ChatServiceGrpcClient) -> Self {
         Self { client }
     }
 
@@ -27,7 +27,7 @@ impl ChatServiceHandler {
         path: &str,
         body: Value,
         jwt_user_info: Option<Claims>,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("处理聊天服务请求: {} {}", method, path);
 
         // 从JWT中获取用户ID
@@ -72,10 +72,9 @@ impl ChatServiceHandler {
 
             _ => {
                 error!("不支持的聊天服务方法: {} {}", method, method_name);
-                Ok(error_response(
-                    &format!("不支持的方法: {}", method_name),
-                    StatusCode::NOT_FOUND,
-                ))
+                Err(GatewayError::not_found(format!(
+                    "聊天服务不支持的接口: {method_name}"
+                )))
             }
         }
     }
@@ -87,7 +86,7 @@ impl ChatServiceHandler {
         sender_id: &str,
         body: Value,
         platform: i32,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("发送消息请求: {}", body);
 
         // 提取消息类型
@@ -105,14 +104,11 @@ impl ChatServiceHandler {
         let nickname = get_optional_string(&body, "nickname", Some("nickname"));
 
         if content.trim().is_empty() {
-            return Ok(error_response("消息内容不能为空", StatusCode::BAD_REQUEST));
+            return Err(GatewayError::bad_request("消息内容不能为空").into());
         }
 
         if content.len() > 2048 {
-            return Ok(error_response(
-                "消息内容不能超过2048字符",
-                StatusCode::BAD_REQUEST,
-            ));
+            return Err(GatewayError::bad_request("消息内容不能超过2048字符").into());
         }
 
         // 解析内容类型
@@ -149,13 +145,10 @@ impl ChatServiceHandler {
         let request = SendMsgRequest { message: Some(msg) };
 
         match self.client.send_msg(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok(success_response(response)),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
-                Ok(error_response(
-                    &format!("消息发送失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
+                Err(err.into())
             }
         }
     }
@@ -166,23 +159,20 @@ impl ChatServiceHandler {
         &mut self,
         user_id: &str,
         body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("标记消息已读请求: {}", body);
 
         // 提取消息序列号列表
         let msg_seqs = body
             .get("msgSeqs")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow::anyhow!("msgSeqs参数是必需的"))?
+            .ok_or_else(|| GatewayError::bad_request("msgSeqs 参数格式错误"))?
             .iter()
             .filter_map(|v| v.as_i64())
             .collect::<Vec<i64>>();
 
         if msg_seqs.is_empty() {
-            return Ok(error_response(
-                "消息序列号列表不能为空",
-                StatusCode::BAD_REQUEST,
-            ));
+            return Err(GatewayError::bad_request("消息序列号列表不能为空").into());
         }
 
         // 读扩散下必须带会话ID，游标按会话推进
@@ -200,13 +190,10 @@ impl ChatServiceHandler {
         };
 
         match self.client.mark_messages_as_read(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok(success_response(response)),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
-                Ok(error_response(
-                    &format!("标记消息已读失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
+                Err(err.into())
             }
         }
     }
@@ -216,7 +203,7 @@ impl ChatServiceHandler {
         &mut self,
         user_id: &str,
         body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("标记会话已读请求: {}", body);
 
         // 提取参数
@@ -228,7 +215,7 @@ impl ChatServiceHandler {
 
         // 验证参数
         if conversation_id.is_empty() {
-            return Ok(error_response("会话ID不能为空", StatusCode::BAD_REQUEST));
+            return Err(GatewayError::bad_request("会话ID不能为空").into());
         }
 
         // 调用msg-server的gRPC接口标记会话已读
@@ -239,13 +226,10 @@ impl ChatServiceHandler {
         };
 
         match self.client.mark_conversation_as_read(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok(success_response(response)),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
-                Ok(error_response(
-                    &format!("标记会话已读失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
+                Err(err.into())
             }
         }
     }
@@ -256,7 +240,7 @@ impl ChatServiceHandler {
         &mut self,
         user_id: &str,
         body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("获取消息历史请求: {}", body);
 
         // 提取必需参数
@@ -269,15 +253,15 @@ impl ChatServiceHandler {
         let seq_end = extract_i64_param(&body, "seqEnd", Some("seq_end"))?;
 
         if send_seq_start < 0 || send_seq_end < 0 || seq_start < 0 || seq_end < 0 {
-            return Ok(error_response("序列号不能为负数", StatusCode::BAD_REQUEST));
+            return Err(GatewayError::bad_request("序列号不能为负数").into());
         }
 
         if send_seq_end > 0 && send_seq_end < send_seq_start {
-            return Ok(error_response("发送序列号结束值不能小于起始值", StatusCode::BAD_REQUEST));
+            return Err(GatewayError::bad_request("发送序列号结束值不能小于起始值").into());
         }
 
         if seq_end > 0 && seq_end < seq_start {
-            return Ok(error_response("接收序列号结束值不能小于起始值", StatusCode::BAD_REQUEST));
+            return Err(GatewayError::bad_request("接收序列号结束值不能小于起始值").into());
         }
 
         debug!("序列号范围: send_seq: {}-{}, seq: {}-{}", 
@@ -294,13 +278,10 @@ impl ChatServiceHandler {
         };
 
         match self.client.get_message_history(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok(success_response(response)),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
-                Ok(error_response(
-                    &format!("获取消息历史失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
+                Err(err.into())
             }
         }
     }
@@ -310,7 +291,7 @@ impl ChatServiceHandler {
         &mut self,
         user_id: &str,
         body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("获取会话列表请求，用户ID: {}", user_id);
 
         // 获取离线同步参数
@@ -360,13 +341,10 @@ impl ChatServiceHandler {
         };
 
         match self.client.get_conversations(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok(success_response(response)),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
-                Ok(error_response(
-                    &format!("获取会话列表失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
+                Err(err.into())
             }
         }
     }
@@ -376,7 +354,7 @@ impl ChatServiceHandler {
         &mut self,
         user_id: &str,
         body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("撤回消息请求: {}", body);
 
         // 提取消息ID
@@ -396,13 +374,10 @@ impl ChatServiceHandler {
         };
 
         match self.client.revoke_message(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok(success_response(response)),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
-                Ok(error_response(
-                    &format!("撤回消息失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
+                Err(err.into())
             }
         }
     }
@@ -412,7 +387,7 @@ impl ChatServiceHandler {
         &mut self,
         user_id: &str,
         body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("删除消息请求: {}", body);
 
         // 提取消息ID列表或序列号列表
@@ -426,10 +401,7 @@ impl ChatServiceHandler {
 
         // 验证参数
         if message_ids.is_empty() && message_seqs.is_empty() {
-            return Ok(error_response(
-                "必须提供消息ID或消息序列号",
-                StatusCode::BAD_REQUEST,
-            ));
+            return Err(GatewayError::bad_request("必须提供消息ID或消息序列号").into());
         }
 
         let conversation_id = body
@@ -447,13 +419,10 @@ impl ChatServiceHandler {
         };
 
         match self.client.delete_messages(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
+            Ok(response) => Ok(success_response(response)),
             Err(err) => {
                 error!("调用聊天服务失败: {}", err);
-                Ok(error_response(
-                    &format!("删除消息失败: {}", err),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                ))
+                Err(err.into())
             }
         }
     }
@@ -463,7 +432,7 @@ impl ChatServiceHandler {
         &mut self,
         user_id: &str,
         body: Value,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("转发消息请求: {}", body);
 
         // 解析请求参数
@@ -474,11 +443,11 @@ impl ChatServiceHandler {
 
         // 验证参数
         if message_ids.is_empty() {
-            return Ok(error_response("原始消息ID不能为空", StatusCode::BAD_REQUEST));
+            return Err(GatewayError::bad_request("原始消息ID不能为空").into());
         }
 
         if target_user_ids.is_none() && target_group_ids.is_none() {
-            return Ok(error_response("必须指定转发目标", StatusCode::BAD_REQUEST));
+            return Err(GatewayError::bad_request("必须指定转发目标").into());
         }
         let target_user_ids= target_user_ids.unwrap_or_default();
         let target_group_ids= target_group_ids.unwrap_or_default();
@@ -501,10 +470,10 @@ impl ChatServiceHandler {
 
         // 调用msg-server
         match self.client.forward_message(request).await {
-            Ok(response) => Ok(success_response(response.into_inner(), StatusCode::OK)),
-            Err(e) => {
-                error!("转发消息失败: {}", e);
-                Ok(error_response("转发消息失败", StatusCode::INTERNAL_SERVER_ERROR))
+            Ok(response) => Ok(success_response(response)),
+            Err(err) => {
+                error!("转发消息失败: {}", err);
+                Err(err.into())
             }
         }
     }

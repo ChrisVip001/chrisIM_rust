@@ -1,4 +1,4 @@
-use axum::{http::HeaderValue, Router};
+use axum::{http::{HeaderValue, StatusCode}, Router};
 use axum_server::Handle;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -6,18 +6,16 @@ use tower_http::{
     cors::CorsLayer,
     limit::RequestBodyLimitLayer,
     timeout::TimeoutLayer,
-    trace::TraceLayer,
 };
 use tracing::{error, info};
 
 use runtime::config::AppConfig;
 use std::sync::Arc;
-use cache::SessionCache;
-use crate::api_utils::ip_region::ip_location::init_ip_location;
 
 mod api_utils;
 mod auth;
 mod circuit_breaker;
+mod error;
 mod metrics;
 mod middleware;
 mod proxy;
@@ -35,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
 
     
     let app_config = AppConfig::from_file(Some(&config_path))?;
-    // 先用同一份配置构造局部 Arc，main 里不再回读全局单例
+    // 用同一份配置构造 Arc，后续各组件共享这一个实例
     let config = std::sync::Arc::new(app_config.clone());
 
     // 初始化日志和链路追踪
@@ -49,11 +47,6 @@ async fn main() -> anyhow::Result<()> {
 
     info!("正在启动API网关服务...");
 
-    // 初始化IP地理位置服务
-    if let Err(e) = init_ip_location((&config.database.xdb).as_ref()) {
-        error!("IP地理位置服务初始化失败: {}", e);
-    }
-
     // 初始化缓存
     let cache_instance: Arc<cache::RedisCache> = cache::cache(&config).await;
     info!("缓存服务初始化完成");
@@ -64,17 +57,21 @@ async fn main() -> anyhow::Result<()> {
     // 构建应用
     let app = build_app(config.clone(), cache_instance).await?;
 
-    // 启动服务器
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
-    info!("API网关监听: http://{}:{}", config.server.host, config.server.port);
+    // 启动服务器：监听地址取自配置的 server.host + server.port
+    let listen_host = config
+        .server
+        .host
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .filter(|ip| !ip.is_unspecified())
+        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+    let addr = SocketAddr::new(listen_host, config.server.port);
+    info!("API网关监听: http://{}", addr);
 
-    // 启动服务器
     let handle = Handle::new();
 
     // 优雅停机：信号到达后调用 handle.graceful_shutdown，
     // 服务器停止接受新连接，并等待存量请求排空（最多 30s）。
-    // 此前信号任务发出的 oneshot 无人消费，handle 从未被调用，
-    // 进程退出时会硬断所有在途请求。
     let shutdown_handle = handle.clone();
     let shutdown_task = tokio::spawn(async move {
         runtime::shutdown::wait_for_shutdown_signal().await;
@@ -82,19 +79,26 @@ async fn main() -> anyhow::Result<()> {
         shutdown_handle.graceful_shutdown(Some(Duration::from_secs(30)));
     });
 
-    if let Err(err) = axum_server::bind(addr)
+    // serve 返回 = 服务结束（正常停机或端口占用等错误）；
+    // 出错时以非 0 退出码结束，交由编排层感知。
+    let serve_result = axum_server::bind(addr)
         .handle(handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-    {
-        error!("服务器错误: {}", err);
+        .await;
+
+    // 只会命中「serve 提前失败」：正常情况下停机任务已经跑完
+    if !shutdown_task.is_finished() {
+        shutdown_task.abort();
     }
 
-    // 等待优雅停机任务收尾
-    shutdown_task.await?;
     runtime::logging::shutdown_telemetry();
-    info!("API网关服务已关闭");
 
+    if let Err(err) = serve_result {
+        error!("服务器错误: {}", err);
+        return Err(err.into());
+    }
+
+    info!("API网关服务已关闭");
     Ok(())
 }
 
@@ -102,45 +106,69 @@ async fn main() -> anyhow::Result<()> {
 async fn build_app(config: std::sync::Arc<AppConfig>, cache_instance: std::sync::Arc<cache::RedisCache>) -> anyhow::Result<Router> {
     // 创建服务代理
     let service_proxy = proxy::ServiceProxy::new(config.clone()).await;
-    
+
     // 构建路由
     let router = router::build_routes(service_proxy, config.clone(), cache_instance).await?;
-    
-    // 配置中间件栈
-    // 限流/熔断从 gateway 配置读取并挂载到全局中间件栈
-    let rate_limit_layer = rate_limit::RateLimitLayer::new(&config.gateway.rate_limit);
+
+    // 中间件栈（`layer` 自下而上包裹：越靠后越外层）
+    //
+    // 顺序（外 → 内）：
+    //   CORS → 体积限制 → 超时 → 访问日志 → 指标 → 限流 → 熔断 → 路由
+    //
+    // 日志与指标放在限流/超时之外，429、413、408 与熔断短路响应也会被记录。
+    let trusted_proxies = config.gateway.auth.trusted_proxies.clone();
+    let rate_limit_layer =
+        rate_limit::RateLimitLayer::new(&config.gateway.rate_limit, trusted_proxies.clone());
+
     Ok(router
-        .layer(TraceLayer::new_for_http())
-        .layer(middleware::RequestLoggerLayer)
-        .layer(metrics::MetricsLayer)
         .layer(circuit_breaker::CircuitBreakerLayer::new(config.clone()))
         .layer(rate_limit_layer)
-        .layer(build_cors_layer())
-        .layer(TimeoutLayer::new(Duration::from_secs(30)))
-        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)))
+        .layer(metrics::MetricsLayer)
+        .layer(middleware::RequestLoggerLayer::new(trusted_proxies))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ))
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
+        .layer(build_cors_layer(&config)))
 }
 
 /// 构建CORS层
-fn build_cors_layer() -> CorsLayer {
+///
+/// 来源由 `gateway.cors.allowed_origins` 决定；debug 构建额外放行本地开发端口，
+/// release 构建不再把 IDE/开发端口带进生产。
+fn build_cors_layer(config: &AppConfig) -> CorsLayer {
+    let mut origins: Vec<HeaderValue> = config
+        .gateway
+        .cors
+        .allowed_origins
+        .iter()
+        .filter_map(|o| match o.parse::<HeaderValue>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                error!("忽略非法的 CORS 来源配置: {}", o);
+                None
+            }
+        })
+        .collect();
+
+    if cfg!(debug_assertions) {
+        for dev in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+        ] {
+            if let Ok(v) = dev.parse::<HeaderValue>() {
+                origins.push(v);
+            }
+        }
+    }
+
     CorsLayer::new()
-        .allow_origin([
-            "http://localhost:3000".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
-            "http://localhost:5173".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
-            // 添加更多开发端口支持
-            "http://localhost:63342".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:63342".parse::<HeaderValue>().unwrap(),
-            "http://localhost:8080".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
-            "http://localhost:8081".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:8081".parse::<HeaderValue>().unwrap(),
-            // 常见的开发端口
-            "http://localhost:3001".parse::<HeaderValue>().unwrap(),
-            "http://localhost:3002".parse::<HeaderValue>().unwrap(),
-            "http://localhost:8000".parse::<HeaderValue>().unwrap(),
-            "http://localhost:9000".parse::<HeaderValue>().unwrap(),
-        ])
+        .allow_origin(origins)
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
@@ -161,6 +189,6 @@ fn build_cors_layer() -> CorsLayer {
             // 添加自定义的system-type请求头
             axum::http::HeaderName::from_static("system-type"),
         ])
-        .allow_credentials(true)
+        .allow_credentials(config.gateway.cors.allow_credentials)
         .max_age(Duration::from_secs(3600))
 }

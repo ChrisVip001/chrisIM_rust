@@ -1,8 +1,9 @@
-use anyhow::Result;
+// 统一错误类型：保留 tonic::Status，由上层按 gRPC 码映射 HTTP 状态
+type Result<T> = std::result::Result<T, tonic::Status>;
 use tonic::Request;
 
 use contract::proto::user::user_service_client::UserServiceClient;
-use contract::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, VerifyPasswordRequest, VerifyPasswordResponse, SearchUsersRequest, SearchUsersResponse, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, GetEnhancedUserByIdRequest};
+use contract::proto::user::{CreateUserRequest, GetUserByIdRequest, GetUserByUsernameRequest, UpdateUserRequest, UserResponse, ForgetPasswordRequest, RegisterRequest, UserConfigRequest, UserConfigResponse, PhoneVerificationRequest, PhoneVerificationResponse, VerifyPhoneCodeRequest, VerifyPhoneCodeResponse, DeactivateUserRequest, DeactivateUserResponse, UpdatePhoneRequest, UpdatePhoneResponse, CaptchaImageRequest, CaptchaImageResponse, EnhancedUserResponse, GetEnhancedUserByIdRequest};
 use runtime::service_discovery::LbWithServiceDiscovery;
 
 /// 用户服务gRPC客户端
@@ -53,33 +54,6 @@ impl UserServiceGrpcClient {
         let response = self.service_client.update_user(Request::new(request)).await?;
         Ok(response.into_inner())
     }
-
-    /// 验证用户密码
-    pub async fn verify_password(&mut self, request: VerifyPasswordRequest) -> Result<VerifyPasswordResponse> {
-
-        let response = self.service_client.verify_password(Request::new(request)).await?;
-        Ok(response.into_inner())
-    }
-
-    /// 验证手机号登录
-    pub async fn verify_phone_code_login(&mut self, request: VerifyPhoneCodeRequest) -> Result<VerifyPasswordResponse> {
-
-        let response = self.service_client.verify_phone_code_login(Request::new(request)).await?;
-        Ok(response.into_inner())
-    }
-    /// 搜索用户
-    pub async fn search_users(&mut self, query: &str, page: i32, page_size: i32) -> Result<SearchUsersResponse> {
-
-        let request = Request::new(SearchUsersRequest {
-            query: query.to_string(),
-            page,
-            page_size,
-        });
-
-        let response = self.service_client.search_users(request).await?;
-        Ok(response.into_inner())
-    }
-
     /// 用户账号密码注册
     pub async fn register_by_username(&mut self, request: RegisterRequest) -> Result<UserResponse> {
 

@@ -383,3 +383,71 @@ async fn batch_write_spans_conversations() {
         conv_a, conv_b
     );
 }
+
+#[tokio::test]
+#[ignore = "需要本地 PostgreSQL 与 Redis"]
+async fn batch_with_dirty_entry_does_not_block_others() {
+    // 同批混入 server_id 为空的消息：不能因为唯一约束冲突让整批回滚。
+    // 这条用例守的是 ON CONFLICT 不带 target 的兜底行为（主键 + server_id 唯一索引全覆盖）。
+    let config = load_config();
+    let cache = cache::cache(&config).await;
+    let repo = Arc::new(
+        ReadSpreadRepo::from_config(&config)
+            .await
+            .expect("建表检查失败，请先执行 docs/sql/init.sql"),
+    );
+    let writer = MessageWriter::new(
+        repo.clone(),
+        cache,
+        config.message_storage.inline_content_max_bytes,
+    );
+
+    let suffix = unique_suffix();
+    let group_id = format!("g_dirty_{}", suffix);
+    let conversation_id = group_conversation_id(&group_id);
+    let members: Vec<String> = ["u1", "u2"].iter().map(|s| s.to_string()).collect();
+
+    let good = Msg {
+        server_id: format!("good_{}", suffix),
+        send_id: "u1".into(),
+        receiver_id: group_id.clone(),
+        group_id: group_id.clone(),
+        msg_type: MsgType::GroupMsg as i32,
+        content: b"ok".to_vec(),
+        send_time: 1_700_000_000_000,
+        ..Default::default()
+    };
+    // 故意构造脏数据：server_id 为空（无法作为幂等键，且空串之间会互相冲突）
+    let dirty = Msg {
+        server_id: String::new(),
+        send_time: 1_700_000_001_000,
+        ..good.clone()
+    };
+
+    let saved = writer
+        .save_batch_multi(vec![
+            (good.clone(), members.clone()),
+            (dirty, members.clone()),
+        ])
+        .await
+        .expect("含脏消息的整批不应失败（否则一条坏数据会连坐同批所有会话）");
+
+    // 返回的是 (conversation_id, seq, inserted)
+    assert_eq!(saved.len(), 2, "整批两条都应写入，而不是因脏数据回滚: {saved:?}");
+    assert!(
+        saved.iter().all(|(_, _, inserted)| *inserted),
+        "两条都应标记为新写入: {saved:?}"
+    );
+
+    let fetched = repo
+        .meta
+        .fetch_after(&conversation_id, 0, 50)
+        .await
+        .expect("拉取失败");
+    assert!(
+        fetched.iter().any(|m| m.server_id == good.server_id),
+        "正常消息应可被读出"
+    );
+
+    println!("脏消息不连坐通过: {} 条正常消息已落库", saved.len());
+}

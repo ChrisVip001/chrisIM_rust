@@ -1,13 +1,10 @@
 #!/bin/bash
 # 端到端压测的可重复执行入口
 #
-# 为什么需要这层包装：满载复测时最容易把「环境漂移」误判成「代码退化」。
-# 常见污染源有三个，脚本按顺序清理，被测进程只看到干净状态：
-#
-# 1. 上一轮没退干净的压测进程仍在打流量；
-# 2. 上一轮留在 Kafka 里的积压，会把 P99 拉到分钟级；
-# 3. 令牌与 JWT 密钥不一致（服务端带着 JWT_SECRET 启动，
-#    压测端没带），表现为全部 401，而不是性能问题。
+# 开测前按顺序做三件事：
+# 1. 终止上一轮残留的 e2e_bench 进程；
+# 2. 轮询 Kafka 消费组 lag，等到归零再开始计时；
+# 3. 校验 JWT_SECRET 是否与待测服务一致（不一致时全部返回 401）。
 #
 # 用法：
 #   tests/perf/e2e.sh [rate] [pairs] [duration] [settle]
@@ -33,14 +30,14 @@ if [ ! -x "$BENCH" ]; then
   exit 1
 fi
 
-# 1. 清理残留压测进程：两个压测同时跑时，CPU 争抢会让吞吐砍半
+# 1. 终止残留的压测进程
 if pgrep -f e2e_bench >/dev/null 2>&1; then
   log "发现残留压测进程，先终止"
   pkill -f e2e_bench
   sleep 2
 fi
 
-# 2. 等积压排空：积压存在时测到的是「排空速度」，不是稳态延迟
+# 2. 等 Kafka 积压排空（消费组 lag 归零）
 lag_total() {
   docker exec "$KAFKA_CONTAINER" kafka-consumer-groups \
     --bootstrap-server localhost:9092 --describe --group "$GROUP" 2>/dev/null |
@@ -55,7 +52,7 @@ for _ in $(seq 1 30); do
 done
 log "起始 lag=$lag"
 
-# 3. 令牌密钥必须与服务端一致，否则整轮测量只会得到 401
+# 3. 密钥与服务端不一致时告警（整轮将只得到 401）
 if [ -z "${JWT_SECRET:-}" ]; then
   log "警告：未设置 JWT_SECRET。若服务端以 JWT_SECRET 启动，本轮将全部返回 401"
 fi
@@ -66,7 +63,7 @@ JWT_SECRET=${JWT_SECRET:-} "$BENCH" --mode e2e \
 status=$?
 log "耗时 $(($(date +%s) - started))s，退出码 $status"
 
-# 分段耗时只有在被测进程以 IM_STAGE_PROFILE=1 启动时才有内容
+# 输出最近 3 个窗口的服务端分段耗时（需 msg-server 以 IM_STAGE_PROFILE=1 启动）
 if [ -f "$STAGE_LOG" ] && grep -q '分段耗时' "$STAGE_LOG" 2>/dev/null; then
   log "最近 3 个窗口的服务端分段耗时："
   grep -o '"message":"分段耗时[^"]*"' "$STAGE_LOG" | tail -3

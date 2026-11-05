@@ -1,14 +1,15 @@
 use axum::{
     body::Body,
-    http::{Method, Response, StatusCode},
+    http::{Method, Response},
 };
 use crate::proxy::grpc_clients::FriendServiceGrpcClient;
 use contract::proto;
 use serde_json::{json, Value};
 use tracing::{error, debug};
 use runtime::auth::Claims;
-use super::common::{success_response, error_response, extract_string_param, timestamp_to_datetime_string,
+use super::common::{success_response, extract_string_param, timestamp_to_datetime_string,
                     get_i64_param, get_optional_string, get_user_id_from_jwt};
+use crate::error::GatewayError;
 
 /// 好友服务处理器
 #[derive(Clone)]
@@ -29,7 +30,7 @@ impl FriendServiceHandler {
         path: &str,
         body: Value,
         jwt_user_info: Option<Claims>,
-    ) -> Result<Response<Body>, anyhow::Error> {
+    ) -> Result<Response<Body>, GatewayError> {
         debug!("处理好友服务请求: {} {}", method, path);
 
         // 从JWT中获取用户ID
@@ -46,13 +47,13 @@ impl FriendServiceHandler {
                 
                 // 校验是否尝试添加自己为好友
                 if friend_id == current_user_id {
-                    return Ok(error_response("不能添加自己为好友", StatusCode::BAD_REQUEST));
+                    return Err(GatewayError::bad_request("不能添加自己为好友").into());
                 }
                 
                 let response = self.client.send_friend_request(&current_user_id, &friend_id, &message).await?;
-                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
+                let friendship = response.friendship.ok_or_else(|| GatewayError::upstream("下游返回的好友关系数据为空"))?;
 
-                Ok(success_response(self.convert_friendship_to_json(&friendship, &current_user_id), StatusCode::OK))
+                Ok(success_response(self.convert_friendship_to_json(&friendship, &current_user_id)))
             }
 
             // 接受好友请求
@@ -60,9 +61,9 @@ impl FriendServiceHandler {
                 let request_id = extract_string_param(&body, "requestId", Some("request_id"))?;
 
                 let response = self.client.accept_friend_request(&current_user_id, &request_id).await?;
-                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
+                let friendship = response.friendship.ok_or_else(|| GatewayError::upstream("下游返回的好友关系数据为空"))?;
 
-                Ok(success_response(self.convert_friendship_to_json(&friendship, &current_user_id), StatusCode::OK))
+                Ok(success_response(self.convert_friendship_to_json(&friendship, &current_user_id)))
             }
 
             // 拒绝好友请求
@@ -71,9 +72,9 @@ impl FriendServiceHandler {
                 let request_id = get_optional_string(&body, "requestId", Some("request_id")).unwrap_or_default();
 
                 let response = self.client.reject_friend_request(&current_user_id, &reason, &request_id).await?;
-                let friendship = response.friendship.ok_or_else(|| anyhow::anyhow!("好友关系数据为空"))?;
+                let friendship = response.friendship.ok_or_else(|| GatewayError::upstream("下游返回的好友关系数据为空"))?;
 
-                Ok(success_response(self.convert_friendship_to_json(&friendship, &current_user_id), StatusCode::OK))
+                Ok(success_response(self.convert_friendship_to_json(&friendship, &current_user_id)))
             }
 
             // 获取好友列表 (废弃)
@@ -98,7 +99,7 @@ impl FriendServiceHandler {
                 Ok(success_response(json!({
                     "friends": friends,
                     "total": response.total
-                }), StatusCode::OK))
+                })))
             }
 
             // 获取好友请求列表
@@ -114,7 +115,7 @@ impl FriendServiceHandler {
                 Ok(success_response(json!({
                     "requests": requests,
                     "total": response.total
-                }), StatusCode::OK))
+                })))
             }
             
             // 获取待处理的好友请求数量
@@ -123,7 +124,7 @@ impl FriendServiceHandler {
                 
                 Ok(success_response(json!({
                     "count": response.count
-                }), StatusCode::OK))
+                })))
             }
 
             // 获取好友列表（包含详细信息）
@@ -136,7 +137,7 @@ impl FriendServiceHandler {
                     .map(|f| self.convert_detailed_friend_to_json(f))
                     .collect::<Vec<_>>();
 
-                Ok(success_response(json!({"friends": detailed_friends}), StatusCode::OK))
+                Ok(success_response(json!({"friends": detailed_friends})))
             }
 
             // 删除好友
@@ -145,7 +146,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.delete_friend(&current_user_id, &friend_id).await?;
 
-                Ok(success_response(response.success, StatusCode::OK))
+                Ok(success_response(response.success))
             }
 
             // 检查好友关系
@@ -166,8 +167,7 @@ impl FriendServiceHandler {
                     json!({
                         "status": response.status,
                         "statusText": status_text
-                    }),
-                    StatusCode::OK
+                    })
                 ))
             }
 
@@ -180,14 +180,14 @@ impl FriendServiceHandler {
                 let response = self.client.block_user(&current_user_id, &blocked_user_id, reason.as_deref()).await?;
                 
                 // 获取并返回黑名单记录
-                let blacklist = response.blacklist.ok_or_else(|| anyhow::anyhow!("黑名单记录为空"))?;
+                let blacklist = response.blacklist.ok_or_else(|| GatewayError::upstream("下游返回的黑名单记录为空"))?;
                 
                 let result = json!({
                     "success": true,
                     "blacklist": self.convert_blacklist_to_json(&blacklist)
                 });
 
-                Ok(success_response(result, StatusCode::OK))
+                Ok(success_response(result))
             }
 
             // 解除拉黑
@@ -196,7 +196,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.unblock_user(&current_user_id, &blocked_user_id).await?;
 
-                Ok(success_response(response.success, StatusCode::OK))
+                Ok(success_response(response.success))
             }
             
             // 获取黑名单列表
@@ -209,7 +209,7 @@ impl FriendServiceHandler {
                 
                 Ok(success_response(json!({
                     "blacklist": blacklist_items
-                }), StatusCode::OK))
+                })))
             }
 
             // 创建或更新好友分组
@@ -225,12 +225,12 @@ impl FriendServiceHandler {
                     sort_order
                 ).await?;
 
-                let group = response.group.ok_or_else(|| anyhow::anyhow!("分组数据为空"))?;
+                let group = response.group.ok_or_else(|| GatewayError::upstream("下游返回的分组数据为空"))?;
                 let result = json!({
                     "group": self.convert_friend_group_to_json(&group)
                 });
 
-                Ok(success_response(result, StatusCode::OK))
+                Ok(success_response(result))
             }
 
             // 删除好友分组
@@ -239,7 +239,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.delete_friend_group(&id, &current_user_id).await?;
 
-                Ok(success_response(response.success, StatusCode::OK))
+                Ok(success_response(response.success))
             }
 
             // 获取好友分组列表
@@ -247,7 +247,7 @@ impl FriendServiceHandler {
                 let response = self.client.get_friend_groups(&current_user_id).await?;
                 let groups = response.groups.iter().map(|g| self.convert_friend_group_to_json(g)).collect::<Vec<_>>();
 
-                Ok(success_response(json!({"groups": groups}), StatusCode::OK))
+                Ok(success_response(json!({"groups": groups})))
             }
 
             // 获取分组好友列表
@@ -260,7 +260,7 @@ impl FriendServiceHandler {
                 Ok(success_response(json!({
                     "friends": friends,
                     "total": response.total
-                }), StatusCode::OK))
+                })))
             }
             
             // 添加好友到分组
@@ -270,7 +270,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.add_friend_to_group(&current_user_id, &group_id, &friend_id).await?;
 
-                Ok(success_response(response.success, StatusCode::OK))
+                Ok(success_response(response.success))
             }
             
             // 从分组中移除好友
@@ -280,7 +280,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.remove_friend_from_group(&current_user_id, &group_id, &friend_id).await?;
 
-                Ok(success_response(response.success, StatusCode::OK))
+                Ok(success_response(response.success))
             }
             
             // 搜索潜在好友（通过custom_id或手机号精确搜索）
@@ -296,14 +296,14 @@ impl FriendServiceHandler {
                     Err(e) => {
                         error!("搜索潜在好友失败: {}", e);
                         // 返回空数组，而不是错误
-                        return Ok(success_response(json!([]), StatusCode::OK));
+                        return Ok(success_response(json!([])));
                     }
                 };
                 
                 let users = response.users.iter().map(|u| self.convert_potential_friend_to_json(u)).collect::<Vec<_>>();
                 
                 // 直接返回用户数组，不用对象包裹
-                Ok(success_response(json!({"users": users}), StatusCode::OK))
+                Ok(success_response(json!({"users": users})))
             }
 
             // 设置好友星标状态
@@ -313,7 +313,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.toggle_friend_star(&current_user_id, &friend_id, is_starred).await?;
 
-                Ok(success_response(response.success, StatusCode::OK))
+                Ok(success_response(response.success))
             }
 
             // 设置好友置顶状态
@@ -323,7 +323,7 @@ impl FriendServiceHandler {
 
                 let response = self.client.toggle_friend_top(&current_user_id, &friend_id, is_top).await?;
 
-                Ok(success_response(response.success, StatusCode::OK))
+                Ok(success_response(response.success))
             }
 
             // 更新好友备注
@@ -338,18 +338,17 @@ impl FriendServiceHandler {
                 if let Some(friend) = response.friend {
                     Ok(success_response(
                         json!({"success": response.success,
-                            "friend":self.convert_detailed_friend_to_json(&friend)}),
-                        StatusCode::OK
+                            "friend":self.convert_detailed_friend_to_json(&friend)})
                     ))
                 } else {
-                    Ok(success_response(response.success, StatusCode::OK))
+                    Ok(success_response(response.success))
                 }
             }
 
             // 其他未实现的方法
             _ => {
                 error!("好友服务不支持的方法: {} {}", method, method_name);
-                Err(anyhow::anyhow!("好友服务不支持的方法: {}", method_name))
+                Err(GatewayError::not_found(format!("好友服务不支持的接口: {method_name}")))
             }
         }
     }

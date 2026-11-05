@@ -15,6 +15,7 @@ use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use metrics::counter;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -423,6 +424,7 @@ impl WsServer {
                 } else {
                     let missed = ping_missed.fetch_add(1, Ordering::Relaxed) + 1;
                     if missed > max_missed {
+                        counter!("ws_dead_conn_total").increment(1);
                         error!(
                             "连续 {} 个心跳周期未收到Pong，判定死链，断开连接",
                             missed - 1

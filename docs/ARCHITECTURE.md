@@ -82,7 +82,7 @@ Consul = 服务注册与发现（全部服务共用）。
 
 ```
 1. 客户端 POST /api/chat/send
-2. api-gateway    JWT 校验 → 限流 → 熔断检查 → gRPC 转发（打 create_time）
+2. api-gateway    CORS → 体积限制 → 超时 → 访问日志 → 指标 → 限流 → 熔断 → JWT 校验 → gRPC 转发（打 create_time）
 3. msg-server     权限/关系校验（缓存化，正常路径零 RPC）
                   → 生成 server_id(nanoid) → 按 conversation_id 作分区键写 Kafka
 4. Kafka          rustIM-chat，16 分区，acks=all + enable.idempotence
@@ -105,28 +105,45 @@ Consul = 服务注册与发现（全部服务共用）。
 
 ### 3.1 api-gateway
 
-**中间件链**（顺序即代码里的挂载顺序，越靠外越先执行）：
+**中间件链**（外 → 内，即代码里 `layer()` 的逆序）：
 
 ```
-TraceLayer → RequestLogger → Metrics → CircuitBreaker → RateLimit
-           → Cors → Timeout(30s) → RequestBodyLimit(10MB) → JWT 认证 → 转发
+CORS → RequestBodyLimit(10MB) → Timeout(30s) → RequestLogger → Metrics
+     → RateLimit → CircuitBreaker → JWT 认证 → 转发
 ```
+
+日志与指标在限流/超时之外：429、413、408 与熔断短路响应都会进指标和访问日志，
+否则「最需要观测的失败恰好不可见」。
 
 - **路由 = 静态路由 + 配置驱动**。`/health`、`/metrics`、登录/刷新是静态注册的，
   业务前缀（`/api/users`、`/api/friends`、`/api/groups`、`/api/chat`、`/api/common`）
-  来自 `config.yaml` 的 `gateway.routes`，每条前缀同时注册精确路径与通配路径。
+  来自 `config.yaml` 的 `gateway.routes`，每条前缀同时注册精确路径与通配路径；
+  未匹配路径统一 404 + 信封，不再是 axum 的空 body 404。
+- **错误语义**：所有失败走 `GatewayError`，`{code,message,success:false}` 且
+  **HTTP 状态码 == `code`**。tonic 状态码映射成 400/401/403/404/409/429/502/503/504，
+  内部细节（gRPC Status 原文、连接串）只进日志。参数错误不会再返回 500。
 - **限流 = governor GCRA**（令牌桶的等价实现），三层检查：全局 → 路径 → IP，
-  任一拒绝即 429（算出的等待秒数 >0 时才带 `Retry-After`）。参数：全局 5000 rps / burst 500，
-  `/api/users` 10 rps，`/api/chat` 5000 rps，登录 5 rps / burst 3。
+  命中任一即拒绝**且不再扣减后两层**的配额。参数：全局 5000 rps / burst 500，
+  `/api/users` 10 rps，`/api/chat` 5000 rps，登录 5 rps / burst 3，注册 2 rps。
+  前缀匹配按路径段边界（`/api/user/loginXXX` 不再被当成 `/api/user/login`）。
+  429 也返回统一信封，并带 `Retry-After`（亚秒级等待向上取整到 1）。
   **这是进程内限流**，多实例部署时总量按实例数放大。
-  注意：配置里 `/api/user/register`（单数）与实际路径 `/api/users/register*`（复数）不匹配，
-  注册实际命中的是 `/api/users` 那条 10 rps —— 属已知配置缺陷，见 [TECHNICAL.md 技术债](TECHNICAL.md#9-容量模型与扩容)。
-- **熔断 = 三态计数器**（Closed / Open / HalfOpen），按服务名分桶，连续 5 次失败转 Open，
-  30s 后转 HalfOpen。只有 5xx 与传输错误计失败，4xx 不触发。
-- **认证 = JWT + Redis 双校验**。验签通过后还要与 Redis 中该平台的 token 比对，
-  这让「同平台重新登录踢掉旧 token」和「多端各自独立」都成立，代价是每次请求一次 Redis 读。
-- **gRPC 客户端池**：启动时建连失败不再永久 503，请求路径按需重建并做双检，
-  底层用 `balance_channel`，天然支持服务发现推送的地址变化。
+- **熔断 = 三态计数器**（Closed / Open / HalfOpen），连续 5 次失败转 Open，30s 后转 HalfOpen。
+  只有 5xx 与传输错误计失败，4xx 不触发。
+  分桶键是**真实下游服务名**（`relation` / `chat`，与 `service_names` 一致），且只覆盖
+  真正转发的路径（`/api/users`、`/api/friends`、`/api/groups` → `relation`；`/api/chat` → `chat`）。
+  网关自己处理的路由（`/health`、`/metrics`、登录/刷新/登出、上传签名）不参与熔断，
+  免得网关自身的 5xx 反过来把登录也熔断掉。`gateway.circuit_breaker.enabled` 为 false 时整体透传。
+- **认证 = IP 黑名单 → 路径白名单 → JWT 验签 → Redis 会话比对**。
+  验签通过后还要与 Redis 中该平台的 token 比对，这让「同平台重新登录踢掉旧 token」
+  和「多端各自独立」都成立，代价是每次请求一次 Redis 读。令牌原文**永不进日志**
+  （只记长度与指纹）。
+- **客户端 IP**：`api_utils::net` 统一口径 —— 对端地址是权威，只有对端在
+  `gateway.auth.trusted_proxies` 里时才采信 `X-Forwarded-For`（默认空 = 忽略 XFF）。
+  日志/限流/黑名单三处共用，不再各写一套。
+- **gRPC 客户端池**：启动预热 + 按需重建，**只重建缺失的那一个**，失败进入指数退避
+  （1s→30s）。此前后端宕机时每个请求都会重建全部 4 条连接 = 每请求 4 次 Consul 查询，
+  且每次重建会泄漏一个永久轮询 Consul 的发现任务（`discovery.run()` 现在在接收端关闭时退出）。
 
 ### 3.2 msg-gateway（长连接网关）
 
@@ -320,13 +337,17 @@ PG、Redis、Consul 在本仓库基线里都是单实例。业务层已经做到
 | 能力 | 现状 |
 |---|---|
 | 日志 | `tracing`，JSON/文本可切，按天切割保留 7 天，`RUST_LOG` 覆盖配置；gRPC 拦截器把 `x-trace-id`、`caller` 写进日志 |
-| 指标 | 仅 api-gateway 有 Prometheus（`:9090/metrics`）：`gateway_requests_total`（method/path/service）、`gateway_responses_total` 与 `gateway_errors_total`（method/path/service/status）、`gateway_request_duration_seconds`（无标签） |
+| 指标（api-gateway） | router 内 `/metrics`（与服务同端口，由 `gateway.metrics_endpoint` 指定）：`gateway_requests_total`（method/path/service）、`gateway_responses_total` 与 `gateway_errors_total`（method/path/service/status）、`gateway_request_duration_seconds`（service）。`path` 标签已归一化（`/api/users/{id}/*`），`service` 用真实下游名（`relation`/`chat`/`gateway`） |
+| 指标（msg-server） | 独立监听 `:9101/metrics`（`metrics.enabled` 控制，`metrics.port` 覆盖）：`msg_consume_batch_total{result}`、`msg_consume_batch_size`、`msg_consume_batch_duration_seconds`、`msg_inserted_total`、`msg_duplicate_total`、`msg_precheck_rejected_total`、`msg_push_total{result}`、`msg_dead_letter_total` |
+| 指标（msg-gateway） | 独立监听 `:9102/metrics`：`ws_connections`、`ws_upstream_total`、`ws_downstream_total`、`ws_outbound_dropped_total`、`ws_dead_conn_total` |
 | 链路 | OTLP 导出走 `telemetry` feature，默认关闭（开启会引入旧 tonic 链，见 `docs/operations/TELEMETRY.md`） |
 | 分段耗时 | `runtime::stage_profile`，`IM_STAGE_PROFILE=1` 开启，1/16 采样，5s 输出 p50/p90/p99（等待/幂等/号段/写入/推送/端到端/生产） |
 | 慢路径告警 | 单批落库 >100ms、批次总耗时 >200ms 各打一条带分段明细的 warn |
 
-**没有的东西**也说清楚：msg-server 与 msg-gateway 没有 Prometheus 指标导出，
-业务指标（消息量、死信量、在线数）目前只能从日志推算。
+指标语义与排查口径见 [TECHNICAL.md 9.2.1](TECHNICAL.md#921-指标导出已实施)。
+两个消息服务用 `runtime::metrics_server` 起监听（`PrometheusBuilder::build()` + 手工 spawn exporter，
+不能用只装 recorder 的 `install_recorder()`，否则端口永远连不上）。
+
 
 ## 9. 已知落差（注释与实现不一致的地方）
 
@@ -340,7 +361,7 @@ PG、Redis、Consul 在本仓库基线里都是单实例。业务层已经做到
 | `server.connection.max_connections: 10000` | 代码无引用点，没有硬上限 | 实际约束是内存与文件描述符 |
 | api-gateway 端口 | `config.yaml` 是 8000，k8s 清单写 8080（需 ConfigMap 覆盖） | 直接 apply k8s 会探针失败 |
 | msg-server gRPC 端口 | `config.yaml`/compose/k8s 是 50010，`config-prod.yaml` 是 50002 | 按生产样例部署时端口与文档不一致 |
-| 注册限流 | 配置前缀 `/api/user/register` 不匹配实际路径 `/api/users/register*`，实际走 `/api/users` 的 10 rps | 注册没有 2 rps 的严格保护 |
+| 图片验证码 | 代码里是一段被注释掉的校验（请求字段也删了），`path_whitelist` 里仍列着 `genCaptchaImage` | 登录目前只靠密码 + 限流，爆破防护弱于文档给人的印象 |
 | 分布式锁 | cache crate 无锁实现 | 需要时得自己加（如群成员变更的互斥） |
 | Redis Cluster | 单 `Client::open(url)`，无 cluster/sentinel 字段 | 只能单实例或前置代理 |
 
@@ -350,6 +371,6 @@ PG、Redis、Consul 在本仓库基线里都是单实例。业务层已经做到
 
 1. **幂等判定并入号段脚本**：用同一次 Redis 往返里的 `SET NX` 判重，去掉每条消息的 PG 预查询。
 2. **会话列表上 Redis ZSET**：把上面那条「注释先于实现」补齐，会话列表从 N 次查询降到 1 次。
-3. **可观测性补齐**：msg-server / msg-gateway 导出 Prometheus 指标（消费延迟、死信数、在线连接、批次耗时直方图）。
+3. ~~**可观测性补齐**：msg-server / msg-gateway 导出 Prometheus 指标~~（已完成，见第 8 节）。
 4. **读扩散的读路径优化**：最近消息缓存（Redis 或本地 LRU），解决主从延迟与冷启动回表。
 5. **多租户与存储分片**：`tenant_id` 已经出现在对象存储路径里，但库表还没有租户维度。

@@ -24,6 +24,8 @@ tracing = { workspace = true }
 jsonwebtoken = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
+# 指标埋点：recorder 由 runtime::metrics_server 安装，这里只需要打点宏
+metrics = { workspace = true }
 
 # 压测工具 src/bin/ws_bench.rs 使用
 tokio-tungstenite = { workspace = true }

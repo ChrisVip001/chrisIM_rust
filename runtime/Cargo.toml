@@ -49,6 +49,11 @@ base64 = "0.21.5"
 
 regex = "1.11.1"
 once_cell = "1.21.3"
+
+# Prometheus 指标导出：msg-server / msg-gateway 没有 HTTP 业务端点，
+# 由 metrics_server 模块统一起一个 /metrics 监听（api-gateway 用自己的路由与 recorder）
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 futures = { workspace = true }
 
 rs-consul = "0.11.0"

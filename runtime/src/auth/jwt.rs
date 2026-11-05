@@ -3,9 +3,20 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Validation, Algorit
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::log::{error, info};
+use tracing::log::error;
 use contract::error::Error;
 use crate::configs::auth_config::JwtConfig;
+
+
+/// token 指纹：只用于日志关联，不可逆推出原文
+fn token_fingerprint(token: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in token.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
 
 /// 统一的 JWT Claims 结构
 /// 
@@ -98,7 +109,12 @@ pub fn verify_token(
     token: &str,
     jwt_config: &JwtConfig,
 ) -> Result<Claims, Error> {
-    info!("Token = {}", token);
+    // 日志只记 token 的长度与指纹，不记原文（日志文件不能变成凭据库）。
+    tracing::debug!(
+        token_len = token.len(),
+        token_fp = %token_fingerprint(token),
+        "校验 JWT"
+    );
     // 设置验证参数
     let mut validation = Validation::new(Algorithm::HS256);
     

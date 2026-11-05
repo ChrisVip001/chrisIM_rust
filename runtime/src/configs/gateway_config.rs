@@ -18,6 +18,22 @@ pub struct GatewayConfig {
     pub retry: RetryConfig,
     /// 熔断配置
     pub circuit_breaker: CircuitBreakerConfig,
+    /// CORS 配置
+    #[serde(default)]
+    pub cors: CorsConfig,
+}
+
+/// 跨域配置
+///
+/// 来源由配置决定，默认空 = 不放行任何跨域来源。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CorsConfig {
+    /// 允许的来源，如 `["https://im.example.com"]`
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    /// 是否允许携带凭证
+    #[serde(default)]
+    pub allow_credentials: bool,
 }
 
 /// 重试配置
@@ -38,5 +54,20 @@ pub struct CircuitBreakerConfig {
     pub failure_threshold: u64,
     /// 半开状态超时时间（秒）
     pub half_open_timeout_secs: u64,
+    /// 半开态同时放行的探测请求数：超出的请求快速失败，不再打下游。
+    /// 缺省 3，旧配置文件不写该字段也能启动。
+    #[serde(default = "default_half_open_max_probes")]
+    pub half_open_max_probes: u32,
+    /// 半开态需要连续成功的次数，达到后关闭熔断器。缺省 2。
+    #[serde(default = "default_half_open_success_threshold")]
+    pub half_open_success_threshold: u32,
+}
+
+fn default_half_open_max_probes() -> u32 {
+    3
+}
+
+fn default_half_open_success_threshold() -> u32 {
+    2
 }
 

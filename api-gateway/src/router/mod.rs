@@ -5,13 +5,13 @@ use cache::{PresenceCache, SessionCache};
 use axum::{
     body::Body,
     extract::{Extension, Json, State},
-    http::{Request, Response, StatusCode},
+    http::{Request, StatusCode},
     middleware,
     response::IntoResponse,
     routing::{any, get, post},
     Router,
 };
-use contract::{proto::user::user_service_client::UserServiceClient, Error};
+use contract::proto::user::user_service_client::UserServiceClient;
 use runtime::{
     config::AppConfig,
     configs::routes_config::RouteRule,
@@ -26,36 +26,14 @@ use std::{sync::Arc, time::Duration};
 use tracing::{error, info};
 use uuid::Uuid;
 use runtime::auth::Claims;
-use crate::proxy::services::common::{error_response, success_response};
+use crate::proxy::services::common::success_response;
+use crate::error::GatewayError;
 
 // 获取上传签名请求参数
 #[derive(Debug, Deserialize)]
 pub struct GetUploadSignatureRequest {
     pub content_type: String,
     pub bucket_type: Option<String>, // "file" 或 "avatar"，默认"file"
-}
-
-// 文件上传完成验证请求（保留用于验证）
-#[derive(Debug, Deserialize)]
-pub struct ValidateUploadRequest {
-    pub key: String,
-    pub size: usize,
-    pub md5: String,
-}
-
-// 注册头像上传请求
-#[derive(Debug, Deserialize)]
-pub struct RegisterAvatarRequest {
-    pub content_type: String,
-    pub file_size: usize,
-}
-
-// 验证注册头像上传请求
-#[derive(Debug, Deserialize)]
-pub struct ValidateRegisterAvatarRequest {
-    pub key: String,
-    pub size: usize,
-    pub md5: String,
 }
 
 /// 构建应用路由
@@ -130,8 +108,12 @@ pub async fn build_routes(
         );
     }
 
-    // 添加用户服务扩展和缓存扩展，最后注入 State 完成 Router<()> 的收口
+    // 未匹配路径统一 404 + 信封：axum 默认的空 body 404 让客户端分不清
+    // 「路由不存在」和「网关崩了」
     Ok(router
+        .fallback(|| async {
+            crate::error::GatewayError::not_found("接口不存在").into_response()
+        })
         .layer(Extension(user_service))
         .layer(Extension(cache_instance.clone() as Arc<dyn SessionCache>))
         .layer(Extension(cache_instance as Arc<dyn PresenceCache>))
@@ -151,17 +133,21 @@ fn add_service_route(
     let require_auth = route.require_auth;
 
     // 创建处理函数的工厂函数
+    //
+    // 转发错误直接交给 `GatewayError::into_response`：状态码由错误本身决定
+    // （400/401/404/502/503/504），响应体不含下游 Status 原文。
     let create_handler = || {
         let service_proxy = service_proxy.clone();
         let service_type = service_type.clone();
         move |req: Request<Body>| {
             let service_proxy = service_proxy.clone();
             let service_type = service_type.clone();
-            async move { service_proxy.forward_request(req, &service_type).await.unwrap_or_else(
-                |err| {
-                    error_response(&format!("转发请求到后端服务失败: {}", err), StatusCode::INTERNAL_SERVER_ERROR)
-                },
-            ) }
+            async move {
+                match service_proxy.forward_request(req, &service_type).await {
+                    Ok(response) => response,
+                    Err(err) => err.into_response(),
+                }
+            }
         }
     };
 
@@ -213,16 +199,13 @@ async fn get_upload_signature(
     State(config): State<Arc<AppConfig>>,
     Extension(user_info): Extension<Claims>,
     Json(req): Json<GetUploadSignatureRequest>,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<impl IntoResponse, GatewayError> {
     // 使用注入的配置创建OSS客户端
     let oss_client = match oss(&config).await {
         Ok(client) => client,
         Err(e) => {
             error!("创建OSS客户端失败: {}", e);
-            return Ok(error_response(
-                &format!("OSS服务初始化失败: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ));
+            return Err(GatewayError::internal(format!("OSS 客户端初始化失败: {e}")));
         }
     };
 
@@ -264,12 +247,9 @@ async fn get_upload_signature(
         Ok(signature) => signature,
         Err(e) => {
             error!("生成上传签名失败: {}", e);
-            return Ok(error_response(
-                &format!("生成上传签名失败: {}", e),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ));
+            return Err(GatewayError::internal(format!("生成上传签名失败: {e}")));
         }
     };
-    Ok(success_response(signature, StatusCode::OK))
+    Ok(success_response(signature))
 }
 

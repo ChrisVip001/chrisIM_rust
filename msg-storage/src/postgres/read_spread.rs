@@ -602,7 +602,10 @@ impl MsgMetaRepo for PgMsgMetaRepo {
                      $12::bigint[], $13::varchar[]
                  ) AS t(cid, seq, server_id, send_id, msg_type, content_type,
                         send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
-                 ON CONFLICT (conversation_id, server_id) DO NOTHING
+                 -- 不指定冲突目标：同时兜住 (conversation_id, server_id) 唯一索引
+                 -- 与主键 (conversation_id, seq)。只写一个目标时，撞主键会抛
+                 -- unique_violation 让整批回滚，一条脏数据连坐同批所有会话。
+                 ON CONFLICT DO NOTHING
                  RETURNING conversation_id, server_id, seq
              )
              , body AS (

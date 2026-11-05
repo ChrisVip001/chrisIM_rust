@@ -51,6 +51,23 @@ pub struct AppConfig {
     /// 服务发现会把流量导向调用方自己。Pod 环境必须注入 Pod IP。
     #[serde(default)]
     pub advertise_host: Option<String>,
+    /// Prometheus 指标导出配置（整段可缺省，缺省即关闭）
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+}
+
+/// Prometheus 指标导出配置
+///
+/// 只有 msg-server / msg-gateway 会用到：它们没有 HTTP 业务端点，
+/// 需要单独起一个 `/metrics` 监听。api-gateway 用自己的路由与 recorder，忽略本段。
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct MetricsConfig {
+    /// 是否启动指标导出。缺省 false：旧配置文件升级后不会平白多占端口
+    #[serde(default)]
+    pub enabled: bool,
+    /// 监听端口；0 表示用服务内置默认端口（msg-server 9101 / msg-gateway 9102）
+    #[serde(default)]
+    pub port: u16,
 }
 
 /// 消息发送权限校验配置

@@ -256,7 +256,8 @@ async fn receiver_task(url: String, recv: Arc<Mutex<RecvStats>>, min_create_time
     let (mut sink, mut source) = stream.split();
     let (pong_tx, mut pong_rx) = tokio::sync::mpsc::channel::<Message>(8);
 
-    // 写任务只负责回 Pong：服务端 30s 心跳 × missed 2 会把不回 Pong 的连接判死链
+    // 写任务只负责回 Pong：服务端每 30s 发 Ping，未回 Pong 的累计次数超过
+    // heartbeat_max_missed(2) 就判死链，即第 3 个周期（约 90s）断开。
     tokio::spawn(async move {
         while let Some(frame) = pong_rx.recv().await {
             if sink.send(frame).await.is_err() {

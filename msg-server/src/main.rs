@@ -50,6 +50,18 @@ async fn main() -> anyhow::Result<()> {
         info!("链路追踪功能未启用，仅初始化日志系统");
     }
     
+    // Prometheus 指标导出（默认关闭）：端口 0 时用本服务默认端口 9101
+    if config.metrics.enabled {
+        let port = if config.metrics.port == 0 {
+            9101
+        } else {
+            config.metrics.port
+        };
+        runtime::metrics_server::init(port);
+        // 帮助文本（# HELP）随启动注册一次，便于在 /metrics 里自解释
+        msg_server::consumer::describe_metrics();
+    }
+
     info!("正在启动消息服务器...");
 
 

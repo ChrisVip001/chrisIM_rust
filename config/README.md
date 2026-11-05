@@ -57,3 +57,10 @@ let config = std::sync::Arc::new(runtime::config::AppConfig::from_file(None)?);
 - `service_center.timeout`：注册中心 HTTP 请求超时（秒），代码限幅 [1,10]，防止误填端口号
 - `service_center.service_refresh_interval`：发现端刷新间隔（秒），代码限幅 [1,30]，默认 5
 - `*.health_check.interval`：TTL 判定窗口（默认 10s），进程内上报周期自动取窗口的 1/3；`deregister_after` 会被提升到 60s（Consul 下限），只用于清理僵尸注册，不参与摘流
+- `gateway.auth.trusted_proxies`：受信反向代理地址列表。只有直连对端命中这里时才采信
+  `X-Forwarded-For`；留空 = 完全忽略 XFF（客户端无法伪造 IP 绕过黑名单/限流）。部署在 nginx/LB 之后务必填写
+- `gateway.cors.allowed_origins` / `gateway.cors.allow_credentials`：允许的跨域来源。
+  release 构建不再内置任何开发端口，留空即不放行跨域
+- `metrics.enabled` / `metrics.port`：msg-server 与 msg-gateway 的 `/metrics` 独立监听
+  （默认关闭；`port: 0` 表示用服务默认端口，msg-server 9101、msg-gateway 9102；
+  api-gateway 忽略本段，指标走自己的 `/metrics` 路由）
