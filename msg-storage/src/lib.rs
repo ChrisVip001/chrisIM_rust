@@ -45,7 +45,10 @@ impl ReadSpreadRepo {
     /// 每个调用方应各自持有一份，不复用其他模块的池：
     /// 历史拉取的长查询不应挤占消息写入与序号分配。
     pub async fn from_config(config: &AppConfig) -> Result<Self, Error> {
-        let pool = PgPool::connect(&config.database.pg_url()).await?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(config.database.postgres.effective_pool_size())
+            .connect(&config.database.pg_url())
+            .await?;
         Self::verify_schema(&pool).await?;
         Ok(Self::new(pool))
     }

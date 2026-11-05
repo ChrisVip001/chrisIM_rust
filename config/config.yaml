@@ -51,9 +51,11 @@ gateway:
   # 限流配置
   rate_limit:
     # 全局限流
+    # 按单机 3000 QPS 容量目标设定（留余量）；governor 是进程内限流，
+    # 多实例部署时总量会按实例数放大，生产需按实际容量重设。
     global:
-      requests_per_second: 1000
-      burst_size: 50
+      requests_per_second: 5000
+      burst_size: 500
       enabled: true
 
     # 按路径限流
@@ -84,11 +86,11 @@ gateway:
           burst_size: 20
           enabled: true
 
-      # 聊天接口限流
+      # 聊天写路径限流：与全局容量对齐，避免 20rps 把压测全部挡在网关
       - path_prefix: "/api/chat"
         rule:
-          requests_per_second: 20
-          burst_size: 30
+          requests_per_second: 5000
+          burst_size: 500
           enabled: true
     # IP限流
     ip_rules: {}
@@ -194,6 +196,8 @@ database:
     user: kelisi
     password: 123456
     database: rustim
+    # 消费端按会话分组并行，默认池（10）会成为吞吐上限
+    pool_size: 32
   xdb: ./assets/ip2region.xdb
 
 # 消息存储配置（统一读扩散，一条消息恒定 1 行元数据）

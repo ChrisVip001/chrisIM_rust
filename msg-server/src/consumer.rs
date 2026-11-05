@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::BorrowedMessage;
@@ -30,8 +30,15 @@ use runtime::service_discovery::LbWithServiceDiscovery;
 /// 单批最多并行处理的消息条数
 const BATCH_SIZE: usize = 64;
 
-/// 排空批次时等待下一条消息的上限
-const BATCH_DRAIN_TIMEOUT: Duration = Duration::from_millis(20);
+/// 一批从首条消息开始的最长攒批时间
+///
+/// 原本只按「多久没有新消息」排空，连续流量下会一直攒到 `BATCH_SIZE`：
+/// 500 msg/s 时攒满 64 条要 128ms，单条消息平均白等 64ms。
+/// 用时间上限同时约束批大小与排队延迟。
+const BATCH_MAX_WAIT: Duration = Duration::from_millis(10);
+
+/// 排空批次时等待下一条消息的上限（空闲时尽快处理）
+const BATCH_DRAIN_TIMEOUT: Duration = Duration::from_millis(2);
 
 /// 无法解析出会话的消息归到该组
 const INVALID_GROUP: &str = "__invalid__";
@@ -73,12 +80,13 @@ const DEAD_LETTER_SUFFIX: &str = ".dlq";
 ///
 /// 消费者关闭了自动提交，**只有业务处理成功之后才提交偏移量**，
 /// 因此提供的是 at-least-once 而不是 at-most-once：
-/// - 处理成功 → 同步提交位点；
+/// - 处理成功 → 异步提交位点（broker 确认不占用消费关键路径）；
 /// - 处理失败 → 有限次重试，仍失败则转入死信主题后再提交，避免阻塞分区；
 /// - 死信也投递不出去 → 不提交，让 Kafka 重新投递。
 ///
 /// 代价是可能重复处理。重复处理由 `already_processed` 闸门按 `server_id` 拦掉
 /// 已经落库的消息，未落库的消息（通话信令等）本身不参与持久化，重复执行的副作用仅为一次推送。
+/// 异步提交若未落到 broker，重启后会重复消费最后一小批；不丢消息，但可能重复推送。
 pub struct ConsumerService {
     /// Kafka流式消费者实例
     consumer: StreamConsumer,
@@ -232,9 +240,20 @@ impl ConsumerService {
             }
             drop(first);
 
-            // 非阻塞排空：凑满一批或短暂无新消息即停
+            // 大小与时间双重约束：连续流量下最多攒 BATCH_MAX_WAIT，
+            // 空闲时等 BATCH_DRAIN_TIMEOUT 即处理，避免低速率消息长队等待
+            let batch_deadline = Instant::now() + BATCH_MAX_WAIT;
             while batch.len() < BATCH_SIZE {
-                match tokio::time::timeout(BATCH_DRAIN_TIMEOUT, self.consumer.recv()).await {
+                let remaining = batch_deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(
+                    remaining.min(BATCH_DRAIN_TIMEOUT),
+                    self.consumer.recv(),
+                )
+                .await
+                {
                     Ok(Ok(message)) => match Self::pending_from(&message) {
                         Some(p) => batch.push(p),
                         None => Self::commit(&self.consumer, &message, "负载不可用"),
@@ -372,16 +391,18 @@ impl ConsumerService {
         }
 
         if !tpl.elements().is_empty() {
-            match self.consumer.commit(&tpl, CommitMode::Sync) {
-                Ok(()) => debug!("已提交 {} 个分区的位点", tpl.elements().len()),
+            // 异步提交：位点确认不占用消费循环。提交丢失只会让重启后重复消费
+            // 最后一小批，由 already_processed 闸门兜底，不会丢消息。
+            match self.consumer.commit(&tpl, CommitMode::Async) {
+                Ok(()) => debug!("已异步提交 {} 个分区的位点", tpl.elements().len()),
                 Err(e) => error!("提交偏移量失败: {:?}", e),
             }
         }
     }
 
-    /// 同步提交偏移量
+    /// 异步提交无效负载的位点，避免污染消费循环的延迟
     fn commit(consumer: &StreamConsumer, message: &BorrowedMessage<'_>, reason: &str) {
-        if let Err(e) = consumer.commit_message(message, CommitMode::Sync) {
+        if let Err(e) = consumer.commit_message(message, CommitMode::Async) {
             // 提交失败意味着重启后会重复消费，由幂等闸门兜底
             error!("提交偏移量失败({}): {:?}", reason, e);
         }

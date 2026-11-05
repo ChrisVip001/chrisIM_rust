@@ -35,7 +35,7 @@
 //! 请务必对着测试环境跑，不要指向线上库。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -154,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let counters = Arc::new(Counters::default());
     let mut latencies: Vec<u64> = Vec::with_capacity(args.connections as usize);
     let mut handles = Vec::with_capacity(args.connections as usize);
+    let stop = Arc::new(AtomicBool::new(false));
 
     // 每秒发起 ramp 条连接；ramp=0 表示不限制（间隔为 0）
     let ramp_interval =
@@ -171,6 +172,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let url = format!("ws://{}:{}/ws/{}", args.host, port, token);
         let counters = counters.clone();
+        let writer_stop = stop.clone();
+        let reader_stop = stop.clone();
 
         handles.push(tokio::spawn(async move {
             let started = Instant::now();
@@ -186,14 +189,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let elapsed = started.elapsed().as_micros() as u64;
             counters.connect_ok.fetch_add(1, Ordering::Relaxed);
 
-            let (sink, mut source) = stream.split();
+            let (mut sink, mut source) = stream.split();
+            let (pong_tx, mut pong_rx) = tokio::sync::mpsc::channel::<Message>(8);
+
             let reader_counters = counters.clone();
             tokio::spawn(async move {
                 while let Some(frame) = source.next().await {
                     match frame {
-                        Ok(Message::Close(_)) | Err(_) => {
-                            reader_counters.abnormal_close.fetch_add(1, Ordering::Relaxed);
+                        // Close 是正常关闭（含本工具主动 close），不计异常断开
+                        Ok(Message::Close(_)) => break,
+                        Err(_) => {
+                            // 收尾阶段 1 万连接同时关闭产生的 RST 不是稳态异常断开
+                            if !reader_stop.load(Ordering::Relaxed) {
+                                reader_counters.abnormal_close.fetch_add(1, Ordering::Relaxed);
+                            }
                             break;
+                        }
+                        Ok(Message::Ping(data)) => {
+                            // 服务端心跳 Ping 必须回 Pong，否则连续 missed 次会被判死链
+                            let _ = pong_tx.send(Message::Pong(data)).await;
                         }
                         Ok(_) => {
                             reader_counters.frames_recv.fetch_add(1, Ordering::Relaxed);
@@ -202,7 +216,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
 
-            // 上行：用心跳类型，网关直接短路，不触发下游 gRPC
+            // 上行：用心跳类型，网关直接短路，不触发下游 gRPC。
+            // 写端由单个任务独占，同时处理定时上行与 Pong 回复。
             let payload = serde_json::json!({
                 "send_id": user_id,
                 "receiver_id": user_id,
@@ -210,8 +225,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "content": [],
             })
             .to_string();
+            let writer_counters = counters.clone();
+            tokio::spawn(async move {
+                let Some(interval) = per_conn_interval else {
+                    return;
+                };
+                let mut ticker = tokio::time::interval(interval);
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            if writer_stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            if sink.send(Message::Text(payload.clone().into())).await.is_err() {
+                                if !writer_stop.load(Ordering::Relaxed) {
+                                    writer_counters.abnormal_close.fetch_add(1, Ordering::Relaxed);
+                                }
+                                break;
+                            }
+                            writer_counters.msgs_sent.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Some(frame) = pong_rx.recv() => {
+                            if sink.send(frame).await.is_err() {
+                                if !writer_stop.load(Ordering::Relaxed) {
+                                    writer_counters.abnormal_close.fetch_add(1, Ordering::Relaxed);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                let _ = sink.close().await;
+            });
 
-            Some((sink, payload, elapsed))
+            Some(elapsed)
         }));
 
         if ramp_interval > Duration::ZERO {
@@ -219,47 +266,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 收集建连结果
-    let mut senders = Vec::new();
+    // 收集建连延迟；读写任务已在各自连接内运行
     for handle in handles {
-        if let Ok(Some((sink, payload, elapsed))) = handle.await {
+        if let Ok(Some(elapsed)) = handle.await {
             latencies.push(elapsed);
-            senders.push((sink, payload));
         }
     }
-
     latencies.sort_unstable();
 
-    // 稳态压测阶段
-    let deadline = Instant::now() + Duration::from_secs(args.duration);
-    let mut tasks = Vec::with_capacity(senders.len());
-    for (mut sink, payload) in senders {
-        let counters = counters.clone();
-        tasks.push(tokio::spawn(async move {
-            let mut ticker = match per_conn_interval {
-                Some(interval) => tokio::time::interval(interval),
-                None => return,
-            };
-            loop {
-                ticker.tick().await;
-                if Instant::now() >= deadline {
-                    break;
-                }
-                if sink.send(Message::Text(payload.clone().into())).await.is_err() {
-                    counters.abnormal_close.fetch_add(1, Ordering::Relaxed);
-                    break;
-                }
-                counters.msgs_sent.fetch_add(1, Ordering::Relaxed);
-            }
-            // 主动关闭，避免连接被瞬时归还成异常断开
-            let _ = sink.close().await;
-        }));
-    }
-
+    // 稳态压测：所有连接持续上行，直到停止标志置位
     let started = Instant::now();
-    for task in tasks {
-        let _ = task.await;
-    }
+    tokio::time::sleep(Duration::from_secs(args.duration)).await;
+    stop.store(true, Ordering::Relaxed);
+    // 留给各连接完成最后一次写入与主动关闭
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let elapsed = started.elapsed().as_secs_f64().max(0.001);
 
     let ok = counters.connect_ok.load(Ordering::Relaxed);

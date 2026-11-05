@@ -52,6 +52,8 @@ let config = std::sync::Arc::new(runtime::config::AppConfig::from_file(None)?);
 - `kafka.topic_partitions` / `kafka.topic_replication`：主题分区/副本（默认 16/3，仅在创建主题时生效）
 - `kafka.consumer.parallelism`：消费端并行度
 - `validation.fail_open`：权限校验链路故障时是否放行（默认 false）
+- `database.postgres.pool_size`：每服务进程的 PG 连接池上限（默认 32，代码限幅 [4,64]）；默认池只有 10，会卡住消费端按会话并行
+- `gateway.rate_limit`：当前 global / `/api/chat` 均为 5000rps，按单机 3000 QPS 容量目标设定；governor 是进程内限流，多实例部署需按实际容量重设
 - `service_center.timeout`：注册中心 HTTP 请求超时（秒），代码限幅 [1,10]，防止误填端口号
 - `service_center.service_refresh_interval`：发现端刷新间隔（秒），代码限幅 [1,30]，默认 5
 - `*.health_check.interval`：TTL 判定窗口（默认 10s），进程内上报周期自动取窗口的 1/3；`deregister_after` 会被提升到 60s（Consul 下限），只用于清理僵尸注册，不参与摘流

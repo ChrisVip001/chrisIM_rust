@@ -308,11 +308,11 @@ impl WsServer {
         ws: WebSocketUpgrade,
         State(state): State<AppState>,
     ) -> impl IntoResponse {
-        // 处理WebSocket连接升级
-        // 升级成功后会调用websocket函数处理连接
-        ws.on_upgrade(move |socket| {
-            Self::websocket(token, socket, state)
-        })
+        // tungstenite 默认每连接预分配 128KB 读 + 128KB 写缓冲，
+        // 1 万长连接仅缓冲就吃掉 2.5GB。IM 帧远小于该值，按需增长即可。
+        ws.read_buffer_size(8 * 1024)
+            .write_buffer_size(8 * 1024)
+            .on_upgrade(move |socket| Self::websocket(token, socket, state))
     }
 
     /// 处理WebSocket连接
@@ -407,7 +407,8 @@ impl WsServer {
         // 连续 N 个周期未收到 Pong 判定为死链并主动断开。
         // 此前 Pong 只打日志，半开连接（客户端假在线）会一直占用资源。
         let ping_sender = outbound_tx.clone();
-        let pong_alive = Arc::new(AtomicBool::new(false));
+        // 连接刚建立视为活跃：首次循环还没发出 Ping，不应先记一次「未收到Pong」
+        let pong_alive = Arc::new(AtomicBool::new(true));
         let missed_pongs = Arc::new(AtomicU32::new(0));
         let max_missed = app_state.heartbeat_max_missed;
         let ping_alive = pong_alive.clone();

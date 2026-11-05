@@ -146,9 +146,6 @@ ENV PATH="/app/bin:${PATH}" \
     RUST_LOG=info \
     RUST_BACKTRACE=1
 
-# 不在镜像里写死 HEALTHCHECK：同一镜像承载 4 个服务，端口与协议不同，
-# 由编排层（compose healthcheck / k8s readinessProbe）分别定义。
-
 # 暴露端口
 EXPOSE 8080 8085 50001 50004 50010
 

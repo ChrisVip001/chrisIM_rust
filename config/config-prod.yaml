@@ -50,10 +50,10 @@ gateway:
 
   # 限流配置
   rate_limit:
-    # 全局限流
+    # 全局限流（与单机 3000 QPS 容量目标对齐，生产按实例数重设）
     global:
-      requests_per_second: 1000
-      burst_size: 50
+      requests_per_second: 5000
+      burst_size: 500
       enabled: true
 
     # 按路径限流
@@ -84,11 +84,11 @@ gateway:
           burst_size: 20
           enabled: true
 
-      # 聊天接口限流
+      # 聊天写路径限流
       - path_prefix: "/api/chat"
         rule:
-          requests_per_second: 20
-          burst_size: 30
+          requests_per_second: 5000
+          burst_size: 500
           enabled: true
     # IP限流
     ip_rules: {}
@@ -194,6 +194,7 @@ database:
     user: kelisi
     password: 123456
     database: rustim
+    pool_size: 32
   xdb: ./assets/ip2region.xdb
 
 
