@@ -84,6 +84,8 @@
   会话列表改为「Redis 给顺序、SQL 批量补游标」，新增 `ConversationRepo::get_many` 与
   `UserConversationRepo::list_by_ids`，单次请求的查询次数从 `1 + 2×会话数` 降到常数。
   索引缺失时回落到数据库并后台回填。
+- **未读计数整批写**：会话列表不再按会话逐个写 `unread_count`，改为一整批 `HSET/HDEL` pipeline；
+  同时删掉 `HLEN + DEL` 的空 Hash 清理（Redis 删空 field 后会自动回收键，这两次调用从不生效）。
 - **位点提交节流**：`commit_offsets` 把各分区最大位点攒起来，攒够 8 批或超过 200ms 才提交一次
   （原先每批提交一次）。未能落库的分区会先丢弃已攒位点再 `seek`，提交失败保留位点重试，
   语义仍是 at-least-once。

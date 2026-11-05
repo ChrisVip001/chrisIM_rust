@@ -283,6 +283,7 @@ impl ChatRpcService {
         }
 
         let mut conversations = Vec::with_capacity(states.len());
+        let mut counts: Vec<(String, i32)> = Vec::with_capacity(states.len());
 
         for state in states {
             let conv_id = state.conversation_id.clone();
@@ -335,13 +336,7 @@ impl ChatRpcService {
                 "single"
             };
 
-            if let Err(e) = self
-                .unread
-                .unread_count_set(user_id, &conv_id, &unread)
-                .await
-            {
-                warn!("写入未读计数缓存失败: {}", e);
-            }
+            counts.push((conv_id.clone(), unread));
 
             conversations.push(contract::proto::message::Conversation {
                 conversation_id: conv_id,
@@ -350,6 +345,11 @@ impl ChatRpcService {
                 unread_count: unread,
                 last_active_time,
             });
+        }
+
+        // 未读计数整批写一次，不再按会话逐个往返
+        if let Err(e) = self.unread.unread_count_set_batch(user_id, &counts).await {
+            warn!("写入未读计数缓存失败: {}", e);
         }
 
         // 最近活跃的排在最前，与索引的排序方向一致

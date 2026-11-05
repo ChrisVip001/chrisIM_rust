@@ -14,7 +14,6 @@
  * 实现采用异步编程模式，通过连接池和信号量机制提高并发性能。
  */
 use crate::traits::SeqCache;
-use async_trait::async_trait;
 use runtime::config::AppConfig;
 use contract::error::Error;
 use redis::aio::MultiplexedConnection;

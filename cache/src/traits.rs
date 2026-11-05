@@ -228,6 +228,16 @@ pub trait UnreadCache: Sync + Send + Debug {
     /// 设置用户在指定会话中的未读消息总数
     async fn unread_count_set(&self, user_id: &str, conversation_id: &str, count: &i32) -> Result<(), Error>;
 
+    /// 批量设置多个会话的未读计数
+    ///
+    /// 一次 pipeline 完成整批写入：计数 >0 写 HSET，<=0 做 HDEL。
+    /// Hash 的最后一个字段被删掉时 Redis 会自动回收键，不需要额外清理。
+    async fn unread_count_set_batch(
+        &self,
+        user_id: &str,
+        counts: &[(String, i32)],
+    ) -> Result<(), Error>;
+
     /// 减少用户在指定会话中的未读消息总数（减1）
     async fn unread_count_decrement(&self, user_id: &str, conversation_id: &str) -> Result<(), Error>;
 

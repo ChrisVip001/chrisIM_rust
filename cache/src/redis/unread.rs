@@ -27,6 +27,8 @@ impl UnreadCache for RedisCache {
     }
 
     /// 设置用户在指定会话中的未读消息总数
+    ///
+    /// 计数 <=0 时删掉该 field；Hash 被删空后 Redis 会自动回收键。
     async fn unread_count_set(&self, user_id: &str, conversation_id: &str, count: &i32) -> Result<(), Error> {
         let mut conn = self.get_connection().await?;
 
@@ -34,27 +36,51 @@ impl UnreadCache for RedisCache {
         let key = format!("{}:{}", UNREAD_COUNT_PREFIX, user_id);
 
         if *count <= 0 {
-            // 如果计数为0或负数，从Hash中删除该会话的field
             conn.hdel::<_, _, ()>(&key, conversation_id).await.map_err(|e| {
                 Error::Internal(format!("删除用户未读消息计数失败: {}", e))
             })?;
-
-            // 检查Hash是否为空，如果为空则删除整个Hash
-            let hash_size: i64 = conn.hlen(&key).await.map_err(|e| {
-                Error::Internal(format!("检查Hash大小失败: {}", e))
-            })?;
-
-            if hash_size == 0 {
-                conn.del::<_, ()>(&key).await.map_err(|e| {
-                    Error::Internal(format!("删除空Hash失败: {}", e))
-                })?;
-            }
         } else {
-            // 在Hash中设置指定会话的未读消息数量
             conn.hset::<_, _, _, ()>(&key, conversation_id, count).await.map_err(|e| {
                 Error::Internal(format!("设置用户未读消息总数失败: {}", e))
             })?;
         }
+
+        Ok(())
+    }
+
+    /// 批量设置多个会话的未读计数
+    ///
+    /// 整批合成一次 pipeline，避免会话列表按会话逐个写入。
+    async fn unread_count_set_batch(
+        &self,
+        user_id: &str,
+        counts: &[(String, i32)],
+    ) -> Result<(), Error> {
+        if counts.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.get_connection().await?;
+        let key = format!("{}:{}", UNREAD_COUNT_PREFIX, user_id);
+
+        let mut pipe = redis::pipe();
+        for (conversation_id, count) in counts {
+            // 计数 >0 写 HSET，<=0 用 HDEL 清掉该会话
+            let mut cmd = if *count > 0 {
+                redis::cmd("HSET")
+            } else {
+                redis::cmd("HDEL")
+            };
+            cmd.arg(&key).arg(conversation_id);
+            if *count > 0 {
+                cmd.arg(*count);
+            }
+            pipe.add_command(cmd);
+        }
+
+        pipe.query_async::<()>(&mut conn).await.map_err(|e| {
+            Error::Internal(format!("批量设置用户未读消息总数失败: {}", e))
+        })?;
 
         Ok(())
     }
@@ -118,21 +144,10 @@ impl UnreadCache for RedisCache {
         // 构建Redis Hash键：unread_count:user_id
         let key = format!("{}:{}", UNREAD_COUNT_PREFIX, user_id);
 
-        // 从Hash中删除指定会话的未读消息计数
+        // 从Hash中删除指定会话的未读消息计数；删空后 Redis 会自动回收键
         conn.hdel::<_, _, ()>(&key, conversation_id).await.map_err(|e| {
             Error::Internal(format!("移除用户未读消息总数失败: {}", e))
         })?;
-
-        // 检查Hash是否为空，如果为空则删除整个Hash
-        let hash_size: i64 = conn.hlen(&key).await.map_err(|e| {
-            Error::Internal(format!("检查Hash大小失败: {}", e))
-        })?;
-
-        if hash_size == 0 {
-            conn.del::<_, ()>(&key).await.map_err(|e| {
-                Error::Internal(format!("删除空Hash失败: {}", e))
-            })?;
-        }
 
         Ok(())
     }

@@ -587,8 +587,48 @@ async fn conversation_index_and_batch_lookup() {
         .expect("读取会话索引失败");
     assert_eq!(
         recent[0],
-        (newer_conv, 1_700_000_100_000),
+        (newer_conv.clone(), 1_700_000_100_000),
         "分数只增不减：更早的时间不能覆盖已有分数"
+    );
+
+    // 6. 未读计数整批写入：一次 pipeline 覆盖多个会话，计数 <=0 的会话被清掉
+    use cache::UnreadCache;
+
+    let unread_user = format!("u_unread_{}", suffix);
+    cache
+        .unread_count_set_batch(
+            &unread_user,
+            &[(older_conv.clone(), 3), (newer_conv.clone(), 0)],
+        )
+        .await
+        .expect("批量写入未读计数失败");
+    assert_eq!(
+        cache
+            .unread_count_sum(&unread_user, &older_conv)
+            .await
+            .expect("读取未读计数失败"),
+        3
+    );
+    assert_eq!(
+        cache
+            .unread_count_sum(&unread_user, &newer_conv)
+            .await
+            .expect("读取未读计数失败"),
+        0,
+        "计数为 0 的会话不应写入 Hash"
+    );
+
+    cache
+        .unread_count_set_batch(&unread_user, &[(older_conv.clone(), 0)])
+        .await
+        .expect("清零未读计数失败");
+    assert_eq!(
+        cache
+            .unread_count_sum(&unread_user, &older_conv)
+            .await
+            .expect("读取未读计数失败"),
+        0,
+        "计数清零后该会话应从 Hash 中移除"
     );
 
     println!("会话索引与批量查询通过");
