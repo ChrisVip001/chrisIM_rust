@@ -53,9 +53,6 @@ pub trait SeqCache: Sync + Send + Debug {
     /// 增加用户的发送序列号
     async fn incr_send_seq(&self, user_id: &str) -> Result<(i64, i64, bool), Error>;
 
-    /// 会话号段是否已在 Redis 中初始化
-    async fn conversation_seq_exists(&self, conversation_id: &str) -> Result<bool, Error>;
-
     /// 用持久化水位初始化会话号段（仅当键不存在时生效）
     ///
     /// 返回本次预留的号段上界。调用方必须把它持久化，
@@ -69,6 +66,8 @@ pub trait SeqCache: Sync + Send + Debug {
     /// 领取会话下一个序号
     ///
     /// 返回 `(当前序号, 号段上界, 是否需要回写水位)`。
+    /// `当前序号 == 0` 表示号段尚未初始化，调用方需先用 `init_conversation_seq`
+    /// 以 PG 水位冷启动后重试；存在性检查已并入脚本原子执行，热路径仅一次往返。
     /// `是否需要回写` 为真时表示已进入新号段，调用方应把上界持久化，
     /// 这样 Redis 丢失后可据此重建，不会重复分配。
     async fn incr_conversation_seq(

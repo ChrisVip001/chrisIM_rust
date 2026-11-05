@@ -17,6 +17,7 @@ use msg_storage::read_spread::MsgMetaRepo;
 use msg_storage::{MessageWriter, ReadSpreadRepo};
 
 use runtime::grpc_client::base::service_names as sn;
+use runtime::stage_profile::{record, Lap, Stage};
 
 use crate::kafka;
 use crate::pusher::{push_service, Pusher};
@@ -30,15 +31,30 @@ use runtime::service_discovery::LbWithServiceDiscovery;
 /// 单批最多并行处理的消息条数
 const BATCH_SIZE: usize = 64;
 
-/// 一批从首条消息开始的最长攒批时间
+/// 一批从首条消息开始的最长攒批时间（满载）
 ///
-/// 原本只按「多久没有新消息」排空，连续流量下会一直攒到 `BATCH_SIZE`：
-/// 500 msg/s 时攒满 64 条要 128ms，单条消息平均白等 64ms。
-/// 用时间上限同时约束批大小与排队延迟。
-const BATCH_MAX_WAIT: Duration = Duration::from_millis(10);
+/// 攒批同时决定「单条白等多久」和「批内能拿到多少并行度」：
+/// 批内按会话分组并行，批越小、并行度越低。
+/// 满载 3000 msg/s 摊到多个消费者后每消费者约 190 msg/s，
+/// 2ms 窗口只能等到 1 条消息，批内并行度退化为 1，
+/// 消费吞吐被压到与单条处理时延同阶。
+/// 30ms 窗口在 200ms 延迟预算内换回足够的批内并行度。
+const BATCH_MAX_WAIT: Duration = Duration::from_millis(30);
 
-/// 排空批次时等待下一条消息的上限（空闲时尽快处理）
-const BATCH_DRAIN_TIMEOUT: Duration = Duration::from_millis(2);
+/// 空闲/低速率时的攒批窗口
+///
+/// 低速率下攒满一批要等很久，长窗口只会平白拉高尾延迟；
+/// 上一批没攒到 [`BATCH_BUSY_HINT`] 条就说明现在不是满载，退回短窗口。
+const BATCH_MIN_WAIT: Duration = Duration::from_millis(10);
+
+/// 判定「满载」的上一批条数：低于它不值得用长窗口换并行度
+const BATCH_BUSY_HINT: usize = 6;
+
+/// 排空批次时相邻两条消息的最大间隔
+///
+/// 超过该间隔说明这一波消息已经取完，立即处理而不是空等整个窗口；
+/// 取值必须明显大于满载时的平均到达间隔才不至于把批次切碎。
+const BATCH_DRAIN_TIMEOUT: Duration = Duration::from_millis(8);
 
 /// 无法解析出会话的消息归到该组
 const INVALID_GROUP: &str = "__invalid__";
@@ -54,6 +70,17 @@ struct PendingMessage {
     offset: i64,
     /// 分组键：同一会话必须串行，保证序号顺序与消息顺序一致
     group: String,
+}
+
+/// 需要回写的会话水位
+///
+/// 每条消息单独更新一次 `conversation` 行会让同一批热点行被高频改写，
+/// 因此单条处理只把水位带出来，由批次统一汇总回写。
+#[derive(Debug, Clone)]
+struct Watermark {
+    conversation_id: String,
+    seq: i64,
+    send_time: i64,
 }
 
 /// 单条消息的最大处理尝试次数（含首次）
@@ -157,6 +184,9 @@ impl ConsumerService {
 
         info!("消息消费者服务初始化完成");
 
+        // 只有显式开启时才会真正拉起聚合任务
+        runtime::stage_profile::spawn_reporter();
+
         Ok(Self {
             consumer,
             read,
@@ -221,6 +251,9 @@ impl ConsumerService {
             self.topic, BATCH_SIZE, MAX_ATTEMPTS, self.dead_letter_topic
         );
 
+        // 攒批窗口按上一批的实际条数自适应：满载才用长窗口
+        let mut window = BATCH_MIN_WAIT;
+
         loop {
             // 阻塞等待首条，避免空转
             let first = match self.consumer.recv().await {
@@ -240,9 +273,9 @@ impl ConsumerService {
             }
             drop(first);
 
-            // 大小与时间双重约束：连续流量下最多攒 BATCH_MAX_WAIT，
+            // 大小与时间双重约束：连续流量下最多攒 `window`，
             // 空闲时等 BATCH_DRAIN_TIMEOUT 即处理，避免低速率消息长队等待
-            let batch_deadline = Instant::now() + BATCH_MAX_WAIT;
+            let batch_deadline = Instant::now() + window;
             while batch.len() < BATCH_SIZE {
                 let remaining = batch_deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -261,6 +294,13 @@ impl ConsumerService {
                     _ => break,
                 }
             }
+
+            // 上一批没攒起来说明当前不是满载，长窗口只会平白抬高尾延迟
+            window = if batch.len() >= BATCH_BUSY_HINT {
+                BATCH_MAX_WAIT
+            } else {
+                BATCH_MIN_WAIT
+            };
 
             if !batch.is_empty() {
                 self.process_batch(batch).await;
@@ -325,36 +365,51 @@ impl ConsumerService {
             let tx = tx.clone();
 
             handles.push(tokio::spawn(async move {
+                // 本组（同一会话）落库成功的水位，整批结束后汇总回写一次
+                let mut watermarks = Vec::with_capacity(msgs.len());
                 for m in msgs {
                     let payload = m.payload.clone();
-                    let result =
-                        retry_with_backoff(MAX_ATTEMPTS, RETRY_BACKOFF, || svc.handle_msg(&payload))
-                            .await;
+                    let result = retry_with_backoff(MAX_ATTEMPTS, RETRY_BACKOFF, || {
+                        svc.handle_msg(&payload)
+                    })
+                    .await;
 
-                    if let Err(e) = result {
-                        error!("消息处理失败且重试耗尽: {:?}", e);
-                        // 优先转死信；死信也写不进去时，把该分区标记为需要回退
-                        if let Err(dlq_err) = kafka::send_to_topic(
-                            &svc.dlq_producer,
-                            &svc.dead_letter_topic,
-                            &m.payload,
-                            &m.group,
-                        )
-                        .await
-                        {
-                            warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
-                            let _ = tx.send(m);
+                    match result {
+                        Ok(Some(mark)) => watermarks.push(mark),
+                        Ok(None) => {}
+                        Err(e) => {
+                            error!("消息处理失败且重试耗尽: {:?}", e);
+                            // 优先转死信；死信也写不进去时，把该分区标记为需要回退
+                            if let Err(dlq_err) = kafka::send_to_topic(
+                                &svc.dlq_producer,
+                                &svc.dead_letter_topic,
+                                &m.payload,
+                                &m.group,
+                            )
+                            .await
+                            {
+                                warn!("死信投递失败({})，回退偏移量等待重新投递", dlq_err);
+                                let _ = tx.send(m);
+                            }
                         }
                     }
                 }
+                watermarks
             }));
         }
         drop(tx);
 
+        let mut watermarks = Vec::new();
         for handle in handles {
-            if let Err(e) = handle.await {
-                error!("批处理任务异常退出: {:?}", e);
+            match handle.await {
+                Ok(marks) => watermarks.extend(marks),
+                Err(e) => error!("批处理任务异常退出: {:?}", e),
             }
+        }
+
+        // 水位按会话汇总成最大值，整批只写一次
+        if !watermarks.is_empty() {
+            self.flush_watermarks(watermarks).await;
         }
 
         // 收集需要回退的分区及最小位点
@@ -411,20 +466,18 @@ impl ConsumerService {
     /// 处理单条消息的核心业务逻辑
     ///
     /// 这里只做编排，具体分支交给下面几个私有方法。
-    async fn handle_msg(&self, payload: &str) -> Result<(), Error> {
+    /// 返回需要回写的会话水位：只有「首次落库」的消息才产生水位，
+    /// 重复投递和信令类消息返回 `None`。
+    async fn handle_msg(&self, payload: &str) -> Result<Option<Watermark>, Error> {
         debug!("开始处理消息: {}", payload);
 
         let mut msg: Msg = serde_json::from_str(payload)
             .map_err(|e| Error::Internal(format!("消息JSON解析失败: {}", e)))?;
 
-        // 幂等闸门：位点回退、重复投递都会让同一条消息再次进来
-        if already_processed(&*self.read.meta, &msg).await? {
-            info!(
-                "消息已处理过，跳过重复投递: server_id={}",
-                msg.server_id
-            );
-            return Ok(());
-        }
+        // 分段采样：从消息自带的 create_time 起算，定位延迟累积在哪一段
+        let mut lap = Lap::start();
+        let create_time = msg.create_time;
+        let entered_at = now_millis();
 
         let mt = MsgType::try_from(msg.msg_type)
             .map_err(|e| Error::Internal(format!("未知的消息类型 {}: {}", msg.msg_type, e)))?;
@@ -432,17 +485,31 @@ impl ConsumerService {
         // 已读消息有独立处理逻辑，不参与序列号分配与持久化
         if mt == MsgType::Read {
             debug!("处理已读消息: user_id={}", msg.receiver_id);
-            return self.handle_msg_read(msg).await;
+            return self.handle_msg_read(msg).await.map(|()| None);
         }
 
         let (msg_type, _need_increase_seq, need_history) = MsgType2::classify_msg_type(mt);
         debug!("消息分类结果: {:?}, 需要历史: {}", msg_type, need_history);
+        let need_persist = Self::get_send_to_db_flag(&mt) && !msg.is_revoked && need_history;
+
+        // 幂等闸门：需要持久化的消息由 save 的幂等预查询与 inserted 结果承担，
+        // 不再重复查一次；不参与持久化的信令等仍在这里拦截重复投递。
+        if !need_persist && already_processed(&*self.read.meta, &msg).await? {
+            info!(
+                "消息已处理过，跳过重复投递: server_id={}",
+                msg.server_id
+            );
+            return Ok(None);
+        }
+
+        // 需要回写的会话水位：只有首次落库的消息才产生
+        let mut watermark: Option<Watermark> = None;
 
         // 群成员（不含发送者），用于登记 user_conversation 与推送路由
         let member_ids = self.group_member_ids(&msg_type, &msg).await?;
 
         // 读扩散：一条消息只写一次。序号是会话级的，与成员数量无关。
-        if Self::get_send_to_db_flag(&mt) && !msg.is_revoked && need_history {
+        if need_persist {
             let mut participants = member_ids.clone();
             if !msg.send_id.is_empty() {
                 participants.push(msg.send_id.clone());
@@ -459,7 +526,20 @@ impl ConsumerService {
                 "会话 {} 分配序号 {}（新写入: {}）server_id={}",
                 conversation_id, seq, inserted, msg.server_id
             );
+            if !inserted {
+                // 位点回退/重复投递：不重复推送，位点正常推进
+                info!("消息已处理过，跳过重复投递: server_id={}", msg.server_id);
+                return Ok(None);
+            }
+            watermark = Some(Watermark {
+                conversation_id,
+                seq,
+                send_time: msg.send_time,
+            });
         }
+
+        // 落库阶段结束：此后的耗时都归到推送
+        lap.reset();
 
         // 推送使用会话级序号：同一会话的所有成员看到同一个 seq
         let members: Vec<GroupMemSeq> = member_ids
@@ -499,7 +579,53 @@ impl ConsumerService {
                 .map_err(|e| Error::Internal(format!("消息处理任务执行失败: {}", e)))??;
         }
 
-        Ok(())
+        lap.lap(Stage::Push);
+        if lap.enabled() && create_time > 0 {
+            record(
+                Stage::Wait,
+                Duration::from_millis((entered_at - create_time).max(0) as u64),
+            );
+            record(
+                Stage::Total,
+                Duration::from_millis((now_millis() - create_time).max(0) as u64),
+            );
+        }
+
+        Ok(watermark)
+    }
+
+    /// 按会话汇总本批水位并回写一次
+    ///
+    /// 失败只记日志、不影响位点提交：消息本身已落库，水位由下一批
+    /// （同一会话的下一条消息）继续推进；如果因此不提交位点，
+    /// 这批消息会重新投递、全部被幂等闸门拦下，水位反而永远不会回写。
+    async fn flush_watermarks(&self, watermarks: Vec<Watermark>) {
+        let mut merged: std::collections::HashMap<String, (i64, i64)> =
+            std::collections::HashMap::with_capacity(watermarks.len());
+        for mark in watermarks {
+            let entry = merged
+                .entry(mark.conversation_id)
+                .or_insert((mark.seq, mark.send_time));
+            if mark.seq > entry.0 {
+                entry.0 = mark.seq;
+            }
+            if mark.send_time > entry.1 {
+                entry.1 = mark.send_time;
+            }
+        }
+
+        let batch: Vec<(String, i64, i64)> = merged
+            .into_iter()
+            .map(|(id, (seq, time))| (id, seq, time))
+            .collect();
+
+        if let Err(e) = self.writer.touch_watermarks(&batch).await {
+            warn!(
+                "会话水位回写失败（{} 个会话，不影响位点提交）: {:?}",
+                batch.len(),
+                e
+            );
+        }
     }
 
     /// 从缓存查询群组成员ID列表，缓存缺失时回源群组服务
@@ -619,6 +745,14 @@ impl ConsumerService {
 
 }
 
+/// 当前毫秒时间戳
+///
+/// 必须与生产端写 `create_time` 使用同一时钟口径（UTC 毫秒），
+/// 否则分段耗时会出现整体偏移。
+fn now_millis() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 /// 幂等闸门：判断一条消息是否已经落过库
 ///
 /// 以 `server_id` 为准 —— 它在生产端由 `nanoid` 生成，是全局唯一且稳定的。
@@ -639,21 +773,21 @@ pub(crate) async fn already_processed(
 ///
 /// 重试的是「整条消息的处理」，因此可能重复产生副作用；
 /// 下游用 `server_id` 去重。相比直接丢消息，重复是更可接受的失败模式。
-async fn retry_with_backoff<F, Fut>(
+async fn retry_with_backoff<T, F, Fut>(
     max_attempts: u32,
     base_backoff: Duration,
     mut op: F,
-) -> Result<(), Error>
+) -> Result<T, Error>
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<(), Error>>,
+    Fut: std::future::Future<Output = Result<T, Error>>,
 {
     let attempts = max_attempts.max(1);
     let mut last_err: Option<Error> = None;
 
     for attempt in 1..=attempts {
         match op().await {
-            Ok(()) => return Ok(()),
+            Ok(value) => return Ok(value),
             Err(e) => {
                 warn!("第 {}/{} 次处理消息失败: {}", attempt, attempts, e);
                 last_err = Some(e);
@@ -717,6 +851,15 @@ mod tests {
     #[async_trait]
     impl MsgMetaRepo for FakeMeta {
         async fn insert(&self, _entry: &MsgEntry, _inline_max_bytes: usize) -> Result<bool, Error> {
+            unimplemented!()
+        }
+
+        async fn insert_with_participants(
+            &self,
+            _entry: &MsgEntry,
+            _members: &[String],
+            _inline_max_bytes: usize,
+        ) -> Result<(bool, Option<i64>), Error> {
             unimplemented!()
         }
 
@@ -838,11 +981,12 @@ mod tests {
     async fn retry_stops_after_max_attempts() {
         let calls = AtomicU32::new(0);
 
-        let result = retry_with_backoff(3, Duration::ZERO, || async {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Err(Error::Internal("boom".to_string()))
-        })
-        .await;
+        let result: Result<Option<Watermark>, Error> =
+            retry_with_backoff(3, Duration::ZERO, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(Error::Internal("boom".to_string()))
+            })
+            .await;
 
         assert!(result.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 3, "重试次数必须收敛，不能无限重试");

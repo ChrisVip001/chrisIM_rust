@@ -93,6 +93,17 @@ pub trait ConversationRepo: Sync + Send + Debug {
         last_msg_time: i64,
     ) -> Result<(), Error>;
 
+    /// 批量更新会话消息水位
+    ///
+    /// 参数为 `(conversation_id, last_msg_seq, last_msg_time)`，
+    /// 同一会话出现多次时由调用方汇总成最大值。
+    ///
+    /// 每条消息都更新一次 `conversation` 行会让同一批热点行被高频改写：
+    /// 3000 msg/s、64 个会话时就是 3000 次/秒的行更新，WAL 与死元组
+    /// 都按消息数线性增长，而这条链路只需要「最终前进到最大值」。
+    /// 按批汇总后一次提交，语义由 `GREATEST` 保证只增不减。
+    async fn touch_batch(&self, watermarks: &[(String, i64, i64)]) -> Result<(), Error>;
+
     /// 删除会话（群解散时使用）
     async fn delete(&self, conversation_id: &str) -> Result<(), Error>;
 }
@@ -105,6 +116,20 @@ pub trait MsgMetaRepo: Sync + Send + Debug {
     /// 幂等：`(conversation_id, server_id)` 冲突时忽略，返回 `false`。
     /// 正文超过内联阈值时同时写 `msg_content`，两步在同一事务内。
     async fn insert(&self, entry: &MsgEntry, inline_max_bytes: usize) -> Result<bool, Error>;
+
+    /// 用一条数据修改 CTE 完成消息写入与参与者登记
+    ///
+    /// 返回 `(是否首次写入, 新写入的 seq)`。原先这几步是多个独立 PG 调用，
+    /// 每条消息要多花数次网络往返。
+    ///
+    /// 会话水位不在这里更新：那是同一行被反复改写的热点写入，
+    /// 改由 [`ConversationRepo::touch_batch`] 按批汇总一次提交。
+    async fn insert_with_participants(
+        &self,
+        entry: &MsgEntry,
+        members: &[String],
+        inline_max_bytes: usize,
+    ) -> Result<(bool, Option<i64>), Error>;
 
     /// 批量写入（同一事务），返回实际写入条数
     async fn insert_batch(&self, entries: &[MsgEntry], inline_max_bytes: usize)

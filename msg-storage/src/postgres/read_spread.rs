@@ -109,6 +109,45 @@ impl ConversationRepo for PgConversationRepo {
         Ok(())
     }
 
+    async fn touch_batch(&self, watermarks: &[(String, i64, i64)]) -> Result<(), Error> {
+        if watermarks.is_empty() {
+            return Ok(());
+        }
+
+        // 用 unnest 三列数组做一次表连接更新：一次往返、一条语句，
+        // 会话数就是语句里的行数，与消息条数无关。
+        let (ids, seqs, times): (Vec<String>, Vec<i64>, Vec<i64>) = watermarks
+            .iter()
+            .fold(
+                (
+                    Vec::with_capacity(watermarks.len()),
+                    Vec::with_capacity(watermarks.len()),
+                    Vec::with_capacity(watermarks.len()),
+                ),
+                |(mut ids, mut seqs, mut times), (id, seq, time)| {
+                    ids.push(id.clone());
+                    seqs.push(*seq);
+                    times.push(*time);
+                    (ids, seqs, times)
+                },
+            );
+
+        sqlx::query(
+            "UPDATE conversation c
+             SET last_msg_seq = GREATEST(c.last_msg_seq, v.seq),
+                 last_msg_time = GREATEST(c.last_msg_time, v.time),
+                 updated_at = NOW()
+             FROM unnest($1::varchar[], $2::bigint[], $3::bigint[]) AS v(cid, seq, time)
+             WHERE c.conversation_id = v.cid",
+        )
+        .bind(&ids)
+        .bind(&seqs)
+        .bind(&times)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn delete(&self, conversation_id: &str) -> Result<(), Error> {
         sqlx::query("DELETE FROM conversation WHERE conversation_id = $1")
             .bind(conversation_id)
@@ -192,6 +231,67 @@ impl MsgMetaRepo for PgMsgMetaRepo {
 
         tx.commit().await?;
         Ok(true)
+    }
+
+    async fn insert_with_participants(
+        &self,
+        entry: &MsgEntry,
+        members: &[String],
+        inline_max_bytes: usize,
+    ) -> Result<(bool, Option<i64>), Error> {
+        let inline = entry.should_inline(inline_max_bytes);
+
+        // 外置正文只在元数据真正插入时写入，重复投递保持幂等
+        let body_cte = if inline {
+            ""
+        } else {
+            ", body AS (
+                 INSERT INTO msg_content (server_id, content)
+                 SELECT $3, $15 WHERE EXISTS (SELECT 1 FROM ins)
+                 ON CONFLICT (server_id) DO NOTHING
+             )"
+        };
+        let sql = format!(
+            "WITH ins AS (
+                 INSERT INTO msg_meta
+                     (conversation_id, seq, server_id, send_id, msg_type, content_type,
+                      send_time, content_size, inline_content, detail, is_revoked, revoke_time, revoked_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)
+                 ON CONFLICT (conversation_id, server_id) DO NOTHING
+                 RETURNING seq
+             ){body}
+             , mem AS (
+                 INSERT INTO user_conversation (user_id, conversation_id)
+                 SELECT u, $1 FROM unnest($14::varchar[]) AS u
+                 ON CONFLICT (user_id, conversation_id) DO NOTHING
+             )
+             SELECT seq FROM ins",
+            body = body_cte,
+        );
+
+        let query = sqlx::query_as::<_, (i64,)>(&sql)
+            .bind(&entry.conversation_id)
+            .bind(entry.seq)
+            .bind(&entry.msg.server_id)
+            .bind(&entry.msg.send_id)
+            .bind(entry.msg.msg_type)
+            .bind(entry.msg.content_type)
+            .bind(entry.msg.send_time)
+            .bind(entry.msg.content.len() as i32)
+            .bind(if inline { Some(&entry.msg.content) } else { None })
+            .bind(detail_json(&entry.msg))
+            .bind(entry.msg.is_revoked)
+            .bind(entry.msg.revoke_time)
+            .bind(&entry.msg.revoked_by)
+            .bind(members.to_vec());
+        let query = if inline {
+            query
+        } else {
+            query.bind(&entry.msg.content)
+        };
+
+        let row = query.fetch_optional(&self.pool).await?;
+        Ok((row.is_some(), row.map(|(seq,)| seq)))
     }
 
     async fn insert_batch(

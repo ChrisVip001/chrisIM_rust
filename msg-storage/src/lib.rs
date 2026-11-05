@@ -13,6 +13,7 @@ use ::sqlx::PgPool;
 use cache::SeqCache;
 use contract::{error::Error, proto::message::Msg};
 use runtime::config::AppConfig;
+use runtime::stage_profile::{Lap, Stage};
 
 mod postgres;
 
@@ -124,31 +125,39 @@ impl MessageWriter {
     /// 进入新号段时把「已预留上界」回写 PG，Redis 丢失后据此重建，
     /// 宁可跳号也不会重复分配。
     async fn next_seq(&self, conversation_id: &str, conv_type: i16) -> Result<i64, Error> {
-        // 号段首次使用时，用 PG 中已持久化的水位做基线，避免从 1 重新开始
-        if !self.cache.conversation_seq_exists(conversation_id).await? {
+        // 热路径只有一次 Redis 往返；号段未初始化时返回 0，走冷启动。
+        let (cur_seq, max_seq, need_flush) = self
+            .cache
+            .incr_conversation_seq(conversation_id)
+            .await?;
+
+        let (cur_seq, max_seq, need_flush) = if cur_seq == 0 {
+            // 号段首次使用：用 PG 中已持久化的水位做基线，避免 Redis 丢失后从 1 重新分配
             let state = self
                 .repo
                 .conversation
                 .ensure(conversation_id, conv_type)
                 .await?;
-
             let reserved = self
                 .cache
                 .init_conversation_seq(conversation_id, state.last_seq)
                 .await?;
-
-            // 立即持久化本次预留的上界。
-            // 否则 Redis 丢失后会从旧水位重新分配，已用过的序号会被再发一次。
+            // 立即持久化本次预留的上界，否则 Redis 丢失后会重复分配已用过的序号
             self.repo
                 .conversation
                 .flush_seq(conversation_id, reserved)
                 .await?;
-        }
+            self.cache.incr_conversation_seq(conversation_id).await?
+        } else {
+            (cur_seq, max_seq, need_flush)
+        };
 
-        let (cur_seq, max_seq, need_flush) = self
-            .cache
-            .incr_conversation_seq(conversation_id)
-            .await?;
+        if cur_seq == 0 {
+            return Err(Error::Internal(format!(
+                "会话号段冷启动后仍不可用: {}",
+                conversation_id
+            )));
+        }
 
         if need_flush {
             self.repo
@@ -165,6 +174,8 @@ impl MessageWriter {
     /// 返回 `(conversation_id, seq, 是否首次写入)`。
     /// 重复消息（重放）不会分配新序号，直接返回已有 seq，
     /// 避免重放把会话水位推高、污染未读计算。
+    /// 写入由单条 CTE 完成（元数据/正文 + 参与者 + 水位），并发重复时
+    /// 读回数据库里的权威序号，且 CTE 不会更新会话水位。
     ///
     /// `members` 为该会话的参与者：单聊传双方，群聊传全部成员，
     /// 用于登记 `user_conversation`（未读与已读游标的基础）。
@@ -176,29 +187,50 @@ impl MessageWriter {
         let conversation_id = read_spread::conversation_id_of(&msg);
         let conv_type = read_spread::conv_type_of(&msg);
 
+        // 分段计时：幂等查询 / 号段 / 写入三段，用于定位落库延迟来源
+        let mut lap = Lap::start();
+
+        // 幂等预查询必须保留：重复投递不消耗号段、不推高水位。
         if !msg.server_id.is_empty() {
-            if let Some(existing) = self.repo.meta.get(&conversation_id, &msg.server_id).await? {
+            let existing = self.repo.meta.get(&conversation_id, &msg.server_id).await?;
+            lap.lap(Stage::Idem);
+            if let Some(existing) = existing {
                 return Ok((conversation_id, existing.seq, false));
             }
         }
 
         let seq = self.next_seq(&conversation_id, conv_type).await?;
+        lap.lap(Stage::Seq);
 
         let entry = read_spread::MsgEntry::new(conversation_id.clone(), seq, msg.clone());
-        let inserted = self.repo.meta.insert(&entry, self.inline_max_bytes).await?;
+        let (inserted, written_seq) = self
+            .repo
+            .meta
+            .insert_with_participants(&entry, members, self.inline_max_bytes)
+            .await?;
+        lap.lap(Stage::Insert);
 
-        if !members.is_empty() {
-            self.repo
-                .user_conversation
-                .ensure_members(members, &conversation_id)
-                .await?;
+        if inserted {
+            return Ok((conversation_id, written_seq.unwrap_or(seq), true));
         }
 
-        self.repo
-            .conversation
-            .touch(&conversation_id, seq, msg.send_time)
-            .await?;
+        let existing = self.repo.meta.get(&conversation_id, &msg.server_id).await?;
+        Ok((
+            conversation_id,
+            existing.map(|m| m.seq).unwrap_or(seq),
+            false,
+        ))
+    }
 
-        Ok((conversation_id, seq, inserted))
+    /// 批次级会话水位回写
+    ///
+    /// 参数为 `(conversation_id, seq, send_time)`，同一会话可以出现多次，
+    /// 库侧用 `GREATEST` 只前进。调用方在整批消息落库成功后调用一次，
+    /// 把「每条消息一次热点行更新」降为「每个会话一批一次」。
+    ///
+    /// 代价是水位最多滞后一个批次（几十毫秒）：会话列表的最后一条消息
+    /// 可能晚一个批次才刷新，消息本身已经落库并由推送即时送达。
+    pub async fn touch_watermarks(&self, watermarks: &[(String, i64, i64)]) -> Result<(), Error> {
+        self.repo.conversation.touch_batch(watermarks).await
     }
 }

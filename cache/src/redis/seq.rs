@@ -9,6 +9,25 @@ use contract::proto::message::GroupMemSeq;
 use super::*;
 use redis::AsyncCommands;
 
+/// 会话号段领取脚本
+///
+/// 未初始化时返回 `{0, 0, false}`，由调用方用 PG 水位冷启动后重试；
+/// 存在性检查与号段领取在同一脚本内原子完成。
+const CONVERSATION_SEQ_SCRIPT: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then
+    return {0, 0, false}
+end
+local cur_seq = redis.call('HINCRBY', KEYS[1], 'cur_seq', 1)
+local max_seq = redis.call('HGET', KEYS[1], 'max_seq')
+local updated = false
+if tonumber(cur_seq) > tonumber(max_seq) then
+    max_seq = tonumber(max_seq) + ARGV[1]
+    redis.call('HSET', KEYS[1], 'max_seq', max_seq)
+    updated = true
+end
+return {cur_seq, max_seq, updated}
+"#;
+
 #[async_trait]
 impl SeqCache for RedisCache {
     /// 检查序列号是否已加载
@@ -165,17 +184,6 @@ impl SeqCache for RedisCache {
         Ok(seq)
     }
 
-    /// 会话号段是否已初始化
-    async fn conversation_seq_exists(&self, conversation_id: &str) -> Result<bool, Error> {
-        let key = format!("cseq:{}", conversation_id);
-        let mut conn = self.get_connection().await?;
-        let exists: i64 = redis::cmd("EXISTS")
-            .arg(&key)
-            .query_async(&mut conn)
-            .await?;
-        Ok(exists > 0)
-    }
-
     /// 用持久化水位初始化会话号段
     ///
     /// 用 HSETNX 而不是 HSET：多个消费者同时首次访问同一会话时，
@@ -215,12 +223,12 @@ impl SeqCache for RedisCache {
         let key = format!("cseq:{}", conversation_id);
         let mut conn = self.get_connection().await?;
 
-        let seq = redis::cmd(EVALSHA)
-            .arg(&self.single_seq_exe_sha)
-            .arg(1)
-            .arg(&key)
+        // 存在性检查并入脚本：热路径只有一次往返，未初始化时返回 cur_seq=0。
+        // `redis::Script` 自行处理 NOSCRIPT 回退，sha1 计算远小于一次网络往返。
+        let seq = redis::Script::new(CONVERSATION_SEQ_SCRIPT)
+            .key(&key)
             .arg(self.seq_step)
-            .query_async(&mut conn)
+            .invoke_async(&mut conn)
             .await?;
 
         Ok(seq)

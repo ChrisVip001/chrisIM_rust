@@ -197,7 +197,7 @@ database:
     password: 123456
     database: rustim
     # 消费端按会话分组并行，默认池（10）会成为吞吐上限
-    pool_size: 32
+    pool_size: 64
   xdb: ./assets/ip2region.xdb
 
 # 消息存储配置（统一读扩散，一条消息恒定 1 行元数据）

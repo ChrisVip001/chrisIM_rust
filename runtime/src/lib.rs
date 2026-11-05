@@ -34,5 +34,6 @@ pub mod service_discovery;
 pub mod service_register_center;
 pub mod shutdown;
 pub mod sms;
+pub mod stage_profile;
 pub mod snowflake;
 pub mod utils;

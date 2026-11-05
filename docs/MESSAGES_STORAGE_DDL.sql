@@ -44,6 +44,16 @@ COMMENT ON COLUMN conversation.last_seq IS 'Redis 号段的持久化水位（已
 COMMENT ON COLUMN conversation.last_msg_seq IS '实际最后一条消息的 seq，未读数基准';
 COMMENT ON COLUMN conversation.last_msg_time IS '最后一条消息时间，会话列表排序依据（热数据由 Redis ZSET 承担）';
 
+-- 这张表行数极少但被高频更新（水位回写），默认的按比例阈值永远等不到：
+-- 实测 75 行活元组累积 9918 个死元组（132 倍膨胀），autovacuum 十小时没跑一次。
+-- 收紧到按行数触发，让清理频率跟得上更新频率。
+ALTER TABLE conversation SET (
+    autovacuum_vacuum_scale_factor  = 0.01,
+    autovacuum_vacuum_threshold     = 50,
+    autovacuum_analyze_scale_factor = 0.01,
+    autovacuum_analyze_threshold    = 50
+);
+
 -- 单聊会话 ID 生成：保证两侧计算结果一致
 CREATE OR REPLACE FUNCTION single_conversation_id(a VARCHAR, b VARCHAR)
 RETURNS VARCHAR AS $$

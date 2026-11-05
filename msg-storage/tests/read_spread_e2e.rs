@@ -115,6 +115,25 @@ async fn write_fetch_and_idempotency() {
     assert_eq!(fetched[1].content, big_content, "外置正文应回表补齐");
 
     // 5. 会话水位：消息水位是实际最后一条，号段水位会超前
+    //
+    // 消息水位不再随单条写入更新（那是同一行被高频改写的热点），
+    // 改由调用方按批汇总回写一次；这里显式验证「回写前不前进、回写后前进」。
+    let before = repo
+        .conversation
+        .get(&conversation_id)
+        .await
+        .expect("查询会话失败")
+        .expect("会话应存在");
+    assert_eq!(
+        before.last_msg_seq, 0,
+        "落库不应再顺带更新会话水位，水位由批次回写负责"
+    );
+
+    writer
+        .touch_watermarks(&[(conversation_id.clone(), 2, 1_700_000_001_000)])
+        .await
+        .expect("回写会话水位失败");
+
     let state = repo
         .conversation
         .get(&conversation_id)
@@ -126,6 +145,19 @@ async fn write_fetch_and_idempotency() {
         state.last_seq >= state.last_msg_seq,
         "号段水位应不低于消息水位"
     );
+
+    // 回写只增不减：重复批次不能把水位拉回去
+    writer
+        .touch_watermarks(&[(conversation_id.clone(), 1, 1_700_000_000_000)])
+        .await
+        .expect("重复回写失败");
+    let state = repo
+        .conversation
+        .get(&conversation_id)
+        .await
+        .expect("查询会话失败")
+        .expect("会话应存在");
+    assert_eq!(state.last_msg_seq, 2, "水位回写必须只增不减");
 
     // 6. 成员登记与未读
     let states = repo
