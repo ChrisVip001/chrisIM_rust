@@ -45,6 +45,12 @@ pub struct AppConfig {
     /// 允许整个段落缺省，缺省时采用严格模式（校验失败即拒绝）。
     #[serde(default)]
     pub validation: ValidationConfig,
+    /// 注册到 Consul 时对外广告的地址，由 `ADVERTISE_HOST` 注入
+    ///
+    /// 配置文件里的 host 是本地监听地址（127.0.0.1）；在容器中若原样注册，
+    /// 服务发现会把流量导向调用方自己。Pod 环境必须注入 Pod IP。
+    #[serde(default)]
+    pub advertise_host: Option<String>,
 }
 
 /// 消息发送权限校验配置
@@ -243,8 +249,31 @@ impl ServerConfig {
 pub struct ServiceCenterConfig {
     pub host: String,
     pub port: u16,
+    /// 注册中心 HTTP 请求超时（秒）
+    ///
+    /// 历史上这里被误填为 8080（端口号），依赖不可达时请求会挂起两小时以上，
+    /// 直接击穿 RTO，因此代码侧再限幅一次。
     pub timeout: u64,
     pub protocol: String,
+    /// 发现端刷新间隔（秒），决定故障实例被摘流的最大延迟
+    #[serde(default = "default_refresh_interval")]
+    pub service_refresh_interval: u64,
+}
+
+fn default_refresh_interval() -> u64 {
+    5
+}
+
+impl ServiceCenterConfig {
+    /// 请求超时限幅 [1, 10] 秒，防止配置误填放大到小时级
+    pub fn request_timeout(&self) -> u64 {
+        self.timeout.clamp(1, 10)
+    }
+
+    /// 发现刷新间隔限幅 [1, 30] 秒
+    pub fn refresh_interval(&self) -> u64 {
+        self.service_refresh_interval.clamp(1, 30)
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -386,17 +415,26 @@ impl AppConfig {
 
         // 转换为AppConfig结构体
         let mut app_config: AppConfig = config.try_deserialize()?;
-        app_config.apply_secret_env_overrides();
+        app_config.apply_env_overrides();
         Ok(app_config)
     }
 
-    /// 敏感信息环境变量覆盖
+    /// 服务注册时对外广告的地址：容器环境取 `ADVERTISE_HOST`，否则沿用监听地址
+    pub fn advertised_host(&self, bind_host: &str) -> String {
+        self.advertise_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .unwrap_or(bind_host)
+            .to_string()
+    }
+
+    /// 环境变量覆盖
     ///
-    /// 历史上云存储/短信密钥与JWT密钥直接写进 config.yaml，
-    /// 存在随仓库泄露的风险。以下环境变量（存在且非空时）优先于配置文件：
-    /// `OSS_ACCESS_KEY` / `OSS_SECRET_KEY` / `SMS_SECRET_ID` /
-    /// `SMS_SECRET_KEY` / `JWT_SECRET`
-    fn apply_secret_env_overrides(&mut self) {
+    /// 敏感密钥不落盘：`OSS_ACCESS_KEY` / `OSS_SECRET_KEY` / `SMS_SECRET_ID` /
+    /// `SMS_SECRET_KEY` / `JWT_SECRET`；容器编排相关：`ADVERTISE_HOST`（Pod IP，
+    /// 用于服务注册）、`CONSUL_HOST` / `CONSUL_PORT`（注册中心地址）。
+    fn apply_env_overrides(&mut self) {
         let overrides: [(&str, &mut String); 5] = [
             ("OSS_ACCESS_KEY", &mut self.oss.access_key),
             ("OSS_SECRET_KEY", &mut self.oss.secret_key),
@@ -410,6 +448,22 @@ impl AppConfig {
                     info!("已从环境变量 {} 覆盖敏感配置", env_key);
                     *target = value;
                 }
+            }
+        }
+
+        if let Ok(value) = std::env::var("ADVERTISE_HOST") {
+            if !value.trim().is_empty() {
+                self.advertise_host = Some(value);
+            }
+        }
+        if let Ok(value) = std::env::var("CONSUL_HOST") {
+            if !value.trim().is_empty() {
+                self.service_center.host = value;
+            }
+        }
+        if let Ok(value) = std::env::var("CONSUL_PORT") {
+            if let Ok(port) = value.parse::<u16>() {
+                self.service_center.port = port;
             }
         }
     }
@@ -434,6 +488,24 @@ mod tests {
         assert_eq!(config.database.postgres.port, 5432);
         assert_eq!(config.database.postgres.user, "kelisi");
         assert_eq!(config.database.postgres.password, "123456");
+    }
+
+    #[test]
+    fn service_center_timeouts_are_bounded() {
+        let config = AppConfig::from_file(Some(&global_config_path())).unwrap();
+        assert!(config.service_center.request_timeout() <= 10);
+        assert!((1..=30).contains(&config.service_center.refresh_interval()));
+    }
+
+    #[test]
+    fn advertised_host_prefers_injected_pod_ip() {
+        let mut config = AppConfig::from_file(Some(&global_config_path())).unwrap();
+        config.advertise_host = None;
+        assert_eq!(config.advertised_host("0.0.0.0"), "0.0.0.0");
+        config.advertise_host = Some("10.1.2.3".to_string());
+        assert_eq!(config.advertised_host("0.0.0.0"), "10.1.2.3");
+        config.advertise_host = Some("  ".to_string());
+        assert_eq!(config.advertised_host("0.0.0.0"), "0.0.0.0");
     }
 
 }

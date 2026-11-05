@@ -2,15 +2,20 @@ use async_trait::async_trait;
 use rs_consul::{Config as ConsulConfig, Consul as RsConsul};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::config::AppConfig;
-use crate::service_register_center::typos::Registration;
+use crate::service_register_center::typos::{HealthCheck, Registration};
 use crate::service_register_center::ServiceRegister;
 use contract::Error;
+
+/// TTL 判定窗口缺省 10 秒：故障实例最迟 10 秒被 Consul 标记为 critical
+const DEFAULT_TTL_SECS: u64 = 10;
+/// Consul 要求 DeregisterCriticalServiceAfter 最小 1 分钟
+const MIN_DEREGISTER_SECS: u64 = 60;
 
 /// 幂等地安装 rustls 默认加密提供者
 ///
@@ -38,18 +43,119 @@ impl ConsulOptions {
         Self {
             host: config.service_center.host.clone(),
             port: config.service_center.port,
-            timeout: config.service_center.timeout,
+            timeout: config.service_center.request_timeout(),
             protocol: config.service_center.protocol.clone(),
         }
     }
 }
 
-/// 规范化 Consul 时长字符串：确保以 "s" 结尾且只有一个后缀
-///
-/// 调用方传入的值可能带（"30s"）或不带（"30"）后缀，统一输出 "30s"
+fn parse_seconds(value: &str, default: u64) -> u64 {
+    value
+        .trim()
+        .trim_end_matches('s')
+        .parse::<u64>()
+        .unwrap_or(default)
+}
+
+/// 规范化 Consul 时长字符串：配置里可能带（"30s"）或不带（"30"）后缀
 fn with_seconds(value: &str) -> String {
-    let trimmed = value.trim_end_matches('s');
-    format!("{}s", trimmed)
+    format!("{}s", parse_seconds(value, 5))
+}
+
+/// TTL 上报周期必须显著短于判定窗口
+///
+/// 此前上报间隔直接等于 TTL 窗口，等于踩点续命：一次网络抖动或调度延迟
+/// 就会让健康实例被误判 critical。按 1/3 窗口上报留出两次重试余量。
+fn report_interval_seconds(ttl_seconds: u64) -> u64 {
+    (ttl_seconds / 3).max(1)
+}
+
+fn deregister_seconds(value: &str) -> String {
+    format!(
+        "{}s",
+        parse_seconds(value, MIN_DEREGISTER_SECS).max(MIN_DEREGISTER_SECS)
+    )
+}
+
+/// 配置里的健康检查 URL 常写成路径，Consul HTTP 检查需要绝对 URL
+fn http_check_url(path_or_url: &str, host: &str, port: u16) -> String {
+    if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
+        return path_or_url.to_string();
+    }
+    let path = if path_or_url.starts_with('/') {
+        path_or_url.to_string()
+    } else {
+        format!("/{}", path_or_url)
+    };
+    format!("http://{}:{}{}", host, port, path)
+}
+
+/// 构造 Consul 的 Check 字段
+///
+/// 返回 `(检查定义, TTL 窗口秒数)`；后者为 `Some` 时需要进程内周期上报。
+/// `check: None` 不再是"没有健康检查"，而是显式回落为默认 TTL 检查。
+fn build_check(
+    check: Option<&HealthCheck>,
+    registration: &Registration,
+) -> (serde_json::Value, Option<u64>) {
+    let Some(c) = check else {
+        return (
+            json!({
+                "Name": format!("{} TTL Check", registration.name),
+                "Notes": "Automatically managed TTL health check",
+                "TTL": format!("{}s", DEFAULT_TTL_SECS),
+                "DeregisterCriticalServiceAfter": format!("{}s", MIN_DEREGISTER_SECS),
+            }),
+            Some(DEFAULT_TTL_SECS),
+        );
+    };
+
+    let deregister_after = deregister_seconds(&c.deregister_after);
+    match c.health_type.as_str() {
+        "http" => (
+            json!({
+                "Name": c.name,
+                "HTTP": http_check_url(&c.url, &registration.host, registration.port),
+                "Interval": with_seconds(&c.interval),
+                "Timeout": with_seconds(&c.timeout),
+                "DeregisterCriticalServiceAfter": deregister_after,
+            }),
+            None,
+        ),
+        "grpc" => (
+            json!({
+                "Name": c.name,
+                "GRPC": format!("{}:{}", registration.host, registration.port),
+                "Interval": with_seconds(&c.interval),
+                "Timeout": with_seconds(&c.timeout),
+                "DeregisterCriticalServiceAfter": deregister_after,
+            }),
+            None,
+        ),
+        _ => {
+            let ttl = parse_seconds(&c.interval, DEFAULT_TTL_SECS).max(1);
+            (
+                json!({
+                    "Name": c.name,
+                    "Notes": "TTL health check for service",
+                    "TTL": format!("{}s", ttl),
+                    "DeregisterCriticalServiceAfter": deregister_after,
+                }),
+                Some(ttl),
+            )
+        }
+    }
+}
+
+/// TTL 上报任务的进程级注册表
+///
+/// `service_register_center()` 每次调用都会新建 `Consul` 实例，注册与注销
+/// 常发生在不同实例上。句柄若挂在实例里，`deregister` 停不掉上报任务，
+/// 停机后的僵尸实例会被持续上报为健康、甚至被重新注册。
+static TTL_UPDATERS: OnceLock<Arc<Mutex<HashMap<String, JoinHandle<()>>>>> = OnceLock::new();
+
+fn ttl_updaters() -> &'static Arc<Mutex<HashMap<String, JoinHandle<()>>>> {
+    TTL_UPDATERS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
 /// Consul service registry implementation
@@ -57,7 +163,6 @@ fn with_seconds(value: &str) -> String {
 pub struct Consul {
     pub options: ConsulOptions,
     pub client: RsConsul,
-    ttl_updaters: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
 impl Consul {
@@ -76,32 +181,27 @@ impl Consul {
 
         let client = RsConsul::new(consul_config);
 
-        Self {
-            options,
-            client,
-            ttl_updaters: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { options, client }
     }
 
-    /// 启动一个后台任务来定期更新TTL健康检查状态，使用自定义更新间隔
+    /// 启动进程内 TTL 上报任务
     ///
+    /// `period_seconds` 是上报周期，须显著短于 Consul 的 TTL 判定窗口。
     /// `registration_payload` 是注册时发给 Consul 的原始请求体：
     /// Consul 重启会丢失全部注册信息，仅靠 TTL 上报无法恢复，
     /// 任务会周期性核查注册是否存在，缺失时用这份载荷原样重建。
-    pub async fn start_ttl_updater_with_interval(
+    async fn start_ttl_updater(
         &self,
         service_id: String,
-        interval_seconds: u64,
+        period_seconds: u64,
         registration_payload: serde_json::Value,
     ) {
-        // 先检查是否已存在该服务的更新器，如果存在则先停止
+        // 同一 service_id 重复注册时先停掉旧任务，避免两个任务互相续命
         {
-            let mut updaters = self.ttl_updaters.lock().await;
-            if updaters.contains_key(&service_id) {
-                if let Some(handle) = updaters.remove(&service_id) {
-                    handle.abort();
-                    debug!("Stopped existing TTL updater for service: {}", service_id);
-                }
+            let mut updaters = ttl_updaters().lock().await;
+            if let Some(handle) = updaters.remove(&service_id) {
+                handle.abort();
+                debug!("Stopped existing TTL updater for service: {}", service_id);
             }
         }
 
@@ -129,7 +229,7 @@ impl Consul {
             );
 
             // 使用自定义的更新间隔
-            let interval = std::time::Duration::from_secs(interval_seconds);
+            let interval = std::time::Duration::from_secs(period_seconds);
             let client = reqwest::Client::new();
 
             loop {
@@ -196,7 +296,7 @@ impl Consul {
                     Ok(_) => {
                         debug!(
                             "TTL health check updated for service: {} (interval: {}s)",
-                            service_id_for_task, interval_seconds
+                            service_id_for_task, period_seconds
                         );
                     }
                     Err(e) => {
@@ -210,22 +310,23 @@ impl Consul {
         });
 
         // 存储任务句柄以便后续取消
-        let mut updaters = self.ttl_updaters.lock().await;
+        let mut updaters = ttl_updaters().lock().await;
         updaters.insert(service_id.clone(), task);
 
         info!(
-            "Started TTL health check updater for service: {} (interval: {}s)",
-            service_id, interval_seconds
+            "Started TTL health check updater for service: {} (report period: {}s)",
+            service_id, period_seconds
         );
     }
 
-    /// 停止特定服务的TTL更新器
+    /// 停止指定服务的 TTL 上报任务
+    ///
+    /// 句柄在进程级共享表中，注册与注销使用不同 `Consul` 实例也能停掉；
+    /// 否则停机后任务会继续上报并重建注册，僵尸实例永远不会被摘流。
     pub async fn stop_ttl_updater(&self, service_id: &str) {
-        let mut updaters = self.ttl_updaters.lock().await;
+        let mut updaters = ttl_updaters().lock().await;
         if let Some(handle) = updaters.remove(service_id) {
-            // 终止任务
             handle.abort();
-            drop(handle); // 显式丢弃句柄
             info!(
                 "Stopped TTL health check updater for service: {}",
                 service_id
@@ -251,7 +352,7 @@ impl ServiceRegister for Consul {
             registration.name, registration.host, registration.port
         );
 
-        // 构建服务注册JSON
+        // 构建服务注册JSON；健康检查定义由 build_check 统一生成
         let mut payload = json!({
             "ID": registration.id,
             "Name": registration.name,
@@ -259,73 +360,8 @@ impl ServiceRegister for Consul {
             "Port": registration.port,
             "Tags": registration.tags
         });
-        
-        let mut is_ttl = false;
-        let ttl_interval;
-        // 根据健康检查类型添加相应配置
-        if let Some(check) = &registration.check {
-            match check.health_type.as_str() {
-                "http" => {
-                    // HTTP健康检查
-                    let check_json = json!({
-                        "Name": check.name,
-                        "HTTP": check.url,
-                        "Interval": with_seconds(&check.interval),
-                        "Timeout": with_seconds(&check.timeout),
-                        "DeregisterCriticalServiceAfter": with_seconds(&check.deregister_after)
-                    });
-                    payload["Check"] = check_json;
-                    info!("Using HTTP health check for service: {}", registration.name);
-                }
-                "grpc" => {
-                    // gRPC健康检查
-                    // interval/timeout 为空时使用默认值，避免生成非法的 "s" 值
-                    let interval = if check.interval.is_empty() {
-                        "10".to_string()
-                    } else {
-                        check.interval.clone()
-                    };
-                    let timeout = if check.timeout.is_empty() {
-                        "5".to_string()
-                    } else {
-                        check.timeout.clone()
-                    };
-                    let check_json = json!({
-                        "Name": check.name,
-                        "GRPC": format!("{}:{}", registration.host, registration.port),
-                        "Interval": with_seconds(&interval),
-                        "Timeout": with_seconds(&timeout),
-                        "DeregisterCriticalServiceAfter": with_seconds(&check.deregister_after)
-                    });
-                    payload["Check"] = check_json;
-                    info!("Using gRPC health check for service: {}", registration.name);
-                }
-                _ => {
-                    // 默认使用TTL健康检查
-                    let check_json = json!({
-                        "Name": check.name,
-                        "Notes": "TTL health check for service",
-                        "TTL": with_seconds(&check.interval),
-                        "DeregisterCriticalServiceAfter": with_seconds(&check.deregister_after)
-                    });
-                    payload["Check"] = check_json;
-                    info!("Using TTL health check for service: {}", registration.name);
-                    is_ttl = true;
-                }
-            }
-            ttl_interval = check.interval.parse::<u64>().unwrap_or(15);
-        } else {
-            let check_json = json!({
-                "Name": format!("{} TTL Check", registration.name),
-                "Notes": "Automatically managed TTL health check",
-                "TTL": "15s",
-                "DeregisterCriticalServiceAfter": "60s"
-            });
-            payload["Check"] = check_json;
-            info!("Using auto-configured TTL health check for service: {}", registration.name);
-            is_ttl = true;
-            ttl_interval = 15;
-        }
+        let (check, ttl_seconds) = build_check(registration.check.as_ref(), &registration);
+        payload["Check"] = check;
 
         // 发送HTTP请求
         let client = reqwest::Client::new();
@@ -337,55 +373,7 @@ impl ServiceRegister for Consul {
             .await
             .map_err(|e| Error::Internal(format!("HTTP request failed: {}", e)))?;
 
-        if response.status().is_success() {
-            info!("Service registered successfully: {}", registration.id);
-
-            // 如果使用TTL检查，立即发送一个通过状态并启动TTL更新器
-            if is_ttl {
-                let check_url = format!(
-                    "{}://{}:{}/v1/agent/check/pass/service:{}",
-                    self.options.protocol, self.options.host, self.options.port, registration.id
-                );
-
-                // 发送初始健康状态
-                match client
-                    .put(&check_url)
-                    .timeout(std::time::Duration::from_secs(self.options.timeout))
-                    .send()
-                    .await
-                {
-                    Ok(_) => {
-                        info!(
-                            "Initial health check status set to passing for service: {}",
-                            registration.id
-                        );
-
-                        // 启动TTL更新器，使用配置的间隔
-                        self.start_ttl_updater_with_interval(
-                            registration.id.clone(),
-                            ttl_interval,
-                            payload.clone(),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to set initial health check status for service {}: {}",
-                            registration.id, e
-                        );
-                        // 即使初始状态设置失败，仍然启动更新器尝试保持服务健康
-                        self.start_ttl_updater_with_interval(
-                            registration.id.clone(),
-                            ttl_interval,
-                            payload.clone(),
-                        )
-                        .await;
-                    }
-                }
-            }
-
-            Ok(registration.id.clone())
-        } else {
+        if !response.status().is_success() {
             let status = response.status();
             let error_text = response
                 .text()
@@ -395,12 +383,45 @@ impl ServiceRegister for Consul {
                 "Failed to register service: HTTP {}: {}",
                 status, error_text
             );
-            Err(Error::Internal(format!("HTTP {}: {}", status, error_text)))
+            return Err(Error::Internal(format!("HTTP {}: {}", status, error_text)));
         }
+
+        info!("Service registered successfully: {}", registration.id);
+
+        // 只有 TTL 检查需要进程内上报；HTTP/gRPC 检查由 Consul 主动探测。
+        if let Some(ttl) = ttl_seconds {
+            let check_url = format!(
+                "{}://{}:{}/v1/agent/check/pass/service:{}",
+                self.options.protocol, self.options.host, self.options.port, registration.id
+            );
+
+            // TTL 检查初始为 critical，注册后立即上报一次，避免首次刷新前被摘流
+            if let Err(e) = client
+                .put(&check_url)
+                .timeout(std::time::Duration::from_secs(self.options.timeout))
+                .send()
+                .await
+            {
+                error!(
+                    "初始健康状态上报失败（由周期任务续报）: {} - {}",
+                    registration.id, e
+                );
+            }
+
+            let period = report_interval_seconds(ttl);
+            info!(
+                "TTL 检查窗口 {}s / 上报周期 {}s: {}",
+                ttl, period, registration.id
+            );
+            self.start_ttl_updater(registration.id.clone(), period, payload.clone())
+                .await;
+        }
+
+        Ok(registration.id.clone())
     }
 
     async fn deregister(&self, service_id: &str) -> Result<(), Error> {
-        // 先停止TTL更新器
+        // 必须先停上报任务再摘除注册，否则任务会把已停实例重新注册回来
         self.stop_ttl_updater(service_id).await;
 
         // 直接使用HTTP API与Consul交互
@@ -512,6 +533,7 @@ impl ServiceRegister for Consul {
                         host: address.to_string(),
                         port: port as u16,
                         tags,
+                        // 发现结果只描述实例地址，不需要回传健康检查定义
                         check: None,
                     };
 
@@ -538,8 +560,6 @@ impl ServiceRegister for Consul {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service_register_center::typos::HealthCheck;
-    use rs_consul::{Config, GetServiceNodesRequest};
 
     #[tokio::test]
     async fn register_deregister_should_work() {
@@ -558,6 +578,7 @@ mod tests {
             host: config.websocket.host.clone(),
             port: config.websocket.port,
             tags: config.websocket.tags.clone(),
+            // 未显式给检查定义时应回落为默认 TTL 检查，而非"无健康检查"
             check: None,
         };
         let result = consul.register(registration).await;
@@ -616,12 +637,12 @@ mod tests {
 
         // 创建带TTL健康检查的注册
         let health_check = HealthCheck {
-            health_type: "grpc".to_string(),
-            name: "gRPC Service TTL".to_string(),
-            url: "".to_string(),      // TTL不需要URL
-            interval: "".to_string(), // TTL不需要间隔
-            timeout: "".to_string(),  // TTL不需要超时
-            deregister_after: "30s".to_string(),
+            health_type: "ttl".to_string(),
+            name: "Service TTL".to_string(),
+            url: "".to_string(),        // TTL不需要URL
+            interval: "5".to_string(),  // TTL判定窗口 5s，上报周期自动收敛为 1s
+            timeout: "".to_string(),    // TTL不需要超时
+            deregister_after: "60".to_string(),
         };
 
         let registration = Registration {
@@ -644,6 +665,76 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // 保留原有的service_reg测试
-    // ... 其他测试 ...
+    #[test]
+    fn ttl_report_period_leaves_retry_margin() {
+        assert_eq!(report_interval_seconds(10), 3);
+        assert_eq!(report_interval_seconds(15), 5);
+        assert_eq!(report_interval_seconds(2), 1);
+        assert!(report_interval_seconds(10) * 2 < 10);
+    }
+
+    #[test]
+    fn check_payload_normalizes_urls_and_durations() {
+        let reg = Registration {
+            id: "svc-1".to_string(),
+            name: "svc".to_string(),
+            host: "10.0.0.2".to_string(),
+            port: 8085,
+            tags: vec![],
+            check: None,
+        };
+
+        let (check, ttl) = build_check(
+            Some(&HealthCheck {
+                health_type: "http".to_string(),
+                name: "http".to_string(),
+                url: "/health".to_string(),
+                interval: "5".to_string(),
+                timeout: "2s".to_string(),
+                deregister_after: "30".to_string(),
+            }),
+            &reg,
+        );
+        assert_eq!(check["HTTP"], "http://10.0.0.2:8085/health");
+        assert_eq!(check["Interval"], "5s");
+        assert_eq!(check["Timeout"], "2s");
+        // Consul 要求至少 1 分钟，30s 必须被提升，否则注册会被拒绝
+        assert_eq!(check["DeregisterCriticalServiceAfter"], "60s");
+        assert!(ttl.is_none());
+
+        let (check, ttl) = build_check(
+            Some(&HealthCheck {
+                health_type: "ttl".to_string(),
+                name: "ttl".to_string(),
+                url: "".to_string(),
+                interval: "10".to_string(),
+                timeout: "".to_string(),
+                deregister_after: "60".to_string(),
+            }),
+            &reg,
+        );
+        assert_eq!(check["TTL"], "10s");
+        assert_eq!(ttl, Some(10));
+
+        let (check, ttl) = build_check(None, &reg);
+        assert_eq!(check["TTL"], "10s");
+        assert_eq!(ttl, Some(DEFAULT_TTL_SECS));
+    }
+
+    #[tokio::test]
+    async fn ttl_updater_stops_from_a_different_consul_instance() {
+        let config = AppConfig::from_file(Some(&crate::config::global_config_path())).unwrap();
+        let registrar = Consul::from_config(&config);
+        let shutdown = Consul::from_config(&config);
+        let id = format!("ttl-cross-instance-{}", uuid::Uuid::new_v4());
+
+        // 上报周期远大于测试时长，任务不会真的发出 HTTP 请求
+        registrar
+            .start_ttl_updater(id.clone(), 30, serde_json::json!({}))
+            .await;
+        assert!(ttl_updaters().lock().await.contains_key(&id));
+
+        shutdown.stop_ttl_updater(&id).await;
+        assert!(!ttl_updaters().lock().await.contains_key(&id));
+    }
 }

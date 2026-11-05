@@ -19,24 +19,35 @@ spec:
       labels:
         app: msg-server
     spec:
-      terminationGracePeriodSeconds: 60   # 等待在途消息批次落库后再退出
+      terminationGracePeriodSeconds: 30   # 等待在途消息批次落库；与 RTO 30s 预算对齐
       containers:
         - name: msg-server
           image: rustim/msg-server:latest
           imagePullPolicy: IfNotPresent
+          env:
+            - name: CONSUL_HOST
+              value: consul.rustim.svc.cluster.local
+            - name: ADVERTISE_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           ports:
             - containerPort: 50010
               name: grpc
           readinessProbe:
             grpc:
               port: 50010
-            initialDelaySeconds: 10
-            periodSeconds: 10
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
           livenessProbe:
             grpc:
               port: 50010
-            initialDelaySeconds: 30
-            periodSeconds: 20
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 500m

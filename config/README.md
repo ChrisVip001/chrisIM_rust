@@ -33,6 +33,18 @@ let config = std::sync::Arc::new(runtime::config::AppConfig::from_file(None)?);
 | `SMS_SECRET_KEY` | `sms.tencent.secret_key` |
 | `JWT_SECRET` | `gateway.auth.jwt.secret` |
 
+## 容器环境
+
+配置里的 `127.0.0.1` 是本地监听地址，注册相关地址由环境变量覆盖：
+
+| 环境变量 | 覆盖字段 | 说明 |
+|---|---|---|
+| `ADVERTISE_HOST` | `advertise_host` | 注册到 Consul 的地址；k8s 取 `status.podIP`，compose 由 `scripts/docker-entrypoint.sh` 按容器 IP 自动注入；缺省时沿用监听 host |
+| `CONSUL_HOST` | `service_center.host` | 注册中心地址；缺省的 127.0.0.1 在 Pod 内指向自己 |
+| `CONSUL_PORT` | `service_center.port` | 注册中心端口 |
+
+不注入 `ADVERTISE_HOST` 时，多副本会全部注册成 127.0.0.1，服务发现把流量导向调用方自己。
+
 ## 关键配置项
 
 - `websocket.upstream_workers`：上行并行 worker 数（默认 8，组内保序）
@@ -40,3 +52,6 @@ let config = std::sync::Arc::new(runtime::config::AppConfig::from_file(None)?);
 - `kafka.topic_partitions` / `kafka.topic_replication`：主题分区/副本（默认 16/3，仅在创建主题时生效）
 - `kafka.consumer.parallelism`：消费端并行度
 - `validation.fail_open`：权限校验链路故障时是否放行（默认 false）
+- `service_center.timeout`：注册中心 HTTP 请求超时（秒），代码限幅 [1,10]，防止误填端口号
+- `service_center.service_refresh_interval`：发现端刷新间隔（秒），代码限幅 [1,30]，默认 5
+- `*.health_check.interval`：TTL 判定窗口（默认 10s），进程内上报周期自动取窗口的 1/3；`deregister_after` 会被提升到 60s（Consul 下限），只用于清理僵尸注册，不参与摘流

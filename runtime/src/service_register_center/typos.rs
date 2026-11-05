@@ -39,6 +39,22 @@ pub struct HealthCheck {
     pub deregister_after: String,
 }
 
+impl HealthCheck {
+    /// 配置段 → 注册中心健康检查定义的唯一转换点
+    ///
+    /// 注册入口（gRPC 服务、WebSocket 接入层）共用，避免字段映射漂移。
+    pub fn from_config(cfg: &crate::config::HealthCheckConfig) -> Self {
+        Self {
+            health_type: cfg.health_type.clone(),
+            name: cfg.name.clone(),
+            url: cfg.url.clone(),
+            interval: cfg.interval.to_string(),
+            timeout: cfg.timeout.to_string(),
+            deregister_after: cfg.deregister_after.to_string(),
+        }
+    }
+}
+
 
 /// 服务类型枚举，用于确定健康检查方式
 #[derive(Debug, Clone, PartialEq, Default)]

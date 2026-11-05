@@ -104,7 +104,7 @@ pub async fn get_chan(config: &AppConfig, name: String) -> Result<LbWithServiceD
     // 创建 DynamicServiceDiscovery，使用 tower_sender
     let mut discovery = DynamicServiceDiscovery::new(
         service_resolver,
-        Duration::from_secs(30),
+        Duration::from_secs(config.service_center.refresh_interval()),
         tower_sender,
         config.service_center.protocol.clone(),
     );
@@ -146,23 +146,17 @@ pub async fn register_service(config: &AppConfig, com: Component) -> Result<Stri
         }
     };
 
-    let health_check = rpc.health_check.as_ref().map(|hc| typos::HealthCheck {
-        health_type: hc.health_type.clone(),
-        name: hc.name.clone(),
-        url: hc.url.clone(),
-        interval: hc.interval.to_string(),
-        timeout: hc.timeout.to_string(),
-        deregister_after: hc.deregister_after.to_string(),
-    });
+    let check = rpc.health_check.as_ref().map(typos::HealthCheck::from_config);
 
-    // 构建服务注册信息
+    // 监听地址沿用 rpc.host；注册用对外广告地址（容器中为 Pod IP）
+    let host = config.advertised_host(&rpc.host);
     let registration = typos::Registration {
-        id: format!("{}-{}-{}", name, rpc.host, rpc.port),
+        id: format!("{}-{}-{}", name, host, rpc.port),
         name,
-        host: rpc.host.clone(),
+        host,
         port: rpc.port,
         tags: rpc.tags.clone(),
-        check: health_check,
+        check,
     };
 
     // 注册服务

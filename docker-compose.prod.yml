@@ -1,5 +1,3 @@
-version: '3.8'
-
 # 生产环境编排
 #
 # 与旧版的差异：
@@ -8,6 +6,8 @@ version: '3.8'
 # - Kafka 3 broker 副本集群（消息主题 replication=3, min.insync.replicas=2）
 # - 密钥全部通过环境变量注入（OSS_ACCESS_KEY 等），config.yaml 不再落盘密钥
 # - 业务服务去掉 container_name，支持 `--scale` 水平扩展
+# - CONSUL_HOST 指向注册中心；ADVERTISE_HOST 由入口脚本按容器 IP 自动注入
+# - 业务健康检查 5s / 2 次失败，与 RTO 30s 预算对齐
 
 services:
   # 服务注册中心（必须最先就绪，业务服务启动即注册）
@@ -47,6 +47,7 @@ services:
       - "8080:8000"
     environment:
       - RUST_LOG=info
+      - CONSUL_HOST=consul
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=${JWT_SECRET}
@@ -66,10 +67,10 @@ services:
       - rustim-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 20s
     command: ["api-gateway"]
 
   # 消息网关服务（长连接接入层，可 --scale msg-gateway=N 水平扩展）
@@ -84,6 +85,7 @@ services:
       - "8085:8085"
     environment:
       - RUST_LOG=info
+      - CONSUL_HOST=consul
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
       - REDIS_URL=redis://redis:6379
     depends_on:
@@ -100,10 +102,10 @@ services:
       - rustim-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 20s
     command: ["msg-gateway"]
 
   # 关系服务（模块化单体：用户/好友/群组）
@@ -118,6 +120,7 @@ services:
       - "50004:50004"
     environment:
       - RUST_LOG=info
+      - CONSUL_HOST=consul
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
       - REDIS_URL=redis://redis:6379
     depends_on:
@@ -133,11 +136,11 @@ services:
     networks:
       - rustim-network
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50004"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/50004'"]
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 20s
     command: ["relation-service"]
 
   # 消息服务（消息生产/消费/落库/推送）
@@ -152,6 +155,7 @@ services:
       - "50010:50010"
     environment:
       - RUST_LOG=info
+      - CONSUL_HOST=consul
       - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
       - REDIS_URL=redis://redis:6379
     depends_on:
@@ -169,46 +173,12 @@ services:
     networks:
       - rustim-network
     healthcheck:
-      test: ["CMD", "grpc_health_probe", "-addr=localhost:50010"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      test: ["CMD-SHELL", "timeout 2 bash -c 'echo > /dev/tcp/127.0.0.1/50010'"]
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 20s
     command: ["msg-server"]
-
-  # 对象存储服务
-  oss:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    image: rustim/oss:latest
-    restart: unless-stopped
-    ports:
-      - "50005:50005"
-    environment:
-      - RUST_LOG=info
-      - DATABASE_URL=postgresql://rustim:${POSTGRES_PASSWORD}@postgres:5432/rustim
-      - OSS_ACCESS_KEY=${OSS_ACCESS_KEY}
-      - OSS_SECRET_KEY=${OSS_SECRET_KEY}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      consul:
-        condition: service_healthy
-    volumes:
-      - ./config:/app/config:ro
-      - ./logs:/app/logs
-      - ./uploads:/app/uploads
-    networks:
-      - rustim-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:50005/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    command: ["oss"]
 
   # PostgreSQL 数据库
   # 更高可用请使用 PostgreSQL 流复制主从或 Kubernetes 上的 CloudNativePG Operator，

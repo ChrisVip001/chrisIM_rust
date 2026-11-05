@@ -21,6 +21,7 @@ use contract::proto::message::{
     SendMsgRequest,
 };
 use runtime::service_discovery::LbWithServiceDiscovery;
+use runtime::service_register_center::service_register_center;
 use runtime::config::{AppConfig, Component};
 use runtime::grpc::LoggingInterceptor;
 use contract::Error;
@@ -149,11 +150,12 @@ impl ChatRpcService {
 
         info!("Kafka主题 '{}' 已确保存在", config.kafka.topic);
 
-        // 向服务注册中心注册当前服务
-        runtime::grpc_client::base::register_service(config, Component::MessageServer)
-            .await?;
+        // 注册后持有 service_id：停机时先摘除注册流量，
+        // 避免 TTL 窗口内仍有新消息被路由到已停实例。
+        let service_id =
+            runtime::grpc_client::base::register_service(config, Component::MessageServer).await?;
 
-        info!("聊天RPC服务已注册到服务注册中心");
+        info!("聊天RPC服务已注册到服务注册中心: {}", service_id);
 
         // 初始化读扩散仓储与缓存
         // 同一 Redis 实例按各模块的真实依赖收窄为领域 trait
@@ -194,13 +196,29 @@ impl ChatRpcService {
             config.rpc.chat.rpc_server_url()
         );
 
+        let addr = config
+            .rpc
+            .chat
+            .rpc_server_url()
+            .parse()
+            .map_err(|e| Error::Internal(format!("解析服务器地址失败: {}", e)))?;
+
+        // 收到 SIGTERM/SIGINT 后先注销注册（同时停掉 TTL 上报任务），
+        // tonic 再停止接收新请求并等待在途请求结束。
+        let registry = service_register_center(config);
+        let shutdown = async move {
+            runtime::shutdown::wait_for_shutdown_signal().await;
+            if let Err(e) = registry.deregister(&service_id).await {
+                error!("注销 chat 服务失败: {}", e);
+            }
+        };
+
         // 启动gRPC服务器
         // 同时提供健康检查服务和聊天消息服务
         Server::builder()
             .add_service(health_service) // 健康检查服务
             .add_service(service) // 聊天消息服务
-            .serve(config.rpc.chat.rpc_server_url().parse()
-                .map_err(|e| Error::Internal(format!("解析服务器地址失败: {}", e)))?)
+            .serve_with_shutdown(addr, shutdown)
             .await
             .map_err(|e| Error::Internal(format!("启动gRPC服务器失败: {}", e)))?;
 

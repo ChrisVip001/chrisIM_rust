@@ -101,23 +101,17 @@ async fn main() -> anyhow::Result<()> {
         parallelism
     );
 
-    // 优雅停机：监听 SIGTERM/SIGINT。此前进程完全没有信号处理，
-    // 容器滚动发布会硬断 gRPC 服务与 Kafka 消费循环。
-    // 消费位点为手动提交，信号到达时未处理完的批次在重启后重新消费
-    // （at-least-once + 幂等落库，不丢不重）。
-    let shutdown_task = tokio::spawn(runtime::shutdown::wait_for_shutdown_signal());
-
+    // 停机信号由 gRPC 服务的 serve_with_shutdown 统一消费：
+    // 先注销注册（并停掉 TTL 上报任务），再停止接收新请求、等在途请求结束。
+    // 生产者任务结束即代表摘流完成，main 随后退出；消费位点为手动提交，
+    // 未处理完的批次在重启后重新消费（at-least-once + 幂等落库，不丢不重）。
     // 等待任一服务结束（正常情况下服务会一直运行，除非出现错误）
-    // 使用tokio::select!来并发等待多个异步任务
     tokio::select! {
         _ = producer_task => {
-            info!("生产者服务已结束");
+            info!("生产者服务已结束（含注册摘除）");
         }
         _ = &mut consumer_tasks[0] => {
             info!("消费者服务已结束");
-        }
-        _ = shutdown_task => {
-            info!("收到停机信号，msg-server 开始退出（服务实例的健康检查失效后由注册中心自动摘除）");
         }
     }
     

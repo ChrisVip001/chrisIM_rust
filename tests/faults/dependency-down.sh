@@ -16,15 +16,15 @@ case "$DEP" in
   *) echo "未知依赖: $DEP"; exit 1;;
 esac
 
-echo "[$(date +%T)] 停止 $C（${SECS}s 后恢复）"
+echo "[$(date +%T)] 停止 ${C}（${SECS}s 后恢复）"
 docker stop "$C" >/dev/null
 sleep "$SECS"
 echo "[$(date +%T)] 恢复 $C"
 docker start "$C" >/dev/null
-# 等健康
+# 等健康：没有 healthcheck 的容器（如本地 redis）只要重新 running 即视为恢复
 for _ in $(seq 1 60); do
-  st=$(docker inspect -f '{{.State.Health.Status}}' "$C" 2>/dev/null || echo unknown)
-  [ "$st" = "healthy" ] && break
+  st=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}' "$C" 2>/dev/null || echo unknown)
+  [ "$st" = "healthy" ] || [ "$st" = "running" ] && break
   sleep 1
 done
 echo "[$(date +%T)] $C 已恢复 ($st)"

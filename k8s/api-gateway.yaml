@@ -16,6 +16,7 @@ spec:
       labels:
         app: api-gateway
     spec:
+      terminationGracePeriodSeconds: 30   # 与 RTO 30s 预算对齐
       containers:
         - name: api-gateway
           image: rustim/api-gateway:latest
@@ -39,18 +40,28 @@ spec:
                 secretKeyRef:
                   name: rustim-secrets
                   key: OSS_SECRET_KEY
+            - name: CONSUL_HOST
+              value: consul.rustim.svc.cluster.local
+            - name: ADVERTISE_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           readinessProbe:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 10
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
           livenessProbe:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 30
-            periodSeconds: 20
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 250m

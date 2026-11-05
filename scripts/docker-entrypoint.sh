@@ -63,6 +63,18 @@ main() {
         show_help
         exit 0
     fi
+
+    # 服务注册到 Consul 的地址必须是容器 IP：配置文件里的 127.0.0.1
+    # 会让服务发现把流量导向调用方自己，多副本时还会出现 ID 冲突。
+    # k8s 由 ADVERTISE_HOST=status.podIP 注入；compose 在此按容器 IP 兜底。
+    if [[ -z "${ADVERTISE_HOST:-}" ]]; then
+        local ip
+        ip=$(hostname -i 2>/dev/null | awk '{print $1}' || true)
+        if [[ -n "$ip" && "$ip" != "127.0.0.1" ]]; then
+            export ADVERTISE_HOST="$ip"
+            echo "服务注册地址: $ADVERTISE_HOST"
+        fi
+    fi
     
     # 检查提供的服务是否受支持
     local service=${1:-"api-gateway"}  # 默认启动网关服务

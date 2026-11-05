@@ -23,7 +23,9 @@ spec:
               name: http
             - containerPort: 8301
               name: serf
-          args: ["agent", "-server", "-bootstrap-expect=1", "-ui=false"]
+          # -client=0.0.0.0 必须显式指定，否则 agent 只监听 127.0.0.1，容器外无法访问 8500
+          args: ["agent", "-server", "-bootstrap-expect=1", "-ui=false",
+                 "-client=0.0.0.0", "-data-dir=/consul/data"]
           readinessProbe:
             httpGet:
               path: /v1/status/leader

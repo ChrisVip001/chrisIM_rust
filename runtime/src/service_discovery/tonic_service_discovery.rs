@@ -234,6 +234,48 @@ mod tests {
             elapsed
         );
     }
+
+    struct StubFetcher {
+        endpoints: std::sync::Arc<std::sync::Mutex<HashSet<SocketAddr>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ServiceFetcher for StubFetcher {
+        async fn fetch(&self) -> Result<HashSet<SocketAddr>, Error> {
+            Ok(self.endpoints.lock().unwrap().clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_result_keeps_last_known_instances() {
+        use tower::discover::Change;
+
+        let addr: SocketAddr = "127.0.0.1:50010".parse().unwrap();
+        let endpoints = std::sync::Arc::new(std::sync::Mutex::new(HashSet::from([addr])));
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut discovery = DynamicServiceDiscovery::new(
+            StubFetcher {
+                endpoints: endpoints.clone(),
+            },
+            std::time::Duration::from_secs(5),
+            tx,
+            "http".to_string(),
+        );
+
+        discovery.discovery().await.unwrap();
+        assert_eq!(discovery.services.len(), 1);
+        assert!(matches!(rx.recv().await, Some(Change::Insert(_, _))));
+
+        // 模拟 Consul 重启瞬间返回空列表
+        endpoints.lock().unwrap().clear();
+        discovery.discovery().await.unwrap();
+        assert_eq!(
+            discovery.services.len(),
+            1,
+            "注册中心瞬时空结果不得摘光实例"
+        );
+        assert!(rx.try_recv().is_err(), "不应发出 Remove 变更");
+    }
 }
 
 /// 动态服务发现实现
@@ -281,6 +323,18 @@ impl<Fetcher: ServiceFetcher> DynamicServiceDiscovery<Fetcher> {
     pub async fn discovery(&mut self) -> Result<(), Error> {
         // 从服务注册中心获取服务
         let x = self.service_center.fetch().await?;
+
+        // 注册中心重启或网络分区时会短暂返回空实例集（HTTP 200 + []）。
+        // 直接把空集应用到负载均衡器会把所有下游一次性摘光，
+        // 把注册中心的局部故障放大成全链路中断；因此保留最后已知良好集合。
+        if x.is_empty() && !self.services.is_empty() {
+            warn!(
+                "服务发现返回空实例集，保留上一次的 {} 个实例（注册中心可能正在恢复）",
+                self.services.len()
+            );
+            return Ok(());
+        }
+
         let change_set = self.change_set(&x).await;
         for change in change_set {
             self.sender.send(change).await.map_err(|e| {

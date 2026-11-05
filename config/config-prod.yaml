@@ -224,11 +224,11 @@ server:
 
 # consul服务注册与发现配置
 service_center:
-  host: 127.0.0.1   # "0.0.0.0" 在Docker中使用0.0.0.0绑定所有接口
-  port: 8500
-  timeout: 8080
+  host: 127.0.0.1   # 容器中由 CONSUL_HOST 指向 consul 服务
+  port: 8500        # 容器中由 CONSUL_PORT 覆盖
+  timeout: 3        # 秒；注册中心不可达时快速失败
   protocol: http
-  service_refresh_interval: 30
+  service_refresh_interval: 5  # 发现端刷新间隔
 
 # WebSocket配置
 websocket:
@@ -239,12 +239,13 @@ websocket:
   tags:
     - websocket
     - http
+  # Consul 侧统一 TTL 自报，进程假死由 k8s HTTP /health 探针兜底
   health_check:
-    health_type: "http"
+    health_type: "ttl"
     name: "websocket"
-    url: "/health"
-    interval: 15
-    timeout: 60
+    url: ""
+    interval: 10
+    timeout: 2
     deregister_after: 60
 
 # RPC服务配置
@@ -261,8 +262,8 @@ rpc:
       health_type: "ttl"
       name: "ws"
       url: ""
-      interval: 15
-      timeout: 60
+      interval: 10
+      timeout: 2
       deregister_after: 60
   chat:
     protocol: http
@@ -276,8 +277,8 @@ rpc:
       health_type: "ttl"
       name: "chat"
       url: ""
-      interval: 15
-      timeout: 60
+      interval: 10
+      timeout: 2
       deregister_after: 60
   pusher:
     protocol: http
@@ -291,8 +292,8 @@ rpc:
       health_type: "ttl"
       name: "pusher"
       url: ""
-      interval: 15
-      timeout: 60
+      interval: 10
+      timeout: 2
       deregister_after: 60
   user:
     protocol: http
@@ -306,8 +307,8 @@ rpc:
       health_type: "ttl"
       name: "user"
       url: ""
-      interval: 15
-      timeout: 60
+      interval: 10
+      timeout: 2
       deregister_after: 60
   friend:
     protocol: http
@@ -321,8 +322,8 @@ rpc:
       health_type: "ttl"
       name: "friend"
       url: ""
-      interval: 15
-      timeout: 60
+      interval: 10
+      timeout: 2
       deregister_after: 60
   group:
     protocol: http
@@ -336,8 +337,8 @@ rpc:
       health_type: "ttl"
       name: "group"
       url: ""
-      interval: 15
-      timeout: 60
+      interval: 10
+      timeout: 2
       deregister_after: 60
 
 # Redis配置

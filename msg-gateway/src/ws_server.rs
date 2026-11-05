@@ -1,14 +1,15 @@
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{Path, State, WebSocketUpgrade};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use runtime::auth::jwt;
 use runtime::config::AppConfig;
 use contract::error::Error;
 use contract::proto::message::PlatformType;
 use runtime::grpc_client::base::service_names as sn;
-use runtime::service_register_center::{service_register_center, Registration};
+use runtime::service_register_center::{service_register_center, typos::HealthCheck, Registration};
 use cache::SessionCache;
 use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -81,16 +82,22 @@ impl WsServer {
         let registry = service_register_center(config);
 
         // 注册WebSocket服务（面向客户端）
+        // 监听地址与注册地址分离：容器中注册地址必须是 Pod IP
+        let ws_host = config.advertised_host(&config.websocket.host);
         let websocket_registration = Registration {
             id: format!(
                 "{}-{}-{}",
-                config.websocket.name, config.websocket.host, config.websocket.port
+                config.websocket.name, ws_host, config.websocket.port
             ),
             name: config.websocket.name.clone(),
-            host: config.websocket.host.clone(),
+            host: ws_host,
             port: config.websocket.port,
             tags: config.websocket.tags.clone(),
-            check: None,
+            check: config
+                .websocket
+                .health_check
+                .as_ref()
+                .map(HealthCheck::from_config),
         };
 
         let websocket_service_id = registry.register(websocket_registration).await?;
@@ -98,16 +105,19 @@ impl WsServer {
 
         // 注册gRPC服务（面向内部服务）
         // 名字与发现端共用 service_names::WS，避免配置字段值与常量漂移
+        let grpc_host = config.advertised_host(&config.rpc.ws.host);
         let grpc_registration = Registration {
-            id: format!(
-                "{}-{}-{}",
-                sn::WS, config.rpc.ws.host, config.rpc.ws.port
-            ),
+            id: format!("{}-{}-{}", sn::WS, grpc_host, config.rpc.ws.port),
             name: sn::WS.to_string(),
-            host: config.rpc.ws.host.clone(),
+            host: grpc_host,
             port: config.rpc.ws.port,
             tags: config.rpc.ws.tags.clone(),
-            check: None,
+            check: config
+                .rpc
+                .ws
+                .health_check
+                .as_ref()
+                .map(HealthCheck::from_config),
         };
 
         let grpc_service_id = registry.register(grpc_registration).await?;
@@ -130,6 +140,20 @@ impl WsServer {
             }
         }
         Ok(description)
+    }
+
+    /// 存活/就绪探针
+    ///
+    /// 只反映本进程能否服务，不探后端依赖：Redis/Consul 抖动时若把所有
+    /// 网关实例一起判为未就绪，会放大故障而不是隔离故障。
+    async fn health() -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "ok",
+                "service": "msg-gateway",
+            })),
+        )
     }
 
     /// 启动WebSocket服务器
@@ -166,6 +190,8 @@ impl WsServer {
                 "/ws/{token}",
                 get(Self::websocket_handler),
             )
+            // 存活/就绪探针（k8s 与负载均衡共用）
+            .route("/health", get(Self::health))
             // 测试路由，用于查看连接状态
             .route("/test", get(Self::test))
             // 设置应用状态，所有路由都可以访问

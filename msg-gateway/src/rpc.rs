@@ -5,7 +5,7 @@ use tonic::{async_trait, Request, Response, Status};
 use tracing::{debug, info};
 
 use crate::manager::Manager;
-use runtime::config::{AppConfig, Component};
+use runtime::config::AppConfig;
 use contract::error::Error;
 use runtime::grpc::LoggingInterceptor;
 use contract::proto::message::msg_service_server::MsgServiceServer;
@@ -51,11 +51,13 @@ impl MsgRpcService {
     /// 启动消息RPC服务
     /// 
     /// 执行以下初始化步骤：
-    /// 1. 向Consul注册服务
-    /// 2. 创建健康检查服务
-    /// 3. 配置日志拦截器
-    /// 4. 启动gRPC服务器
-    /// 
+    /// 1. 创建健康检查服务
+    /// 2. 配置日志拦截器
+    /// 3. 启动gRPC服务器
+    ///
+    /// 服务注册由 `WsServer` 统一负责（同时注册 WS 与 gRPC 两个入口，
+    /// 并持有 service_id 用于停机摘流），此处不重复注册。
+    ///
     /// # 参数
     /// * `manager` - 连接管理器实例
     /// * `config` - 应用程序配置
@@ -64,14 +66,6 @@ impl MsgRpcService {
     /// * `Ok(())` - 服务启动成功
     /// * `Err(Error)` - 服务启动失败
     pub async fn start(manager: Manager, config: &AppConfig) -> Result<(), Error> {
-        // 向服务注册中心（Consul）注册当前服务
-        // 这样msg-server就能通过服务发现找到这个WebSocket网关
-        runtime::grpc_client::base::register_service(config, Component::MessageGateway)
-            .await
-            .expect("服务注册失败");
-
-        info!("WebSocket RPC服务已注册到服务注册中心");
-
         // 创建gRPC健康检查服务
         // 用于监控服务健康状态，支持Kubernetes等容器编排工具的健康检查
         let (health_reporter, health_service) = tonic_health::server::health_reporter();

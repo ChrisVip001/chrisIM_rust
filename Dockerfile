@@ -146,12 +146,11 @@ ENV PATH="/app/bin:${PATH}" \
     RUST_LOG=info \
     RUST_BACKTRACE=1
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+# 不在镜像里写死 HEALTHCHECK：同一镜像承载 4 个服务，端口与协议不同，
+# 由编排层（compose healthcheck / k8s readinessProbe）分别定义。
 
 # 暴露端口
-EXPOSE 8080 8085 50001 50002 50003 50004 50005
+EXPOSE 8080 8085 50001 50004 50010
 
 # 切换到非 root 用户
 USER rustim
@@ -172,7 +171,7 @@ RUN cargo install cargo-watch cargo-audit
 COPY . .
 
 # 暴露端口
-EXPOSE 8080 8085 50001 50002 50003 50004 50005
+EXPOSE 8080 8085 50001 50004 50010
 
 # 开发模式入口点
 CMD ["cargo", "run", "--bin", "api-gateway"]
