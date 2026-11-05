@@ -13,7 +13,9 @@ cache = { path = "../cache" }
 # 核心框架
 tokio = { workspace = true, features = ["full"] }
 axum = { workspace = true, features = ["macros"] }
-axum-server = { workspace = true, features = ["tls-rustls"] }
+# 不启用 tls-rustls：网关始终以明文 HTTP 提供服务，TLS 由外层 nginx/LB 终止。
+# 启用该 feature 会拉进 rustls-pemfile（RUSTSEC-2025-0134，已不维护）。
+axum-server = { workspace = true }
 
 # HTTP和网络
 tower = { workspace = true, features = ["full"] }

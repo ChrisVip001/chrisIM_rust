@@ -13,6 +13,7 @@
 | 跑性能复测、对账基线 | [operations/BASELINE.md](operations/BASELINE.md) |
 | 部署、摘流、探针参数 | [operations/CONSUL.md](operations/CONSUL.md) |
 | 接日志与链路追踪 | [operations/TELEMETRY.md](operations/TELEMETRY.md) |
+| 处理依赖安全告警 | [operations/SECURITY.md](operations/SECURITY.md) |
 | 从旧版本升级 | [UPGRADE_NOTES.md](UPGRADE_NOTES.md) 与根目录 `CHANGELOG.md` |
 | 接文件上传 | [guides/file-upload-guide.md](guides/file-upload-guide.md) |
 | 接 CI/CD | [guides/ci-cd-setup.md](guides/ci-cd-setup.md) |
@@ -29,7 +30,8 @@ docs/
 ├── operations/              运维与验收
 │   ├── BASELINE.md          性能与契约基线（不得回退的底线）
 │   ├── CONSUL.md            服务注册、TTL 摘流、优雅停机
-│   └── TELEMETRY.md         日志分级与 OTLP 链路追踪
+│   ├── TELEMETRY.md         日志分级与 OTLP 链路追踪
+│   └── SECURITY.md          依赖安全告警台账与处置原则
 ├── guides/                  接入指南
 │   ├── file-upload-guide.md 前端直传对象存储
 │   └── ci-cd-setup.md       CI/CD 配置

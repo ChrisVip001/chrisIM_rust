@@ -31,6 +31,13 @@
 
 - **tokio 1.53.1 → 1.54.1**：RUSTSEC-2026-0386（`AsyncFd` 安全构造函数违反 I/O safety，
   fd 编号复用后可致 UAF）。`cargo audit` 只把它算作 warning，此前未拦住。
+- **移除 `ttf-parser`**（RUSTSEC-2026-0192，unmaintained）：验证码改为内嵌 5×7 点阵字模
+  自绘，去掉 `imageproc` / `ab_glyph` / 350KB 字体文件，`runtime` 只保留 `image` 做 PNG 编码。
+- **移除 `rustls-pemfile`**（RUSTSEC-2025-0134，unmaintained）：`api-gateway` 不再启用
+  `axum-server` 的 `tls-rustls` feature —— 网关始终明文 HTTP，TLS 由外层 nginx/LB 终止。
+- `rsa` 的 Marvin 告警（RUSTSEC-2023-0071）确认不可达：来自 `sqlx` 声明的可选 mysql 驱动，
+  `cargo tree -i rsa` 无输出，默认构建不编译该路径，保留豁免并记录在
+  `docs/operations/SECURITY.md`。
 - 清理 `cargo audit` 中已失效的 rustls-webpki 0.101 豁免（依赖链已随 aws-smithy-http-client
   1.5.2 迁到 rustls 0.23）。
 - 删除误入仓库的服务器凭据文档。**该文件仍存在于 git 历史中，需单独处理。**

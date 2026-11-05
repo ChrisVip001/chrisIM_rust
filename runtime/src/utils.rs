@@ -2,15 +2,10 @@ use contract::{Error, Result};
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHasher};
-use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
+use image::{DynamicImage, ImageBuffer, Rgba};
 use redis::{Client as RedisClient, Commands};
-use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_text_mut};
-use imageproc::noise::gaussian_noise_mut;
-use rand::distr::Alphanumeric;
 use rand::Rng;
-use uuid::Uuid;
 use regex::Regex;
-use ab_glyph::{FontArc, PxScale};
 use crate::config::AppConfig;
 // 导入雪花ID模块
 use crate::snowflake::SNOWFLAKE;
@@ -83,7 +78,6 @@ pub fn get_host_name() -> Result<String> {
 mod tests {
     use super::*;
     use argon2::{PasswordHash, PasswordVerifier};
-    use rs_consul::{Config, Consul, GetServiceNodesRequest};
 
     /// 测试密码哈希功能
     #[test]
@@ -133,6 +127,91 @@ pub fn generate_user_custom_id() -> String {
     format!("myid-{}", random_id)
 }
 
+/// 5x7 数字点阵。每行取低 5 位，最高位是最左列。
+///
+/// 验证码文本只有数字（见 [`generate_captcha_text`]），所以内嵌字模即可，
+/// 不需要字体解析库 —— 那会把 `ttf-parser`（已标记不维护）带进依赖图。
+const DIGIT_GLYPHS: [[u8; 7]; 10] = [
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // 0
+    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111], // 2
+    [0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110], // 3
+    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010], // 4
+    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110], // 5
+    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110], // 6
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000], // 7
+    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110], // 8
+    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
+];
+
+/// 在画布上绘制放大后的点阵数字。(x, y) 为左上角，`scale` 是像素放大倍数，
+/// `shear` 是每行右移的像素数（模拟倾斜），越界的像素自动丢弃。
+fn draw_digit_glyph(
+    img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x: i32,
+    y: i32,
+    scale: i32,
+    digit: usize,
+    color: Rgba<u8>,
+    shear: i32,
+) {
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let glyph = DIGIT_GLYPHS[digit.min(9)];
+    for (row, bits) in glyph.iter().enumerate() {
+        let row_shift = shear * row as i32 / 7;
+        for col in 0..5i32 {
+            if bits & (1 << (4 - col)) == 0 {
+                continue;
+            }
+            let px0 = x + col * scale + row_shift;
+            let py0 = y + row as i32 * scale;
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    let (px, py) = (px0 + dx, py0 + dy);
+                    if px >= 0 && py >= 0 && px < w && py < h {
+                        img.put_pixel(px as u32, py as u32, color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Bresenham 直线，用于验证码干扰线（替代 imageproc 的绘制函数）。
+fn draw_rough_line(
+    img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    color: Rgba<u8>,
+) {
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let (mut x, mut y) = (x0, y0);
+    loop {
+        if x >= 0 && y >= 0 && x < w && y < h {
+            img.put_pixel(x as u32, y as u32, color);
+        }
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
 /// 图片验证码生成
 pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_size: &f32) -> Vec<u8> {
     // 图片尺寸
@@ -159,31 +238,18 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
         img.put_pixel(x, y, color);
     }
 
-    // 加载字体文件
-    let font_data = include_bytes!("../assets/Roboto-Regular.ttf");
-    let font = FontArc::try_from_slice(font_data).expect("加载字体失败");
+    // 点阵字号：5x7 字模，按传入字号换算整数放大倍数，并限制在画布高度内
+    let char_count = text_code.chars().count().max(1) as i32;
+    // 放大倍数同时受高度（占 60%）与宽度（每字符含间距）约束，避免字符被裁切
+    let max_scale_h = ((height as i32) * 6 / 10 / 7).max(2);
+    let max_scale_w = (((width as i32) / char_count) / 6).max(2);
+    let scale = ((*font_size / 7.0).round() as i32).clamp(2, max_scale_h.min(max_scale_w));
+    let glyph_w = 5 * scale;
+    let glyph_h = 7 * scale;
+    // 字符间距：均分剩余空间，最少 2px、最多 20px
+    let gap = ((width as i32 - glyph_w * char_count) / (char_count + 1)).clamp(2, 20);
+    let mut x_offset = gap;
 
-    // 动态计算字体大小
-    let max_font_size = (height as f32) * 0.6; // 最大字体高度为图片高度的 60%
-    let char_count = text_code.chars().count(); // 验证码字符数
-    let available_width_per_char = (width as f32) / (char_count as f32); // 每个字符可用的宽度
-    let approx_font_size = available_width_per_char.min(max_font_size); // 字体大小取最小值
-    let final_font_size = approx_font_size.clamp(10.0, max_font_size); // 最终字体大小
-
-    // 使用动态计算的字体大小
-    let scale = PxScale::from(final_font_size);
-
-    // 计算字符间距和起始位置
-    let total_text_width = char_count as f32 * final_font_size; // 总文本宽度（估算）
-    let remaining_space = width as f32 - total_text_width; // 剩余空间
-    let spacing = if char_count > 1 {
-        remaining_space / (char_count - 1) as f32 // 平均分配剩余空间作为间距
-    } else {
-        0.0
-    };
-
-    // 在图片上绘制文本
-    let mut x_offset = (remaining_space / 2.0).max(0.0); // 起始偏移量（居中对齐）
     for c in text_code.chars() {
         // 随机字体颜色
         let color = Rgba([
@@ -193,19 +259,21 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
             255,                         // 完全不透明
         ]);
 
-        // 绘制单个字符（imageproc 0.27：坐标为 i32，字体为 ab_glyph 的 Font）
-        draw_text_mut(
+        // 随机上下偏移 + 轻微倾斜：抗 OCR，但不影响肉眼识别
+        let max_y = (height as i32 - glyph_h).max(0);
+        let y_offset = if max_y > 0 { rng.random_range(0..=max_y / 2) } else { 0 };
+        let shear = rng.random_range(-scale..=scale);
+        draw_digit_glyph(
             &mut img,
-            color,
-            x_offset as i32,
-            rng.random_range(10..=30), // 随机Y轴偏移
+            x_offset,
+            y_offset,
             scale,
-            &font,
-            &c.to_string(),
+            c.to_digit(10).unwrap_or(0) as usize,
+            color,
+            shear,
         );
 
-        // 更新X轴偏移，确保字符不会超出边界
-        x_offset += final_font_size + spacing;
+        x_offset += glyph_w + gap;
     }
 
     // 添加简单装饰线条
@@ -220,12 +288,7 @@ pub fn generate_captcha_image(width: &u32, height: &u32, text_code: &str, font_s
             rng.random_range(150..200),
             255,
         ]);
-        draw_line_segment_mut(
-            &mut img,
-            (start_x as f32, start_y as f32),
-            (end_x as f32, end_y as f32),
-            line_color,
-        );
+        draw_rough_line(&mut img, start_x, start_y, end_x, end_y, line_color);
     }
 
     // 将图片转换为字节流
@@ -274,10 +337,35 @@ pub fn verify_image_code(config: &AppConfig, code_key: &str, input_code: &str) -
     let redis_code_value: String = redis_client.get(&get_code_key).unwrap_or("0".to_string());
     if redis_code_value == input_code {
         // 匹配成功，删除redis中存储数据
-        let del_stat: () = redis_client.del(get_code_key).unwrap_or(());
+        let _: () = redis_client.del(get_code_key).unwrap_or(());
         true
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod captcha_tests {
+    use super::*;
+
+    #[test]
+    fn captcha_image_is_valid_png() {
+        let text = generate_captcha_text();
+        assert_eq!(text.len(), 6);
+        let png = generate_captcha_image(&120, &40, &text, &28.0);
+        assert!(png.len() > 500, "验证码图片过小: {} 字节", png.len());
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        // 供人工抽查渲染效果（只在测试中写临时目录）
+        let _ = std::fs::write(std::env::temp_dir().join("captcha_sample.png"), &png);
+    }
+
+    #[test]
+    fn captcha_image_survives_odd_sizes() {
+        // 极小字号、超大字号、零字号都不能 panic（点阵绘制有越界保护）
+        for (w, h, fs) in [(40u32, 16u32, 6.0f32), (300, 120, 100.0), (120, 40, 0.0)] {
+            let png = generate_captcha_image(&w, &h, "012345", &fs);
+            assert!(!png.is_empty(), "尺寸 {w}x{h} 字号 {fs} 生成为空");
+        }
     }
 }
 

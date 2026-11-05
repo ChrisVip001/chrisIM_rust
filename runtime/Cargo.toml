@@ -54,10 +54,10 @@ futures = { workspace = true }
 rs-consul = "0.11.0"
 hostname = "0.4"
 
-# 验证码图片生成（utils::captcha）
+# 验证码图片生成（utils::captcha）：只需要 PNG 编码 + 像素操作。
+# 不引入 imageproc / ab_glyph —— 它们会把 ttf-parser（RUSTSEC-2026-0192，已不维护）
+# 带进依赖图，而验证码是 6 位数字，内嵌 5x7 点阵字模足够。
 image = "0.25"
-imageproc = "0.27"
-ab_glyph = "0.2"
 
 [features]
 default = []

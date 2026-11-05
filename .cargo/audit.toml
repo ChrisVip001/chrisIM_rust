@@ -13,6 +13,9 @@ ignore = [
     "RUSTSEC-2026-0258",
 
     # rsa 0.9 Marvin Attack（RUSTSEC-2023-0071，上游无修复版本）
-    # 来源：可选依赖链（aws-sdk / 遥测）；本项目 JWT 使用 HS256，不涉及 RSA 解密路径
+    # 来源：sqlx 0.8 声明的可选 mysql 驱动（sqlx-mysql -> rsa）。
+    # Cargo.lock 会记录全部可选依赖，所以它出现在 lock 里、也会被 Dependabot 报出；
+    # 但 workspace 只启用 postgres feature，`cargo tree -i rsa` 无输出，产物中不可达。
+    # 本项目 JWT 使用 HS256，也不涉及 RSA 解密路径。
     "RUSTSEC-2023-0071",
 ]

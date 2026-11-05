@@ -169,6 +169,7 @@ SELECT conversation_id, server_id, seq FROM ins;
 | 雪花 ID 临界区只做算术 | 去阻塞，并发唯一性有单测覆盖 |
 | 主题副本数自动收敛到 broker 数 | 单 broker 环境不会因 `replication=3` 建主题失败 |
 | `conversation` autovacuum 收敛 | 75 行活元组曾累积 9918 死元组（132 倍），默认比例阈值对小表永远不触发 |
+| 验证码去掉字体栈 | 6 位数字改用内嵌 5×7 点阵自绘，移除 `imageproc`/`ab_glyph`/`ttf-parser` 与 350KB 字体文件，PNG 仍由 `image` 编码 |
 
 ## 4. 高并发设计
 
