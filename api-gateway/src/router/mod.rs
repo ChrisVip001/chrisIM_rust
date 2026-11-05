@@ -1,7 +1,7 @@
 use crate::auth::controller;
 use crate::auth::middleware::auth_middleware;
 use crate::proxy::ServiceProxy;
-use cache::SessionCache;
+use cache::{PresenceCache, SessionCache};
 use axum::{
     body::Body,
     extract::{Extension, Json, State},
@@ -76,7 +76,7 @@ pub struct ValidateRegisterAvatarRequest {
 pub async fn build_routes(
     service_proxy: ServiceProxy,
     config: Arc<AppConfig>,
-    cache_instance: Arc<dyn SessionCache>,
+    cache_instance: Arc<cache::RedisCache>,
 ) -> anyhow::Result<Router> {
     let gateway_config = &config.gateway;
     // 创建用户服务客户端
@@ -108,7 +108,8 @@ pub async fn build_routes(
         .route("/api/friends/online-status", post(controller::batch_get_friends_online_status))
         // 文件上传签名路由（需要认证以获取租户ID）
         .route("/api/files/upload-signature", post(get_upload_signature))
-        .layer(Extension(cache_instance.clone()))
+        .layer(Extension(cache_instance.clone() as Arc<dyn SessionCache>))
+        .layer(Extension(cache_instance.clone() as Arc<dyn PresenceCache>))
         .layer(middleware::from_fn_with_state(
             config.clone(),
             auth_middleware,
@@ -132,7 +133,8 @@ pub async fn build_routes(
     // 添加用户服务扩展和缓存扩展，最后注入 State 完成 Router<()> 的收口
     Ok(router
         .layer(Extension(user_service))
-        .layer(Extension(cache_instance))
+        .layer(Extension(cache_instance.clone() as Arc<dyn SessionCache>))
+        .layer(Extension(cache_instance as Arc<dyn PresenceCache>))
         .with_state(config))
 }
 
@@ -141,7 +143,7 @@ fn add_service_route(
     router: Router<Arc<AppConfig>>,
     route: &RouteRule,
     service_proxy: Arc<ServiceProxy>,
-    cache_instance: Arc<dyn SessionCache>,
+    cache_instance: Arc<cache::RedisCache>,
     config: Arc<AppConfig>,
 ) -> Router<Arc<AppConfig>> {
     let path = route.path_prefix.clone();

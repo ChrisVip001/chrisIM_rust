@@ -1,3 +1,4 @@
+use cache::{PresenceCache, SessionCache};
 use crate::proxy::services::common::{error_response, success_response};
 use axum::body::Body;
 use axum::extract::{Extension, State};
@@ -191,7 +192,8 @@ impl SharedUserService {
 pub async fn login_by_phone(
     State(config): State<Arc<AppConfig>>,
     Extension(user_service): Extension<SharedUserService>,
-    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(cache_instance): Extension<Arc<dyn SessionCache>>,
+    Extension(presence): Extension<Arc<dyn PresenceCache>>,
     headers: HeaderMap,
     Json(login_req): Json<LoginByPhoneRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -244,6 +246,7 @@ pub async fn login_by_phone(
         "default",
         extra,
         cache_instance,
+        presence.clone(),
         platform as i32,
     )
     .await?;
@@ -262,7 +265,8 @@ pub async fn login_by_phone(
 pub async fn login(
     State(config): State<Arc<AppConfig>>,
     Extension(user_service): Extension<SharedUserService>,
-    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(cache_instance): Extension<Arc<dyn SessionCache>>,
+    Extension(presence): Extension<Arc<dyn PresenceCache>>,
     headers: HeaderMap,
     Json(login_req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -323,6 +327,7 @@ pub async fn login(
         "default",
         extra,
         cache_instance,
+        presence.clone(),
         platform as i32,
     )
     .await?;
@@ -341,7 +346,8 @@ pub async fn login(
 #[axum::debug_handler]
 pub async fn refresh_token(
     State(config): State<Arc<AppConfig>>,
-    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(cache_instance): Extension<Arc<dyn SessionCache>>,
+    Extension(presence): Extension<Arc<dyn PresenceCache>>,
     headers: HeaderMap,
     Json(refresh_req): Json<RefreshTokenRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -395,6 +401,7 @@ pub async fn refresh_token(
         &user_info.tenant_name,
         extra,
         cache_instance,
+        presence.clone(),
         platform as i32,
     )
     .await?;
@@ -438,7 +445,8 @@ async fn build_login_response(
     tenant_id: String,
     tenant_name: &str,
     extra: HashMap<String, String>,
-    cache_instance: Arc<dyn cache::Cache>,
+    cache_instance: Arc<dyn SessionCache>,
+    presence: Arc<dyn PresenceCache>,
     platform: i32,
 ) -> Result<LoginResponse, Error> {
     let jwt_config = &config.gateway.auth.jwt;
@@ -466,7 +474,7 @@ async fn build_login_response(
     )?;
 
     // 将用户在指定平台标记为在线状态
-    cache_instance
+    presence
         .user_platform_login(&user_id, platform)
         .await?;
 
@@ -504,13 +512,14 @@ async fn build_login_response(
 /// 处理登出请求
 #[axum::debug_handler]
 pub async fn logout(
-    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(cache_instance): Extension<Arc<dyn SessionCache>>,
+    Extension(presence): Extension<Arc<dyn PresenceCache>>,
     Extension(user_info): Extension<Claims>,
 ) -> Result<impl IntoResponse, AppError> {
     debug!("登出请求：用户 {}", user_info.username);
 
-    // 退出指定平台登录状态
-    cache_instance
+    // 退出指定平台登录状态（在线状态属 Presence 域）
+    presence
         .user_platform_logout(&user_info.sub, user_info.platform)
         .await?;
 
@@ -559,7 +568,7 @@ pub struct BatchGetFriendsOnlineResponse {
 ///
 /// 支持一次性查询多个用户的在线状态信息，包括全局在线状态和各平台在线情况
 pub async fn batch_get_friends_online_status(
-    Extension(cache_instance): Extension<Arc<dyn cache::Cache>>,
+    Extension(cache_instance): Extension<Arc<dyn PresenceCache>>,
     Extension(user_info): Extension<Claims>,
     Json(request): Json<BatchGetFriendsOnlineRequest>,
 ) -> Result<impl IntoResponse, Error> {

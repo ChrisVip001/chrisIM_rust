@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 初始化缓存
-    let cache_instance: Arc<dyn SessionCache> = cache::cache(&config).await;
+    let cache_instance: Arc<cache::RedisCache> = cache::cache(&config).await;
     info!("缓存服务初始化完成");
 
     // 初始化指标系统
@@ -99,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// 构建应用
-async fn build_app(config: std::sync::Arc<AppConfig>, cache_instance: std::sync::Arc<dyn SessionCache>) -> anyhow::Result<Router> {
+async fn build_app(config: std::sync::Arc<AppConfig>, cache_instance: std::sync::Arc<cache::RedisCache>) -> anyhow::Result<Router> {
     // 创建服务代理
     let service_proxy = proxy::ServiceProxy::new(config.clone()).await;
     
