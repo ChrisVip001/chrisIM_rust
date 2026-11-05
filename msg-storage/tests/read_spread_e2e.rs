@@ -451,3 +451,145 @@ async fn batch_with_dirty_entry_does_not_block_others() {
 
     println!("脏消息不连坐通过: {} 条正常消息已落库", saved.len());
 }
+
+/// 会话列表索引与批量查询（真实 Redis + PostgreSQL）
+///
+/// 覆盖：`ZADD GT` 只增不减、活跃时间倒序、`get_many` 与 `list_by_ids` 的批量语义、
+/// 以及 `list` 按最后消息时间倒序。
+#[tokio::test]
+#[ignore = "需要本地 PostgreSQL 与 Redis"]
+async fn conversation_index_and_batch_lookup() {
+    use cache::ConversationIndexCache;
+
+    let config = load_config();
+    let cache = cache::cache(&config).await;
+    let repo = Arc::new(
+        ReadSpreadRepo::from_config(&config)
+            .await
+            .expect("建表检查失败，请先执行 docs/sql/init.sql"),
+    );
+    let writer = MessageWriter::new(
+        repo.clone(),
+        cache.clone(),
+        config.message_storage.inline_content_max_bytes,
+    );
+
+    let suffix = unique_suffix();
+    let user_id = format!("u_e2e_{}", suffix);
+    let older_group = format!("g_older_{}", suffix);
+    let newer_group = format!("g_newer_{}", suffix);
+    let older_conv = group_conversation_id(&older_group);
+    let newer_conv = group_conversation_id(&newer_group);
+    let members = vec![user_id.clone()];
+
+    // 两个会话各写一条消息，活跃时间一老一新
+    for (group_id, server_id, send_time) in [
+        (older_group.clone(), format!("old_{}", suffix), 1_700_000_000_000),
+        (newer_group.clone(), format!("new_{}", suffix), 1_700_000_100_000),
+    ] {
+        let msg = Msg {
+            server_id,
+            send_id: user_id.clone(),
+            receiver_id: group_id.clone(),
+            group_id,
+            msg_type: MsgType::GroupMsg as i32,
+            content: b"hi".to_vec(),
+            send_time,
+            ..Default::default()
+        };
+        writer
+            .save(msg, &members)
+            .await
+            .expect("写入消息失败");
+    }
+
+    // 会话水位回写后，list 才能按 last_msg_time 排序
+    writer
+        .touch_watermarks(&[
+            (older_conv.clone(), 1, 1_700_000_000_000),
+            (newer_conv.clone(), 1, 1_700_000_100_000),
+        ])
+        .await
+        .expect("回写会话水位失败");
+
+    // 1. 批量取会话元信息：两条都应有，且最近消息时间正确
+    let states = repo
+        .conversation
+        .get_many(&[older_conv.clone(), newer_conv.clone()])
+        .await
+        .expect("批量查询会话失败");
+    assert_eq!(states.len(), 2, "批量查询应返回两个会话: {states:?}");
+    let newer = states
+        .iter()
+        .find(|c| c.conversation_id == newer_conv)
+        .expect("应包含新会话");
+    assert_eq!(newer.last_msg_time, 1_700_000_100_000);
+
+    // 不存在的会话不出现在结果里
+    let missing = repo
+        .conversation
+        .get_many(&[format!("g:not_exists_{}", suffix)])
+        .await
+        .expect("批量查询不存在的会话不应报错");
+    assert!(missing.is_empty());
+
+    // 2. list 按最后消息时间倒序：新会话在前
+    let listed = repo
+        .user_conversation
+        .list(&user_id, 10)
+        .await
+        .expect("查询用户会话失败");
+    let listed_ids: Vec<&str> = listed.iter().map(|s| s.conversation_id.as_str()).collect();
+    assert_eq!(
+        listed_ids,
+        vec![newer_conv.as_str(), older_conv.as_str()],
+        "会话列表应按最后消息时间倒序"
+    );
+
+    // 3. list_by_ids 只返回请求的会话
+    let only_older = repo
+        .user_conversation
+        .list_by_ids(&user_id, std::slice::from_ref(&older_conv))
+        .await
+        .expect("按 ID 查询用户会话失败");
+    assert_eq!(only_older.len(), 1);
+    assert_eq!(only_older[0].conversation_id, older_conv);
+
+    // 4. 索引：按活跃时间倒序
+    let index_user = format!("u_index_{}", suffix);
+    cache
+        .touch_conversation_index(&[
+            (index_user.clone(), older_conv.clone(), 1_700_000_000_000),
+            (index_user.clone(), newer_conv.clone(), 1_700_000_100_000),
+        ])
+        .await
+        .expect("写入会话索引失败");
+
+    let recent = cache
+        .recent_conversations(&index_user, 10)
+        .await
+        .expect("读取会话索引失败");
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[0], (newer_conv.clone(), 1_700_000_100_000), "最近活跃的应排最前");
+
+    // 5. ZADD GT：用更早的时间回写不应把会话往后挪
+    cache
+        .touch_conversation_index(&[(
+            index_user.clone(),
+            newer_conv.clone(),
+            1_600_000_000_000,
+        )])
+        .await
+        .expect("回写更早时间失败");
+    let recent = cache
+        .recent_conversations(&index_user, 10)
+        .await
+        .expect("读取会话索引失败");
+    assert_eq!(
+        recent[0],
+        (newer_conv, 1_700_000_100_000),
+        "分数只增不减：更早的时间不能覆盖已有分数"
+    );
+
+    println!("会话索引与批量查询通过");
+}

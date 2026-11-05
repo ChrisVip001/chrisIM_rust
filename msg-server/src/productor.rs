@@ -7,7 +7,7 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 use tonic::transport::Server;
 use tracing::{debug, error, info, warn};
 
-use cache::{RelationCache, UnreadCache};
+use cache::{ConversationIndexCache, RelationCache, UnreadCache};
 use runtime::grpc_client::base::get_rpc_client;
 use runtime::grpc_client::base::service_names as sn;
 use contract::proto::friend::friend_service_client::FriendServiceClient;
@@ -81,6 +81,9 @@ pub struct ChatRpcService {
     /// 未读计数缓存，只依赖 UnreadCache 窄接口
     unread: Arc<dyn UnreadCache>,
 
+    /// 会话列表索引（按最近活跃时间排序）
+    conversations: Arc<dyn ConversationIndexCache>,
+
     /// 好友服务客户端
     friend_client: FriendServiceClient<LbWithServiceDiscovery>,
 
@@ -113,6 +116,7 @@ impl ChatRpcService {
         read: Arc<ReadSpreadRepo>,
         relation: Arc<dyn RelationCache>,
         unread: Arc<dyn UnreadCache>,
+        conversations: Arc<dyn ConversationIndexCache>,
         friend_client: FriendServiceClient<LbWithServiceDiscovery>,
         group_client: GroupServiceClient<LbWithServiceDiscovery>,
         fail_open: bool,
@@ -123,6 +127,7 @@ impl ChatRpcService {
             read,
             relation,
             unread,
+            conversations,
             friend_client,
             group_client,
             fail_open,
@@ -164,6 +169,7 @@ impl ChatRpcService {
         let redis = cache::cache(config).await;
         let relation: Arc<dyn RelationCache> = redis.clone();
         let unread: Arc<dyn UnreadCache> = redis.clone();
+        let conversations: Arc<dyn ConversationIndexCache> = redis.clone();
 
         // 初始化好友和群组服务客户端
         // 用户/好友/群组是模块化单体，统一注册在 relation 服务名下
@@ -188,7 +194,17 @@ impl ChatRpcService {
         let logging_interceptor = LoggingInterceptor::new();
 
         // 创建聊天RPC服务实例并包装为gRPC服务
-        let chat_rpc = Self::new(producer, config.kafka.topic.clone(), read, relation, unread, friend_client, group_client, config.validation.fail_open);
+        let chat_rpc = Self::new(
+            producer,
+            config.kafka.topic.clone(),
+            read,
+            relation,
+            unread,
+            conversations,
+            friend_client,
+            group_client,
+            config.validation.fail_open,
+        );
         let service = ChatServiceServer::with_interceptor(chat_rpc, logging_interceptor);
 
         info!(
@@ -223,6 +239,129 @@ impl ChatRpcService {
             .map_err(|e| Error::Internal(format!("启动gRPC服务器失败: {}", e)))?;
 
         Ok(())
+    }
+
+    /// 组装会话列表响应
+    ///
+    /// 会话元信息一次批量取回；`backfill` 为真时顺带把索引补上，
+    /// 下次请求直接命中 Redis。
+    async fn build_conversations(
+        &self,
+        user_id: &str,
+        cursors: std::collections::HashMap<String, i64>,
+        states: Vec<msg_storage::read_spread::UserConversationState>,
+        backfill: bool,
+    ) -> Result<tonic::Response<GetConversationsResponse>, tonic::Status> {
+        let ids: Vec<String> = states.iter().map(|s| s.conversation_id.clone()).collect();
+        let mut by_id: std::collections::HashMap<String, msg_storage::read_spread::ConversationState> =
+            match self.read.conversation.get_many(&ids).await {
+                Ok(list) => list
+                    .into_iter()
+                    .map(|c| (c.conversation_id.clone(), c))
+                    .collect(),
+                Err(e) => {
+                    error!("批量查询会话失败: {}", e);
+                    return Err(tonic::Status::internal("获取会话列表失败"));
+                }
+            };
+
+        if backfill && !states.is_empty() {
+            let entries: Vec<(String, String, i64)> = states
+                .iter()
+                .filter_map(|s| {
+                    by_id
+                        .get(&s.conversation_id)
+                        .map(|c| (user_id.to_string(), s.conversation_id.clone(), c.last_msg_time))
+                })
+                .collect();
+            let index = self.conversations.clone();
+            tokio::spawn(async move {
+                if let Err(e) = index.touch_conversation_index(&entries).await {
+                    warn!("回填会话列表索引失败: {}", e);
+                }
+            });
+        }
+
+        let mut conversations = Vec::with_capacity(states.len());
+
+        for state in states {
+            let conv_id = state.conversation_id.clone();
+
+            let Some(conv_state) = by_id.remove(&conv_id) else {
+                continue;
+            };
+
+            // 增量：从客户端水位之后补；首屏：取最近 N 条
+            let since = cursors.get(conv_id.as_str()).copied().unwrap_or(0);
+            let msgs = if since > 0 {
+                self.read
+                    .meta
+                    .fetch_after(&conv_id, since, CONVERSATION_RECENT_LIMIT)
+                    .await
+            } else if conv_state.last_msg_seq < 1 {
+                Ok(Vec::new())
+            } else {
+                let start = (conv_state.last_msg_seq - CONVERSATION_RECENT_LIMIT + 1).max(1);
+                self.read
+                    .meta
+                    .fetch_range(&conv_id, start, conv_state.last_msg_seq)
+                    .await
+            };
+
+            let mut msgs = match msgs {
+                Ok(m) => m,
+                Err(e) => {
+                    error!("拉取会话 {} 消息失败: {}", conv_id, e);
+                    continue;
+                }
+            };
+
+            if msgs.is_empty() {
+                continue;
+            }
+
+            fill_single_receiver(&mut msgs, &conv_id, user_id);
+
+            // 位于游标之前的消息视为已读
+            for msg in msgs.iter_mut() {
+                msg.is_read = msg.seq > 0 && msg.seq <= state.last_read_seq;
+            }
+
+            let unread = (conv_state.last_msg_seq - state.last_read_seq).max(0) as i32;
+            let last_active_time = msgs.last().map(|m| m.send_time).unwrap_or(0);
+            let conversation_type = if conv_state.conv_type == 2 {
+                "group"
+            } else {
+                "single"
+            };
+
+            if let Err(e) = self
+                .unread
+                .unread_count_set(user_id, &conv_id, &unread)
+                .await
+            {
+                warn!("写入未读计数缓存失败: {}", e);
+            }
+
+            conversations.push(contract::proto::message::Conversation {
+                conversation_id: conv_id,
+                conversation_type: conversation_type.to_string(),
+                recent_messages: msgs,
+                unread_count: unread,
+                last_active_time,
+            });
+        }
+
+        // 最近活跃的排在最前，与索引的排序方向一致
+        conversations.sort_by_key(|c| std::cmp::Reverse(c.last_active_time));
+        let total = conversations.len() as i32;
+
+        Ok(tonic::Response::new(GetConversationsResponse {
+            conversations,
+            total,
+            seq_max: 0,
+            send_seq_max: 0,
+        }))
     }
 }
 
@@ -497,109 +636,67 @@ impl ChatService for ChatRpcService {
         );
 
         // 方案 A：客户端按会话上报水位，服务端据此补齐增量
-        let cursors: std::collections::HashMap<&str, i64> = req
+        let cursors: std::collections::HashMap<String, i64> = req
             .cursors
             .iter()
-            .map(|c| (c.conversation_id.as_str(), c.since_seq))
+            .map(|c| (c.conversation_id.clone(), c.since_seq))
             .collect();
 
-        let states = match self
-            .read
-            .user_conversation
-            .list(&req.user_id, CONVERSATION_LIST_LIMIT)
+        // 会话顺序来自 Redis 索引（按最近活跃时间倒序）；
+        // 索引缺失时退回数据库的排序查询，并在后台把索引补回来
+        let (states, from_index) = match self
+            .conversations
+            .recent_conversations(&req.user_id, CONVERSATION_LIST_LIMIT)
             .await
         {
-            Ok(states) => states,
-            Err(e) => {
-                error!("获取用户会话列表失败: {}", e);
-                return Err(tonic::Status::internal(format!("获取会话列表失败: {}", e)));
+            Ok(indexed) if !indexed.is_empty() => {
+                let order: std::collections::HashMap<String, usize> = indexed
+                    .into_iter()
+                    .enumerate()
+                    .map(|(position, (conversation_id, _))| (conversation_id, position))
+                    .collect();
+                let ids: Vec<String> = order.keys().cloned().collect();
+
+                let mut states = match self
+                    .read
+                    .user_conversation
+                    .list_by_ids(&req.user_id, &ids)
+                    .await
+                {
+                    Ok(states) => states,
+                    Err(e) => {
+                        error!("获取用户会话状态失败: {}", e);
+                        return Err(tonic::Status::internal("获取会话列表失败"));
+                    }
+                };
+                // 索引决定展示顺序，数据库只负责补齐游标
+                states.sort_by_key(|s| {
+                    order
+                        .get(&s.conversation_id)
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+                (states, true)
+            }
+            _ => {
+                let states = match self
+                    .read
+                    .user_conversation
+                    .list(&req.user_id, CONVERSATION_LIST_LIMIT)
+                    .await
+                {
+                    Ok(states) => states,
+                    Err(e) => {
+                        error!("获取用户会话列表失败: {}", e);
+                        return Err(tonic::Status::internal("获取会话列表失败"));
+                    }
+                };
+                (states, false)
             }
         };
 
-        let mut conversations = Vec::with_capacity(states.len());
-
-        for state in states {
-            let conv_id = state.conversation_id.clone();
-
-            let conv_state = match self.read.conversation.get(&conv_id).await {
-                Ok(Some(c)) => c,
-                Ok(None) => continue,
-                Err(e) => {
-                    error!("查询会话 {} 失败: {}", conv_id, e);
-                    continue;
-                }
-            };
-
-            // 增量：从客户端水位之后补；首屏：取最近 N 条
-            let since = cursors.get(conv_id.as_str()).copied().unwrap_or(0);
-            let msgs = if since > 0 {
-                self.read
-                    .meta
-                    .fetch_after(&conv_id, since, CONVERSATION_RECENT_LIMIT)
-                    .await
-            } else if conv_state.last_msg_seq < 1 {
-                Ok(Vec::new())
-            } else {
-                let start = (conv_state.last_msg_seq - CONVERSATION_RECENT_LIMIT + 1).max(1);
-                self.read
-                    .meta
-                    .fetch_range(&conv_id, start, conv_state.last_msg_seq)
-                    .await
-            };
-
-            let mut msgs = match msgs {
-                Ok(m) => m,
-                Err(e) => {
-                    error!("拉取会话 {} 消息失败: {}", conv_id, e);
-                    continue;
-                }
-            };
-
-            if msgs.is_empty() {
-                continue;
-            }
-
-            fill_single_receiver(&mut msgs, &conv_id, &req.user_id);
-
-            // 位于游标之前的消息视为已读
-            for msg in msgs.iter_mut() {
-                msg.is_read = msg.seq > 0 && msg.seq <= state.last_read_seq;
-            }
-
-            let unread = (conv_state.last_msg_seq - state.last_read_seq).max(0) as i32;
-            let last_active_time = msgs.last().map(|m| m.send_time).unwrap_or(0);
-            let conversation_type = if conv_state.conv_type == 2 {
-                "group"
-            } else {
-                "single"
-            };
-
-            if let Err(e) = self
-                .unread
-                .unread_count_set(&req.user_id, &conv_id, &unread)
-                .await
-            {
-                warn!("写入未读计数缓存失败: {}", e);
-            }
-
-            conversations.push(contract::proto::message::Conversation {
-                conversation_id: conv_id,
-                conversation_type: conversation_type.to_string(),
-                recent_messages: msgs,
-                unread_count: unread,
-                last_active_time,
-            });
-        }
-
-        conversations.sort_by_key(|c| c.last_active_time);
-        let total = conversations.len() as i32;
-
-        Ok(tonic::Response::new(GetConversationsResponse {
-            conversations,
-            total,
-            seq_max: 0,
-            send_seq_max: 0,
-        }))
+        self.build_conversations(&req.user_id, cursors, states, !from_index)
+            .await
     }
 
     /// 撤回消息

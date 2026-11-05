@@ -15,6 +15,7 @@
 //! | [`RelationCache`] | 好友、黑名单、群成员关系 |
 //! | [`PresenceCache`] | 在线状态与网关推送路由 |
 //! | [`UnreadCache`] | 会话未读计数 |
+//! | [`ConversationIndexCache`] | 会话列表的活跃时间索引 |
 
 use async_trait::async_trait;
 use contract::error::Error;
@@ -234,17 +235,55 @@ pub trait UnreadCache: Sync + Send + Debug {
     async fn unread_count_remove(&self, user_id: &str, conversation_id: &str) -> Result<(), Error>;
 }
 
+/// 会话列表域：按最近活跃时间排序的会话索引
+///
+/// 索引只是排序与截断的依据，权威数据仍在 `user_conversation` / `conversation` 表；
+/// 索引缺失时调用方回落到数据库查询并回填。
+#[async_trait]
+pub trait ConversationIndexCache: Sync + Send + Debug {
+    /// 把会话推进到这些成员的列表索引
+    ///
+    /// `entries` 为 `(user_id, conversation_id, active_time_ms)`，
+    /// 同一个 `(user_id, conversation_id)` 出现多次时保留最大时间。
+    /// 分数只增不减，重复投递不会把会话往后挪。
+    async fn touch_conversation_index(
+        &self,
+        entries: &[(String, String, i64)],
+    ) -> Result<(), Error>;
+
+    /// 按活跃时间倒序返回 `limit` 个会话及其时间（毫秒）
+    async fn recent_conversations(
+        &self,
+        user_id: &str,
+        limit: i64,
+    ) -> Result<Vec<(String, i64)>, Error>;
+}
+
 /// 缓存组合入口
 ///
-/// 五个领域 trait 的超集。历史调用方 `Arc<dyn Cache>` 无需改动；
+/// 领域 trait 的超集。历史调用方 `Arc<dyn Cache>` 无需改动；
 /// 新代码建议只依赖实际需要的领域 trait（如 `Arc<dyn SeqCache>`），
 /// 让接口依赖与业务边界保持一致。
 #[async_trait]
-pub trait Cache: SeqCache + SessionCache + RelationCache + PresenceCache + UnreadCache {}
+pub trait Cache:
+    SeqCache + SessionCache + RelationCache + PresenceCache + UnreadCache + ConversationIndexCache
+{
+}
 
-/// 自动为任何实现了五个领域 trait 的类型实现组合入口
+/// 自动为任何实现了全部领域 trait 的类型实现组合入口
 #[async_trait]
-impl<T> Cache for T where T: SeqCache + SessionCache + RelationCache + PresenceCache + UnreadCache + Send + Sync + Debug {}
+impl<T> Cache for T where
+    T: SeqCache
+        + SessionCache
+        + RelationCache
+        + PresenceCache
+        + UnreadCache
+        + ConversationIndexCache
+        + Send
+        + Sync
+        + Debug
+{
+}
 
 /// 用户在线状态信息
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

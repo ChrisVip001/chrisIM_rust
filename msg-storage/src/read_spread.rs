@@ -79,6 +79,12 @@ pub trait ConversationRepo: Sync + Send + Debug {
     /// 读取会话状态
     async fn get(&self, conversation_id: &str) -> Result<Option<ConversationState>, Error>;
 
+    /// 批量读取会话状态
+    ///
+    /// 一条语句覆盖整批会话，供会话列表一次取回全部会话的元信息；
+    /// 不存在的会话不会出现在返回值里。
+    async fn get_many(&self, conversation_ids: &[String]) -> Result<Vec<ConversationState>, Error>;
+
     /// 回写序号水位（号段用尽时由 Redis 号段持有者调用）
     async fn flush_seq(&self, conversation_id: &str, last_seq: i64) -> Result<(), Error>;
 
@@ -247,8 +253,20 @@ pub trait UserConversationRepo: Sync + Send + Debug {
     /// 读取已读游标
     async fn get_cursor(&self, user_id: &str, conversation_id: &str) -> Result<i64, Error>;
 
-    /// 列出用户的会话（按入参顺序无关，排序由上层结合 conversation 决定）
+    /// 列出用户最近活跃的会话（按最后消息时间倒序）
+    ///
+    /// 会话列表索引缺失时用它回填，因此必须自带排序与截断，
+    /// 不能依赖调用方再排序。
     async fn list(&self, user_id: &str, limit: i64) -> Result<Vec<UserConversationState>, Error>;
+
+    /// 按会话 ID 批量读取用户的会话状态
+    ///
+    /// 索引给出会话顺序后，用它一次取回这些会话的已读游标与置顶/免打扰标记。
+    async fn list_by_ids(
+        &self,
+        user_id: &str,
+        conversation_ids: &[String],
+    ) -> Result<Vec<UserConversationState>, Error>;
 
     /// 未读数 = 会话水位 - 已读游标
     async fn unread(&self, user_id: &str, conversation_id: &str) -> Result<i64, Error>;

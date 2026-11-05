@@ -7,6 +7,7 @@
  * - [`relation`]：好友、黑名单、群成员
  * - [`presence`]：在线状态、网关推送路由
  * - [`unread`]：会话未读计数
+ * - [`conversation_index`]：会话列表的活跃时间索引
  *
  * 本文件只保留所有域共享的基础设施：连接池、Lua 脚本加载、键前缀常量。
  *
@@ -22,6 +23,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
+mod conversation_index;
 mod presence;
 mod relation;
 mod seq;

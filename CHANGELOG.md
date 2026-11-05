@@ -79,6 +79,14 @@
   同时覆盖 `(conversation_id, server_id)` 与主键 `(conversation_id, seq)`；
   `server_id`/`conversation_id` 为空或 `content` 超过 `INT` 上限的消息不进批量，
   直接转逐条（有重试与死信），并计入 `msg_precheck_rejected_total`。
+- **会话列表索引**：新增 `cache::ConversationIndexCache`，每个用户一个 ZSET `conv_list:{user_id}`
+  （score 为最近活跃时间，`ZADD ... GT` 只增不减，30 天过期）。消费端首次落库后按参与者批量推进索引；
+  会话列表改为「Redis 给顺序、SQL 批量补游标」，新增 `ConversationRepo::get_many` 与
+  `UserConversationRepo::list_by_ids`，单次请求的查询次数从 `1 + 2×会话数` 降到常数。
+  索引缺失时回落到数据库并后台回填。
+- **位点提交节流**：`commit_offsets` 把各分区最大位点攒起来，攒够 8 批或超过 200ms 才提交一次
+  （原先每批提交一次）。未能落库的分区会先丢弃已攒位点再 `seek`，提交失败保留位点重试，
+  语义仍是 at-least-once。
 
 ### 修复
 
@@ -86,6 +94,8 @@
   改为 `/api/users/register`，注册终于拿到 2 rps 的独立保护（此前混在 `/api/users` 的 10 rps 里）。
 - **心跳死链注释口径**：统一为「未收到 Pong 的累计次数 > `heartbeat_max_missed` 才断开
   （默认第 3 个周期，约 90 秒）」，配置与两个压测工具的行内注释不再写「约 60 秒」。
+- **会话列表顺序**：`GetConversations` 改为「最近活跃在前」。此前按 `last_active_time` 升序输出，
+  且 SQL 没有 `ORDER BY`，`LIMIT` 取到哪 50 个会话不确定。
 - **熔断器分桶与作用域**（`api-gateway`）：
   - 分桶键改用真实服务名 `relation` / `chat`。此前用 `user-service` / `friend-service` /
     `group-service`，把同一个下游拆成 3 个熔断器，失败要分别攒够阈值，实际保护被稀释成 1/3；

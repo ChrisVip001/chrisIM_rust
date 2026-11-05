@@ -8,7 +8,7 @@ use rdkafka::producer::FutureProducer;
 use rdkafka::{ClientConfig, Message, Offset};
 use tracing::{debug, error, info, warn};
 
-use cache::RelationCache;
+use cache::{ConversationIndexCache, RelationCache};
 use runtime::config::AppConfig;
 use contract::error::Error;
 use contract::proto::message::{GroupMemSeq, Msg, MsgRead, MsgType};
@@ -66,6 +66,15 @@ const BATCH_DRAIN_TIMEOUT: Duration = Duration::from_millis(8);
 
 /// 无法解析出会话的消息归到该组
 const INVALID_GROUP: &str = "__invalid__";
+
+/// 位点提交的攒批条数：攒够这么多批再提交一次
+const COMMIT_EVERY_BATCHES: u32 = 8;
+
+/// 位点提交的时间窗：即使没攒够批次，超过该间隔也提交
+///
+/// 提交越少，broker 侧协调开销越低；代价是崩溃后重复消费的窗口变大，
+/// 由幂等闸门与唯一约束兜底。
+const COMMIT_INTERVAL: Duration = Duration::from_millis(200);
 
 /// 批量消费时的消息快照
 ///
@@ -185,6 +194,23 @@ pub struct ConsumerService {
 
     /// 是否已有延迟回写任务在等待，避免重复 spawn
     watermark_flush_scheduled: std::sync::atomic::AtomicBool,
+
+    /// 会话列表索引（Redis ZSET，score 为最近活跃时间）
+    conversation_index: Arc<dyn ConversationIndexCache>,
+
+    /// 位点提交状态：攒批后一次提交，减少 commit 次数
+    commit_state: tokio::sync::Mutex<CommitState>,
+}
+
+/// 位点提交的累积状态
+#[derive(Default)]
+struct CommitState {
+    /// 各分区已处理到的最大位点（含），下次提交时 +1
+    pending: std::collections::HashMap<(String, i32), i64>,
+    /// 上次提交之后累计的批次数
+    batches: u32,
+    /// 上次提交的时间点
+    last: Option<Instant>,
 }
 
 impl ConsumerService {
@@ -213,9 +239,10 @@ impl ConsumerService {
         let pusher = push_service(config).await?;
         // 读扩散仓储：独立连接池，避免历史拉取挤占消息写入
         let read = Arc::new(ReadSpreadRepo::from_config(config).await?);
-        // 同一 Redis 实例：writer 用 SeqCache，本服务用 RelationCache
+        // 同一 Redis 实例：writer 用 SeqCache，本服务用 RelationCache 与会话索引
         let redis = cache::cache(config).await;
         let seq_cache: Arc<dyn cache::SeqCache> = redis.clone();
+        let conversation_index: Arc<dyn ConversationIndexCache> = redis.clone();
         // 号段分配依赖缓存：热群不再对 conversation 行加锁
         let writer = Arc::new(MessageWriter::new(
             read.clone(),
@@ -244,6 +271,8 @@ impl ConsumerService {
             pending_watermarks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             last_watermark_flush: std::sync::atomic::AtomicU64::new(0),
             watermark_flush_scheduled: std::sync::atomic::AtomicBool::new(false),
+            conversation_index,
+            commit_state: tokio::sync::Mutex::new(CommitState::default()),
         })
     }
 
@@ -288,6 +317,8 @@ impl ConsumerService {
             pending_watermarks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             last_watermark_flush: std::sync::atomic::AtomicU64::new(0),
             watermark_flush_scheduled: std::sync::atomic::AtomicBool::new(false),
+            conversation_index: self.conversation_index.clone(),
+            commit_state: tokio::sync::Mutex::new(CommitState::default()),
         })
     }
 
@@ -543,6 +574,12 @@ impl ConsumerService {
                     batchable = false;
                 }
             }
+
+            // 首次落库的消息推进各成员的会话列表索引；重复投递不改索引
+            if batchable {
+                let entries = Self::index_entries(&items, &saved);
+                self.index_conversations(entries).await;
+            }
         }
 
         // 批量结果打点：ok=整批一次写成，fallback=落库失败/成员查询失败后退化逐条
@@ -718,14 +755,31 @@ impl ConsumerService {
             }
         }
 
-        let mut tpl = rdkafka::TopicPartitionList::new();
+        self.commit_offsets(max_offsets, &rollback).await;
+    }
+
+    /// 累积各分区位点，攒够批次或超过时间窗后一次提交
+    ///
+    /// 一个批次可能横跨多个分区，位点先按分区取最大值攒起来，
+    /// 下次提交时一并提交，减少 broker 侧的提交次数。
+    /// 有消息没能落库的分区不提交，退回重新投递（重复消费由幂等闸门兜底）。
+    async fn commit_offsets(
+        &self,
+        max_offsets: std::collections::HashMap<(String, i32), i64>,
+        rollback: &std::collections::HashMap<(String, i32), i64>,
+    ) {
+        let mut state = self.commit_state.lock().await;
+
         for ((topic, partition), offset) in max_offsets {
-            if let Some(&seek_to) = rollback.get(&(topic.clone(), partition)) {
-                // 有消息没能落库，该分区不提交，退回重新投递。
-                // 已处理过的消息会重复消费，由幂等闸门兜底。
+            let key = (topic, partition);
+
+            if let Some(&seek_to) = rollback.get(&key) {
+                // 回退该分区：同时丢掉它已攒下的位点，
+                // 否则下一次提交会越过回退点，未处理的消息再也不会投递
+                state.pending.remove(&key);
                 if let Err(e) = self.consumer.seek(
-                    &topic,
-                    partition,
+                    &key.0,
+                    key.1,
                     Offset::Offset(seek_to),
                     Duration::from_secs(1),
                 ) {
@@ -734,19 +788,76 @@ impl ConsumerService {
                 continue;
             }
 
-            if let Err(e) = tpl.add_partition_offset(&topic, partition, Offset::Offset(offset + 1))
+            let entry = state.pending.entry(key).or_insert(offset);
+            if offset > *entry {
+                *entry = offset;
+            }
+        }
+
+        state.batches += 1;
+        if !Self::commit_due(state.batches, state.last) || state.pending.is_empty() {
+            return;
+        }
+
+        let mut tpl = rdkafka::TopicPartitionList::new();
+        for ((topic, partition), offset) in state.pending.iter() {
+            if let Err(e) =
+                tpl.add_partition_offset(topic, *partition, Offset::Offset(offset + 1))
             {
                 error!("构造提交位点失败: {:?}", e);
             }
         }
 
-        if !tpl.elements().is_empty() {
-            // 异步提交：位点确认不占用消费循环。提交丢失只会让重启后重复消费
-            // 最后一小批，由 already_processed 闸门兜底，不会丢消息。
-            match self.consumer.commit(&tpl, CommitMode::Async) {
-                Ok(()) => debug!("已异步提交 {} 个分区的位点", tpl.elements().len()),
-                Err(e) => error!("提交偏移量失败: {:?}", e),
+        // 异步提交：位点确认不占用消费循环。提交丢失只会让重启后重复消费
+        // 未提交的那几批，由 already_processed 闸门兜底，不会丢消息。
+        match self.consumer.commit(&tpl, CommitMode::Async) {
+            Ok(()) => {
+                debug!("已异步提交 {} 个分区的位点", tpl.elements().len());
+                state.pending.clear();
             }
+            // 提交失败时保留累积位点，下一轮重试
+            Err(e) => error!("提交偏移量失败: {:?}", e),
+        }
+        state.batches = 0;
+        state.last = Some(Instant::now());
+    }
+
+    /// 是否该提交一次位点：攒够批次或超过时间窗
+    fn commit_due(batches: u32, last: Option<Instant>) -> bool {
+        batches >= COMMIT_EVERY_BATCHES || last.is_none_or(|t| t.elapsed() >= COMMIT_INTERVAL)
+    }
+
+    /// 从批量落库结果里取出会话列表索引的更新项
+    ///
+    /// `items` 与 `saved` 按位置对应：只有首次落库的消息才推进索引，
+    /// 每个参与者各一条 `(user_id, conversation_id, active_time)`。
+    fn index_entries(
+        items: &[(Msg, Vec<String>)],
+        saved: &[(String, i64, bool)],
+    ) -> Vec<(String, String, i64)> {
+        let mut entries = Vec::new();
+        for ((msg, participants), (conversation_id, _, inserted)) in items.iter().zip(saved) {
+            if !inserted {
+                continue;
+            }
+            let active_time = msg.send_time.max(msg.create_time);
+            for user_id in participants {
+                entries.push((user_id.clone(), conversation_id.clone(), active_time));
+            }
+        }
+        entries
+    }
+
+    /// 把会话推进到参与者的会话列表索引
+    ///
+    /// 索引只影响会话列表的排序与截断，写失败只告警：
+    /// 读取侧会回落到数据库查询并重建索引。
+    async fn index_conversations(&self, entries: Vec<(String, String, i64)>) {
+        if entries.is_empty() {
+            return;
+        }
+        if let Err(e) = self.conversation_index.touch_conversation_index(&entries).await {
+            warn!("更新会话列表索引失败: {}", e);
         }
     }
 
@@ -828,6 +939,15 @@ impl ConsumerService {
                 return Ok(None);
             }
             counter!("msg_inserted_total").increment(1);
+
+            // 会话列表索引：把会话推进到每个参与者的最近活跃列表
+            let active_time = msg.send_time.max(msg.create_time);
+            let entries: Vec<(String, String, i64)> = participants
+                .iter()
+                .map(|user_id| (user_id.clone(), conversation_id.clone(), active_time))
+                .collect();
+            self.index_conversations(entries).await;
+
             watermark = Some(Watermark {
                 conversation_id,
                 seq,
@@ -1214,6 +1334,64 @@ mod tests {
 
         // 正常消息必须放行
         assert!(ConsumerService::precheck_reason(&msg, "c1").is_none());
+    }
+
+    #[test]
+    fn commit_is_throttled_by_batches_and_time() {
+        // 刚提交过：既没攒够批次也没到时间窗口，不提交
+        assert!(!ConsumerService::commit_due(1, Some(Instant::now())));
+        // 攒够批次：立即提交
+        assert!(ConsumerService::commit_due(
+            COMMIT_EVERY_BATCHES,
+            Some(Instant::now())
+        ));
+        // 还没提交过：首轮必须提交
+        assert!(ConsumerService::commit_due(1, None));
+        // 超过时间窗口：即使只有一批也提交
+        assert!(ConsumerService::commit_due(
+            1,
+            Some(Instant::now() - COMMIT_INTERVAL)
+        ));
+    }
+
+    #[test]
+    fn index_entries_skip_duplicates_and_cover_every_participant() {
+        let msg = Msg {
+            send_id: "u1".into(),
+            receiver_id: "u2".into(),
+            send_time: 2000,
+            create_time: 1000,
+            server_id: "m1".into(),
+            ..Default::default()
+        };
+        let items = vec![
+            (msg.clone(), vec!["u1".to_string(), "u2".to_string()]),
+            (
+                Msg {
+                    server_id: "m2".into(),
+                    ..msg
+                },
+                vec!["u1".to_string(), "u3".to_string()],
+            ),
+        ];
+        // 第二条是重复投递（inserted=false），不应改动索引
+        let saved = vec![
+            ("c1".to_string(), 1, true),
+            ("c2".to_string(), 2, false),
+        ];
+
+        let entries = ConsumerService::index_entries(&items, &saved);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0],
+            ("u1".to_string(), "c1".to_string(), 2000)
+        );
+        assert_eq!(
+            entries[1],
+            ("u2".to_string(), "c1".to_string(), 2000)
+        );
+        assert!(entries.iter().all(|(_, conv, _)| conv == "c1"));
     }
 
     #[test]

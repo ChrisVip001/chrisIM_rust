@@ -4,9 +4,9 @@
  * 本模块提供缓存接口和实现，支持序列号管理、群组成员管理、
  * 注册验证码管理和用户在线状态管理等功能。
  *
- * 接口层按业务域拆分为五个领域 trait（见 [`traits`]）：
- * SeqCache / SessionCache / RelationCache / PresenceCache / UnreadCache，
- * [`Cache`] 作为组合入口保持对历史调用方的兼容。
+ * 接口层按业务域拆分为领域 trait（见 [`traits`]）：
+ * SeqCache / SessionCache / RelationCache / PresenceCache / UnreadCache /
+ * ConversationIndexCache，[`Cache`] 作为组合入口保持对历史调用方的兼容。
  * 新代码建议依赖更窄的领域 trait，让依赖关系表达真实的业务边界。
  */
 use std::sync::Arc;
@@ -18,8 +18,8 @@ mod traits;
 
 pub use redis::RedisCache;
 pub use traits::{
-    BlacklistCheckResult, Cache, PresenceCache, RelationCache, SeqCache, SessionCache,
-    UnreadCache, UserOnlineStatus,
+    BlacklistCheckResult, Cache, ConversationIndexCache, PresenceCache, RelationCache, SeqCache,
+    SessionCache, UnreadCache, UserOnlineStatus,
 };
 
 /// 根据配置创建缓存实例

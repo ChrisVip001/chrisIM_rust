@@ -76,6 +76,22 @@ impl ConversationRepo for PgConversationRepo {
         }
     }
 
+    async fn get_many(&self, conversation_ids: &[String]) -> Result<Vec<ConversationState>, Error> {
+        if conversation_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            "SELECT conversation_id, conv_type, last_seq, last_msg_seq, last_msg_time
+             FROM conversation WHERE conversation_id = ANY($1)",
+        )
+        .bind(conversation_ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(row_to_conversation).collect()
+    }
+
     async fn flush_seq(&self, conversation_id: &str, last_seq: i64) -> Result<(), Error> {
         sqlx::query(
             "UPDATE conversation SET last_seq = GREATEST(last_seq, $2), updated_at = NOW()
@@ -957,11 +973,47 @@ impl UserConversationRepo for PgUserConversationRepo {
         limit: i64,
     ) -> Result<Vec<UserConversationState>, Error> {
         let rows = sqlx::query(
-            "SELECT conversation_id, last_read_seq, is_pinned, is_muted
-             FROM user_conversation WHERE user_id = $1 LIMIT $2",
+            "SELECT uc.conversation_id, uc.last_read_seq, uc.is_pinned, uc.is_muted
+             FROM user_conversation uc
+             JOIN conversation c ON c.conversation_id = uc.conversation_id
+             WHERE uc.user_id = $1
+             ORDER BY c.last_msg_time DESC, uc.conversation_id
+             LIMIT $2",
         )
         .bind(user_id)
         .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                Ok(UserConversationState {
+                    conversation_id: row.try_get("conversation_id")?,
+                    last_read_seq: row.try_get("last_read_seq")?,
+                    is_pinned: row.try_get("is_pinned")?,
+                    is_muted: row.try_get("is_muted")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?)
+    }
+
+    async fn list_by_ids(
+        &self,
+        user_id: &str,
+        conversation_ids: &[String],
+    ) -> Result<Vec<UserConversationState>, Error> {
+        if conversation_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            "SELECT conversation_id, last_read_seq, is_pinned, is_muted
+             FROM user_conversation
+             WHERE user_id = $1 AND conversation_id = ANY($2)",
+        )
+        .bind(user_id)
+        .bind(conversation_ids)
         .fetch_all(&self.pool)
         .await?;
 
